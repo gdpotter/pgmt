@@ -1,15 +1,8 @@
-# pgmt Web - Documentation & Marketing Site
+# pgmt Web
 
-This directory contains the pgmt project's documentation and marketing website, built with **Astro**, **Starlight**, and **Panda CSS**.
+Documentation and marketing site built with [Astro](https://astro.build), [Starlight](https://starlight.astro.build), and [Panda CSS](https://panda-css.com).
 
-## 🏗️ Tech Stack
-
-- **[Astro](https://astro.build)** - Static site generator with excellent performance
-- **[Starlight](https://starlight.astro.build)** - Documentation framework built on Astro
-- **[Panda CSS](https://panda-css.com)** - Build-time atomic CSS-in-JS with type safety
-- **TypeScript** - Full type safety throughout the project
-
-## 🚀 Project Structure
+## Project Structure
 
 ```text
 web/
@@ -33,9 +26,9 @@ web/
 └── package.json
 ```
 
-## 🧞 Commands
+## Commands
 
-All commands are run from the `web/` directory:
+Run from the `web/` directory:
 
 | Command             | Action                                      |
 | :------------------ | :------------------------------------------ |
@@ -53,64 +46,29 @@ All commands are run from the `web/` directory:
 | `pnpm typecheck`    | Run TypeScript type checking                |
 | `pnpm check`        | Run all checks (lint + format + typecheck)  |
 
-## 📚 Documentation (Starlight)
+## Documentation
 
-Documentation lives in `src/content/docs/` as Markdown/MDX files. Starlight automatically:
+Documentation lives in `src/content/docs/` as Markdown/MDX files. Starlight generates navigation from the file structure automatically.
 
-- Generates navigation from file structure
-- Provides search functionality
-- Handles responsive layout and dark/light themes
-- Supports syntax highlighting, callouts, and more
+To add docs: create `.md` or `.mdx` files with frontmatter for title/description.
 
-**Adding new documentation:**
+## Styling
 
-1. Create `.md` or `.mdx` files in `src/content/docs/`
-2. Add frontmatter for title, description, and sidebar configuration
-3. The sidebar auto-generates based on file structure
+Panda CSS theme configuration lives in `theme/`:
 
-## 🎨 Styling (Panda CSS)
+- `tokens.ts` - Base design values (colors, spacing, typography)
+- `semanticTokens.ts` - Context-aware token mappings
+- `recipes/` - Component styles with variants
+- `patterns.ts` - Layout utilities
 
-This project uses **Panda CSS** for styling with a comprehensive design system:
-
-### Design System Structure
-
-- **Tokens** (`theme/tokens.ts`) - Base design values (colors, spacing, typography)
-- **Semantic Tokens** (`theme/semanticTokens.ts`) - Context-aware token mappings
-- **Recipes** (`theme/recipes/`) - Reusable component styles with variants
-- **Patterns** (`theme/patterns.ts`) - Layout and positioning utilities
-
-### Using Styles in Components
+Example usage:
 
 ```astro
 ---
 import { css } from '../styled-system/css';
-import { card, button } from '../styled-system/recipes';
+import { button } from '../styled-system/recipes';
 ---
 
-<div class={card({ variant: 'elevated' })}>
-  <h2 class={css({ fontSize: '2xl', color: 'text.primary' })}>Title</h2>
-  <button class={button({ variant: 'primary', size: 'lg' })}>Click me</button>
-</div>
+<h2 class={css({ fontSize: '2xl', color: 'text.primary' })}>Title</h2>
+<button class={button({ variant: 'primary' })}>Click me</button>
 ```
-
-### Development Workflow
-
-1. **Install dependencies**: `pnpm install`
-2. **Generate styles**: `pnpm prepare` (runs automatically on install)
-3. **Start dev server**: `pnpm dev`
-4. Edit components, pages, or theme files - styles regenerate automatically
-
-## 🌟 Key Features
-
-- **Documentation**: Full Starlight integration with auto-generated navigation
-- **Marketing Pages**: Custom Astro pages for landing, features, etc.
-- **Design System**: Comprehensive Panda CSS setup with tokens, recipes, and patterns
-- **Type Safety**: Full TypeScript support including CSS-in-JS
-- **Performance**: Static site generation with Astro's zero-JS by default approach
-- **Responsive**: Mobile-first design with dark/light theme support
-
-## 📖 Learn More
-
-- **[Astro Documentation](https://docs.astro.build)** - Learn about Astro features
-- **[Starlight Guide](https://starlight.astro.build)** - Starlight documentation framework
-- **[Panda CSS Docs](https://panda-css.com)** - Build-time CSS-in-JS styling system
