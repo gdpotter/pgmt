@@ -59,6 +59,19 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         }
     };
 
+    // Roles file handling:
+    // 1. If --roles-file provided, use that path
+    // 2. Otherwise, auto-detect roles.sql in project directory
+    let roles_file = if let Some(path) = &args.roles_file {
+        println!("   Using roles file: {}", path);
+        Some(path.clone())
+    } else if project_dir.join("roles.sql").exists() {
+        println!("   Found roles.sql - will use for shadow database setup");
+        Some("roles.sql".to_string())
+    } else {
+        None
+    };
+
     Ok(InitOptions {
         project_dir,
         dev_database_url,
@@ -68,6 +81,7 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         object_config,
         baseline_config,
         tracking_table: crate::config::types::TrackingTable::default(),
+        roles_file,
     })
 }
 

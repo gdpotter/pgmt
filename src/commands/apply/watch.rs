@@ -173,11 +173,18 @@ async fn perform_single_apply(
     execution_mode: ExecutionMode,
 ) -> Result<()> {
     let schema_dir = root_dir.join(&config.directories.schema);
+    let roles_file = root_dir.join(&config.directories.roles);
+
+    // Clean shadow database first, then apply roles, then apply schema
+    crate::db::cleaner::clean_shadow_db(shadow_pool).await?;
+
+    // Apply roles file before schema files (if it exists)
+    crate::schema_ops::apply_roles_file(shadow_pool, &roles_file).await?;
 
     // Process schema to shadow database
     let processor_config = SchemaProcessorConfig {
         verbose: true,
-        clean_before_apply: true,
+        clean_before_apply: false, // Already cleaned above
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
     let processed_schema = processor.process_schema_directory(&schema_dir).await

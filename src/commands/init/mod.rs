@@ -44,4 +44,8 @@ pub struct InitArgs {
     /// Custom description for baseline
     #[clap(long)]
     pub baseline_description: Option<String>,
+
+    /// Path to roles file (default: auto-detect roles.sql)
+    #[clap(long)]
+    pub roles_file: Option<String>,
 }

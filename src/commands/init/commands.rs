@@ -24,6 +24,8 @@ pub struct InitOptions {
     pub baseline_config: BaselineCreationConfig,
     #[allow(dead_code)]
     pub tracking_table: crate::config::types::TrackingTable,
+    /// Path to roles file (None means no roles file, Some("roles.sql") means auto-detected or explicit)
+    pub roles_file: Option<String>,
 }
 
 /// Configuration options for what database objects to manage
@@ -191,8 +193,18 @@ async fn process_imported_catalog(
     // Step 2: Validate schema files
     println!("\n🔍 Validating schema files...");
     let schema_dir = options.project_dir.join(&options.schema_dir);
+    let roles_path = options
+        .roles_file
+        .as_ref()
+        .map(|f| options.project_dir.join(f));
 
-    match validate_schema_files(&schema_dir, &options.shadow_config).await {
+    match validate_schema_files(
+        &schema_dir,
+        roles_path.as_deref(),
+        &options.shadow_config,
+    )
+    .await
+    {
         Ok(_) => {
             println!("✅ Schema validation passed");
         }
@@ -493,16 +505,19 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
 /// Validate generated schema files by applying them to a shadow database
 async fn validate_schema_files(
     schema_dir: &std::path::Path,
+    roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
 ) -> Result<()> {
-    validate_schema_files_impl(schema_dir, shadow_config).await
+    validate_schema_files_impl(schema_dir, roles_file, shadow_config).await
 }
 
 /// Implementation of schema validation
 async fn validate_schema_files_impl(
     schema_dir: &std::path::Path,
+    roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
 ) -> Result<()> {
+    use crate::db::cleaner;
     use crate::db::connection::connect_with_retry;
     use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 
@@ -519,10 +534,21 @@ async fn validate_schema_files_impl(
     // Connect to shadow database
     let pool = connect_with_retry(&shadow_url).await?;
 
+    // Clean shadow database first
+    cleaner::clean_shadow_db(&pool).await?;
+
+    // Apply roles file before schema files (if provided)
+    if let Some(roles_path) = roles_file {
+        if roles_path.exists() {
+            crate::schema_ops::apply_roles_file(&pool, roles_path).await?;
+        }
+    }
+
     // Process schema directory (loads, orders, and applies all files)
+    // Note: clean_before_apply is false since we already cleaned above
     let config = SchemaProcessorConfig {
-        verbose: false,           // Silent validation
-        clean_before_apply: true, // Start with clean slate
+        verbose: false,            // Silent validation
+        clean_before_apply: false, // Already cleaned above
     };
     let processor = SchemaProcessor::new(pool.clone(), config);
     processor.process_schema_directory(schema_dir).await?;

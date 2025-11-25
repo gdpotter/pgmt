@@ -204,6 +204,7 @@ fn test_generate_config_file_auto_shadow() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     generate_config_file(&options, &temp_dir)?;
@@ -249,6 +250,7 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
         },
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     generate_config_file(&options, &temp_dir)?;
@@ -286,6 +288,7 @@ fn test_init_options_debug() {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     let debug_output = format!("{:?}", options);

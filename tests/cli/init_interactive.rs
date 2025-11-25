@@ -119,6 +119,7 @@ fn test_init_workflow_components() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Test project structure creation
@@ -166,6 +167,7 @@ fn test_init_workflow_error_handling() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Project structure creation should still work

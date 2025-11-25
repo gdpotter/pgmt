@@ -74,9 +74,19 @@ pub async fn cmd_migrate_validate(
     if !validation_options.quiet {
         eprintln!("📊 Reconstructing expected state from baseline + migration files...");
     }
-    let expected_catalog =
-        reconstruct_expected_state_from_schema_files(&shadow_pool, &baselines_dir, &migrations_dir)
-            .await?;
+    let roles_file = root_dir.join(&config.directories.roles);
+    let roles_path = if roles_file.exists() {
+        Some(roles_file.as_path())
+    } else {
+        None
+    };
+    let expected_catalog = reconstruct_expected_state_from_schema_files(
+        &shadow_pool,
+        &baselines_dir,
+        &migrations_dir,
+        roles_path,
+    )
+    .await?;
 
     // Step 2: Get desired state from current schema files
     if !validation_options.quiet {
@@ -154,6 +164,7 @@ async fn reconstruct_expected_state_from_schema_files(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
     migrations_dir: &Path,
+    roles_file: Option<&Path>,
 ) -> Result<Catalog> {
     use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
     use crate::config::types::TrackingTable;
@@ -164,6 +175,11 @@ async fn reconstruct_expected_state_from_schema_files(
 
     // Clean shadow database
     cleaner::clean_shadow_db(shadow_pool).await?;
+
+    // Apply roles file before baseline/migrations (so grants can work)
+    if let Some(roles_path) = roles_file {
+        crate::schema_ops::apply_roles_file(shadow_pool, roles_path).await?;
+    }
 
     // Apply the latest baseline if it exists
     if let Some(baseline) = find_latest_baseline(baselines_dir)? {

@@ -31,6 +31,7 @@ async fn test_init_workflow_minimal_setup() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     pgmt::commands::init::project::create_project_structure(
@@ -83,6 +84,7 @@ async fn test_init_workflow_custom_configuration() -> Result<()> {
         },
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute the init workflow
@@ -155,6 +157,7 @@ COMMENT ON COLUMN app.users.email IS 'User email address';
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow
@@ -214,6 +217,7 @@ async fn test_init_workflow_with_directory_import() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow
@@ -285,6 +289,7 @@ async fn test_init_workflow_with_prisma_style_migrations() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow
@@ -356,6 +361,7 @@ async fn test_init_workflow_with_mixed_migration_structure() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow
@@ -401,6 +407,7 @@ async fn test_init_workflow_with_empty_migration_directory() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow - should succeed even with empty directory
@@ -441,6 +448,7 @@ async fn test_init_workflow_preserves_existing_gitignore() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow
@@ -480,6 +488,7 @@ async fn test_init_workflow_nested_project_directory() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Execute init workflow - should create nested directories
@@ -527,6 +536,7 @@ async fn test_init_workflow_error_handling() -> Result<()> {
             object_config: ObjectManagementConfig::default(),
             baseline_config: BaselineCreationConfig::default(),
             tracking_table: pgmt::config::types::TrackingTable::default(),
+            roles_file: None,
         };
 
         // This should fail gracefully
@@ -551,6 +561,7 @@ async fn test_init_workflow_error_handling() -> Result<()> {
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
     };
 
     // Project structure creation should still work

@@ -15,9 +15,10 @@ mod roles_basic {
 
             // Create roles.sql - use DO block to handle "role already exists" error
             // (PostgreSQL doesn't support CREATE ROLE IF NOT EXISTS)
+            // Note: Catch both duplicate_object and unique_violation as different PG versions may raise different errors
             helper.write_roles_file(
                 r#"-- Roles for shadow database
-DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object THEN NULL; END $$;"#,
+DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;"#,
             )?;
 
             // Create schema with a grant to the role (test_app_user exists in test cluster)
@@ -87,9 +88,10 @@ GRANT SELECT ON users TO test_app_user;"#,
             helper.init_project()?;
 
             // Create roles.sql - use DO block to handle "role already exists" error
+            // Note: Catch both duplicate_object and unique_violation as different PG versions may raise different errors
             helper.write_roles_file(
                 r#"-- Roles for shadow database
-DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object THEN NULL; END $$;"#,
+DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;"#,
             )?;
 
             // Create initial schema and apply
@@ -142,11 +144,12 @@ mod roles_multiple {
             helper.init_project()?;
 
             // Create roles.sql with multiple roles - use DO blocks for idempotency
+            // Note: Catch both duplicate_object and unique_violation as different PG versions may raise different errors
             helper.write_roles_file(
                 r#"-- Multiple roles for shadow database
-DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE ROLE test_read_only; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE ROLE test_admin_user; EXCEPTION WHEN duplicate_object THEN NULL; END $$;"#,
+DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE test_read_only; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE test_admin_user; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;"#,
             )?;
 
             // Create schema with grants to multiple roles
@@ -171,6 +174,84 @@ GRANT ALL ON users TO test_admin_user;"#,
                 .assert()
                 .success()
                 .stdout(predicate::str::contains("No differences found"));
+
+            Ok(())
+        })
+        .await
+    }
+}
+
+mod roles_init {
+    use super::*;
+
+    /// Test that apply command uses roles.sql from config
+    #[tokio::test]
+    async fn test_apply_uses_roles_file() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // Create roles.sql with a role
+            helper.write_roles_file(
+                r#"DO $$ BEGIN CREATE ROLE test_apply_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;"#,
+            )?;
+
+            // Create schema with a grant to the role
+            helper.write_schema_file(
+                "items.sql",
+                r#"CREATE TABLE items (id SERIAL PRIMARY KEY);
+GRANT SELECT ON items TO test_apply_role;"#,
+            )?;
+
+            // Apply should succeed - roles.sql should be applied to shadow before schema
+            // If roles.sql wasn't applied to shadow, schema processing would fail
+            helper
+                .command()
+                .args(["apply", "--force-all"])
+                .assert()
+                .success();
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test migrate validate with roles.sql
+    #[tokio::test]
+    async fn test_migrate_validate_with_roles() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // Create roles.sql
+            helper.write_roles_file(
+                r#"DO $$ BEGIN CREATE ROLE test_validate_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;"#,
+            )?;
+
+            // Create initial schema with grants
+            helper.write_schema_file(
+                "orders.sql",
+                r#"CREATE TABLE orders (id SERIAL PRIMARY KEY);
+GRANT SELECT ON orders TO test_validate_role;"#,
+            )?;
+
+            // Apply and create baseline
+            helper
+                .command()
+                .args(["apply", "--force-all"])
+                .assert()
+                .success();
+
+            helper
+                .command()
+                .args(["baseline", "create"])
+                .assert()
+                .success();
+
+            // Migrate validate should succeed - roles applied during reconstruction
+            helper
+                .command()
+                .args(["migrate", "validate"])
+                .assert()
+                .success();
 
             Ok(())
         })
