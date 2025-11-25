@@ -198,13 +198,7 @@ async fn process_imported_catalog(
         .as_ref()
         .map(|f| options.project_dir.join(f));
 
-    match validate_schema_files(
-        &schema_dir,
-        roles_path.as_deref(),
-        &options.shadow_config,
-    )
-    .await
-    {
+    match validate_schema_files(&schema_dir, roles_path.as_deref(), &options.shadow_config).await {
         Ok(_) => {
             println!("✅ Schema validation passed");
         }
@@ -538,10 +532,10 @@ async fn validate_schema_files_impl(
     cleaner::clean_shadow_db(&pool).await?;
 
     // Apply roles file before schema files (if provided)
-    if let Some(roles_path) = roles_file {
-        if roles_path.exists() {
-            crate::schema_ops::apply_roles_file(&pool, roles_path).await?;
-        }
+    if let Some(roles_path) = roles_file
+        && roles_path.exists()
+    {
+        crate::schema_ops::apply_roles_file(&pool, roles_path).await?;
     }
 
     // Process schema directory (loads, orders, and applies all files)
