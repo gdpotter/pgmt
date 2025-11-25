@@ -1,6 +1,6 @@
-name: 'pgmt'
+name: 'pgmt CLI'
 description: 'PostgreSQL Migration Tool - schema-based migrations for PostgreSQL'
-author: 'pgmt'
+author: 'gdpotter'
 branding:
   icon: 'database'
   color: 'blue'
