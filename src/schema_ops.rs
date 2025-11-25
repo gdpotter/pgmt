@@ -4,7 +4,7 @@ use crate::db::cleaner;
 use crate::db::connection::connect_with_retry;
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use anyhow::{Context, Result};
-use sqlx::{Executor, PgPool};
+use sqlx::PgPool;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -114,11 +114,11 @@ pub async fn apply_roles_file(pool: &PgPool, roles_file: &Path) -> Result<()> {
     let content = std::fs::read_to_string(roles_file)
         .with_context(|| format!("Failed to read roles file: {}", roles_file.display()))?;
 
-    // Execute the roles file as a single script
-    // This allows for complex statements like DO blocks with internal semicolons
+    // Execute the roles file using raw_sql which supports multiple statements
+    // This allows for complex scripts with CREATE ROLE, DO blocks, etc.
     debug!("Executing roles file: {}", truncate_for_log(&content));
 
-    pool.execute(content.as_str()).await.with_context(|| {
+    sqlx::raw_sql(&content).execute(pool).await.with_context(|| {
         format!(
             "Failed to execute roles file {}: {}",
             roles_file.display(),
