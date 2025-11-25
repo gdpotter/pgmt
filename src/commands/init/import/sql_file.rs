@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::catalog::Catalog;
 use crate::db::connection::connect_with_retry;
@@ -9,6 +9,7 @@ use crate::db::sql_executor::{SqlExecutorConfig, execute_sql_file};
 pub async fn import_from_sql_file(
     file: PathBuf,
     shadow_config: &crate::config::types::ShadowDatabase,
+    roles_file: Option<&Path>,
 ) -> Result<Catalog> {
     let shadow_url = shadow_config.get_connection_string().await?;
 
@@ -16,6 +17,14 @@ pub async fn import_from_sql_file(
 
     // Connect to shadow database with retry logic
     let pool = connect_with_retry(&shadow_url).await?;
+
+    // Apply roles file first if it exists (roles must exist before GRANTs)
+    if let Some(roles_path) = roles_file
+        && roles_path.exists()
+    {
+        println!("   📋 Applying roles from: {}", roles_path.display());
+        crate::schema_ops::apply_roles_file(&pool, roles_path).await?;
+    }
 
     // Configure SQL executor for import scenario
     let executor_config = SqlExecutorConfig {

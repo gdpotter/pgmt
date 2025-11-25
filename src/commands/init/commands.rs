@@ -133,7 +133,19 @@ async fn import_catalog_from_source(
         ShadowDatabaseInput::Manual(url) => crate::config::types::ShadowDatabase::Url(url.clone()),
     };
 
-    match import_schema(import_source.clone(), &shadow_database).await {
+    // Resolve roles file path for import (roles must exist before schema GRANTs)
+    let roles_path = options
+        .roles_file
+        .as_ref()
+        .map(|f| options.project_dir.join(f));
+
+    match import_schema(
+        import_source.clone(),
+        &shadow_database,
+        roles_path.as_deref(),
+    )
+    .await
+    {
         Ok(catalog) => {
             println!("✅ Schema import completed");
             Ok(Some(catalog))

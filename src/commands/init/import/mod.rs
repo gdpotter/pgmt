@@ -26,15 +26,16 @@ impl ImportSource {}
 pub async fn import_schema(
     source: ImportSource,
     shadow_config: &crate::config::types::ShadowDatabase,
+    roles_file: Option<&Path>,
 ) -> Result<Catalog> {
     match source {
         ImportSource::Directory(dir) => {
             validate_directory_source(&dir)?;
-            import_from_directory(dir, shadow_config).await
+            import_from_directory(dir, shadow_config, roles_file).await
         }
         ImportSource::SqlFile(file) => {
             validate_sql_file(&file)?;
-            import_from_sql_file(file, shadow_config).await
+            import_from_sql_file(file, shadow_config, roles_file).await
         }
         ImportSource::Database(url) => {
             validate_database_url(&url)?;

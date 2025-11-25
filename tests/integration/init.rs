@@ -870,3 +870,67 @@ async fn test_init_empty_database_has_no_objects() -> Result<()> {
     })
     .await
 }
+
+/// Test that SQL file import applies roles.sql before the schema file
+/// This ensures GRANT statements in the schema don't fail due to missing roles
+#[tokio::test]
+async fn test_init_sql_file_import_with_roles() -> Result<()> {
+    use pgmt::commands::init::import::import_schema;
+    use pgmt::config::types::ShadowDatabase;
+
+    let temp_dir = TempDir::new()?;
+
+    // Create a roles.sql file with a unique role name
+    // Uses DO block for idempotency (same pattern as other tests)
+    let roles_file = temp_dir.path().join("roles.sql");
+    fs::write(
+        &roles_file,
+        r#"-- Roles for import test
+DO $$ BEGIN CREATE ROLE import_test_role; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;"#,
+    )?;
+
+    // Create a schema.sql file with a table and GRANT to that role
+    let schema_file = temp_dir.path().join("schema.sql");
+    fs::write(
+        &schema_file,
+        r#"-- Schema with grants that require roles.sql
+CREATE TABLE import_test_items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+GRANT SELECT ON import_test_items TO import_test_role;
+"#,
+    )?;
+
+    // Import the schema with the roles file
+    // This should apply roles.sql BEFORE schema.sql, allowing the GRANT to succeed
+    let catalog = import_schema(
+        ImportSource::SqlFile(schema_file),
+        &ShadowDatabase::Auto,
+        Some(roles_file.as_path()),
+    )
+    .await?;
+
+    // Verify the import succeeded and catalog contains expected objects
+    assert_eq!(catalog.tables.len(), 1, "Should have 1 table");
+    assert_eq!(
+        catalog.tables[0].name, "import_test_items",
+        "Table should be import_test_items"
+    );
+
+    // Verify the grant was captured (this proves the role existed when GRANT ran)
+    assert!(
+        !catalog.grants.is_empty(),
+        "Should have grants (proves roles.sql was applied first)"
+    );
+    let has_import_test_grant = catalog.grants.iter().any(|g| {
+        matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Role(name) if name == "import_test_role")
+    });
+    assert!(
+        has_import_test_grant,
+        "Should have grant to import_test_role"
+    );
+
+    Ok(())
+}
