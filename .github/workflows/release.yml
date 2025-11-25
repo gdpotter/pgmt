@@ -9,34 +9,12 @@ env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: true
 
-jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.release.outputs.upload_url }}
-      release_id: ${{ steps.release.outputs.id }}
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Get tag
-        id: tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        
-      - name: Create Release
-        id: release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.TAG }}
-          release_name: ${{ steps.tag.outputs.TAG }}
-          draft: false
-          prerelease: ${{ contains(steps.tag.outputs.TAG, '-') }}
+permissions:
+  contents: write
 
+jobs:
   build-release:
     name: Build Release (${{ matrix.target }})
-    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -92,11 +70,6 @@ jobs:
           cd ../../..
           
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}
-          asset_name: ${{ matrix.name }}
-          asset_content_type: application/octet-stream
+          files: ${{ matrix.name }}
