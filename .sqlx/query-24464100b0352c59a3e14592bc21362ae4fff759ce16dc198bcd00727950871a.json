@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            t.typbasetype AS \"typbasetype\",\n            bt.typname AS \"base_type_name?\",\n            btn.nspname AS \"base_type_schema?\",\n            d.description AS \"comment?\"\n        FROM pg_type t\n        JOIN pg_namespace n ON t.typnamespace = n.oid\n        LEFT JOIN pg_type bt ON t.typbasetype = bt.oid\n        LEFT JOIN pg_namespace btn ON bt.typnamespace = btn.oid\n        LEFT JOIN pg_description d ON d.objoid = t.oid AND d.objsubid = 0\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND t.typtype IN ('e', 'c', 'd', 'r')  -- enum, composite, domain, range\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.reltype = t.oid\n              AND c.relkind IN ('r', 'v', 'm', 'S')  -- exclude table, view, materialized view, and sequence row types\n          )  -- exclude table, view, materialized view, and sequence row types\n          -- Exclude types that belong to extensions\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = t.oid\n            AND dep.deptype = 'e'\n          )\n        ORDER BY n.nspname, t.typname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "typtype!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "typbasetype",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 4,
+        "name": "base_type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "base_type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "24464100b0352c59a3e14592bc21362ae4fff759ce16dc198bcd00727950871a"
+}

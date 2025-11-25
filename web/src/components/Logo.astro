@@ -1,0 +1,180 @@
+---
+import { css, cx } from '../../styled-system/css';
+
+interface Props {
+  size?: number;
+  showText?: boolean;
+  class?: string;
+}
+
+const { size = 24, showText = true, class: className = '' } = Astro.props;
+
+const logoContainerClass = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'sm',
+});
+
+const logoTextClass = css({
+  fontSize: '2xl',
+  fontWeight: '700',
+  fontFamily: 'heading',
+});
+---
+
+<div class={cx(logoContainerClass, className)}>
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <!-- Main table blocks -->
+    <rect
+      x="2"
+      y="3"
+      width="7"
+      height="9"
+      stroke="currentColor"
+      stroke-width="1"
+      fill="none"
+      rx="1.5"
+    >
+    </rect>
+    <rect
+      x="15"
+      y="3"
+      width="7"
+      height="9"
+      stroke="currentColor"
+      stroke-width="1"
+      fill="none"
+      rx="1.5"
+    >
+    </rect>
+    <rect
+      x="8"
+      y="14"
+      width="8"
+      height="7"
+      stroke="currentColor"
+      stroke-width="1"
+      fill="none"
+      rx="1.5"
+    >
+    </rect>
+
+    <!-- Relationship connections -->
+    <line
+      x1="9"
+      y1="7.5"
+      x2="15"
+      y2="7.5"
+      stroke="currentColor"
+      stroke-width="1"
+    >
+    </line>
+    <line
+      x1="12"
+      y1="12"
+      x2="12"
+      y2="14"
+      stroke="currentColor"
+      stroke-width="1"
+    >
+    </line>
+
+    <!-- Connection points -->
+    <circle cx="9" cy="7.5" r="1.5" fill="currentColor"></circle>
+    <circle cx="15" cy="7.5" r="1.5" fill="currentColor"></circle>
+    <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
+    <circle cx="12" cy="14" r="1.5" fill="currentColor"></circle>
+
+    <!-- Table field indicators -->
+    <line
+      x1="3.5"
+      y1="5.5"
+      x2="7"
+      y2="5.5"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+    <line
+      x1="3.5"
+      y1="7"
+      x2="6"
+      y2="7"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+    <line
+      x1="3.5"
+      y1="8.5"
+      x2="6.5"
+      y2="8.5"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+
+    <line
+      x1="16.5"
+      y1="5.5"
+      x2="20"
+      y2="5.5"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+    <line
+      x1="16.5"
+      y1="7"
+      x2="19"
+      y2="7"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+    <line
+      x1="16.5"
+      y1="8.5"
+      x2="19.5"
+      y2="8.5"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+
+    <line
+      x1="9.5"
+      y1="16.5"
+      x2="14"
+      y2="16.5"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+    <line
+      x1="9.5"
+      y1="18"
+      x2="13"
+      y2="18"
+      stroke="currentColor"
+      stroke-width="0.5"
+      opacity="0.6"
+    >
+    </line>
+  </svg>
+
+  {showText && <span class={logoTextClass}>pgmt</span>}
+</div>

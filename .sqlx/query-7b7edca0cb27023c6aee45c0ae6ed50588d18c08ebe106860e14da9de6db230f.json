@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS table_schema,\n            c.relname AS table_name,\n            a.attname AS column_name,\n            seq_c.relname AS sequence_name,\n            seq_n.nspname AS sequence_schema\n        FROM pg_depend d\n        JOIN pg_attrdef ad ON d.objid = ad.oid\n        JOIN pg_attribute a ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum\n        JOIN pg_class c ON a.attrelid = c.oid\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        JOIN pg_class seq_c ON d.refobjid = seq_c.oid\n        JOIN pg_namespace seq_n ON seq_c.relnamespace = seq_n.oid\n        WHERE d.refclassid = 'pg_class'::regclass\n          AND seq_c.relkind = 'S'  -- Only sequences\n          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "table_schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "column_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "sequence_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 4,
+        "name": "sequence_schema",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7b7edca0cb27023c6aee45c0ae6ed50588d18c08ebe106860e14da9de6db230f"
+}

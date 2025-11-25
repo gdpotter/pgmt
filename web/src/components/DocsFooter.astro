@@ -1,0 +1,49 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+import { links, externalLinkAttrs } from '../config/links';
+---
+
+<!-- Include Starlight's default footer (prev/next navigation, etc.) -->
+<Default {...Astro.props} />
+
+<!-- Custom "Need help?" section -->
+<div class="custom-help-footer">
+  <p>
+    <strong>Need help?</strong>
+    <a href={links.github.discussions} {...externalLinkAttrs}>
+      GitHub Discussions
+    </a> •
+    <a href={links.github.issues} {...externalLinkAttrs}>Report an Issue</a>
+  </p>
+</div>
+
+<style>
+  .custom-help-footer {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+    text-align: center;
+    font-size: 0.9rem;
+  }
+
+  .custom-help-footer p {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+  }
+
+  .custom-help-footer strong {
+    color: var(--sl-color-white);
+    margin-right: 0.5rem;
+  }
+
+  .custom-help-footer a {
+    color: var(--sl-color-accent);
+    text-decoration: none;
+    transition: opacity 0.2s ease;
+  }
+
+  .custom-help-footer a:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+  }
+</style>

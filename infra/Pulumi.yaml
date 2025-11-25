@@ -1,0 +1,3 @@
+name: pgmt-infra
+runtime: nodejs
+description: Route53 DNS infrastructure for pgmt

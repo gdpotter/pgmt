@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            i.relname AS \"name!\",\n            unnest(i.reloptions) AS \"option_string?\"\n        FROM pg_class i\n        JOIN pg_namespace n ON i.relnamespace = n.oid\n        JOIN pg_index idx ON idx.indexrelid = i.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_namespace tn ON t.relnamespace = tn.oid\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND i.reloptions IS NOT NULL\n          AND NOT idx.indisprimary\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "option_string?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "07745960af6d54d1be9df30eac3d7cad42e32eb46957bfacd2ea8fe9bf6459c4"
+}

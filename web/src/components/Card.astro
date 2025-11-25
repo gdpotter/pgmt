@@ -1,0 +1,22 @@
+---
+import { card } from '../../styled-system/recipes';
+import { cx } from '../../styled-system/css';
+
+export interface Props {
+  variant?: 'default' | 'elevated' | 'bordered' | 'ghost';
+  padding?: 'none' | 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'auto';
+  class?: string;
+}
+
+const {
+  variant = 'default',
+  padding = 'lg',
+  size = 'auto',
+  class: className = '',
+} = Astro.props;
+---
+
+<div class={cx(card({ variant, padding, size }), className)}>
+  <slot />
+</div>

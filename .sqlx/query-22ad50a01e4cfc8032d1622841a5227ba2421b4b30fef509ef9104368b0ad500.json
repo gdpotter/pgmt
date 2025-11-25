@@ -1,0 +1,110 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS schema,\n            p.proname AS name,\n            p.oid AS \"func_oid!\",\n            p.prokind::text AS \"kind!\",\n            pg_catalog.pg_get_function_result(p.oid) AS return_type,\n            pg_catalog.pg_get_function_arguments(p.oid) AS \"arguments!\",\n            pg_catalog.pg_get_functiondef(p.oid) AS \"definition!\",\n            l.lanname AS language,\n            p.provolatile::text AS \"volatility!\",\n            p.proisstrict AS is_strict,\n            p.prosecdef AS security_definer,\n            p.proretset AS returns_set,\n            p.pronargs AS num_args,\n            ret_type.typname AS \"return_type_name?\",\n            ret_ns.nspname AS \"return_type_schema?\",\n            d.description AS \"comment?\"\n        FROM pg_proc p\n        JOIN pg_namespace n ON p.pronamespace = n.oid\n        JOIN pg_language l ON p.prolang = l.oid\n        LEFT JOIN pg_type ret_type ON p.prorettype = ret_type.oid\n        LEFT JOIN pg_namespace ret_ns ON ret_type.typnamespace = ret_ns.oid\n        LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        -- Exclude functions that belong to extensions\n        AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = p.oid\n            AND dep.deptype = 'e'\n        )\n        ORDER BY n.nspname, p.proname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "func_oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "return_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "arguments!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "definition!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "language",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 8,
+        "name": "volatility!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_strict",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "security_definer",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "returns_set",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "num_args",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 13,
+        "name": "return_type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 14,
+        "name": "return_type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 15,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "22ad50a01e4cfc8032d1622841a5227ba2421b4b30fef509ef9104368b0ad500"
+}

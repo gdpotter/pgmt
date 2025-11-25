@@ -1,0 +1,263 @@
+---
+import { css, cx } from '../../styled-system/css';
+import { createHighlighter } from 'shiki';
+
+export interface Props {
+  code: string;
+  language?: string;
+  title?: string;
+  showCopy?: boolean;
+  class?: string;
+}
+
+const {
+  code,
+  language = 'bash',
+  title,
+  showCopy = true,
+  class: className = '',
+} = Astro.props;
+
+// Initialize Shiki highlighter with appropriate theme
+const highlighter = await createHighlighter({
+  themes: ['github-dark'],
+  langs: [
+    'bash',
+    'sql',
+    'javascript',
+    'typescript',
+    'rust',
+    'yaml',
+    'json',
+    'shell',
+  ],
+});
+
+// Generate highlighted HTML
+let highlightedCode = code;
+try {
+  highlightedCode = highlighter.codeToHtml(code, {
+    lang: language,
+    theme: 'github-dark',
+  });
+} catch {
+  // Fallback to plain text if language not supported
+  console.warn(
+    `Language '${language}' not supported, falling back to plain text`
+  );
+}
+
+const codeBlockClass = css({
+  backgroundColor: 'surface-raised',
+  borderRadius: 'lg',
+  border: '1px solid transparent',
+  background: `linear-gradient(rgba(36, 36, 36, 1), rgba(36, 36, 36, 1)) padding-box, 
+               linear-gradient(135deg, rgba(0, 212, 255, 0.3) 0%, rgba(255, 107, 157, 0.2) 100%) border-box`,
+  overflow: 'hidden',
+  position: 'relative',
+  transition: 'all 0.3s ease',
+  _hover: {
+    boxShadow:
+      '0 0 25px rgba(0, 212, 255, 0.15), 0 0 50px rgba(255, 107, 157, 0.05)',
+    background: `linear-gradient(rgba(36, 36, 36, 1), rgba(36, 36, 36, 1)) padding-box, 
+                 linear-gradient(135deg, rgba(0, 212, 255, 0.5) 0%, rgba(255, 107, 157, 0.3) 100%) border-box`,
+  },
+  width: 'full',
+});
+
+const headerClass = css({
+  padding: 'md',
+  borderBottom: '1px solid',
+  borderColor: 'border',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  backgroundColor: 'surface',
+});
+
+const titleClass = css({
+  fontSize: 'sm',
+  fontWeight: '500',
+  color: 'text-secondary',
+  fontFamily: 'mono',
+});
+
+const copyButtonClass = css({
+  backgroundColor: 'transparent',
+  border: 'none',
+  color: 'text-muted',
+  cursor: 'pointer',
+  padding: 'xs',
+  borderRadius: 'sm',
+  transition: 'all 0.2s ease',
+  position: 'relative',
+  _hover: {
+    color: '#00D4FF',
+    transform: 'scale(1.1)',
+    boxShadow: '0 0 10px rgba(0, 212, 255, 0.3)',
+  },
+});
+
+const preClass = css({
+  margin: '0',
+  padding: 'lg',
+  backgroundColor: 'transparent',
+  fontFamily: 'mono',
+  fontSize: 'sm',
+  lineHeight: '1.5',
+  overflow: 'auto',
+});
+
+const codeContainerClass = css({
+  '& pre': {
+    margin: '0',
+    padding: '0',
+    backgroundColor: 'transparent !important',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    lineHeight: 'inherit',
+  },
+  '& code': {
+    backgroundColor: 'transparent !important',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+  },
+  // Override Shiki theme background
+  '& .shiki': {
+    backgroundColor: 'transparent !important',
+    padding: '0 !important',
+  },
+  // Custom token colors for better dark theme integration
+  '& .line': {
+    display: 'inline-block',
+    width: '100%',
+  },
+  // SQL keyword highlighting
+  '& .token.keyword': {
+    color: '#FF79C6',
+    fontWeight: '600',
+  },
+  // Function names
+  '& .token.function': {
+    color: '#50FA7B',
+  },
+  // Strings
+  '& .token.string': {
+    color: '#F1FA8C',
+  },
+  // Comments
+  '& .token.comment': {
+    color: '#6272A4',
+    fontStyle: 'italic',
+  },
+  // Numbers
+  '& .token.number': {
+    color: '#BD93F9',
+  },
+  // Operators
+  '& .token.operator': {
+    color: '#FF79C6',
+  },
+  // Terminal output highlights
+  '& .highlight-error': {
+    color: '#FF5555',
+    fontWeight: '600',
+  },
+  '& .highlight-success': {
+    color: '#50FA7B',
+    fontWeight: '600',
+  },
+  '& .highlight-muted': {
+    color: '#6272A4',
+    fontStyle: 'italic',
+  },
+});
+
+const languageColors: Record<string, string> = {
+  bash: '#4CAF50',
+  sql: '#336791',
+  javascript: '#F7DF1E',
+  typescript: '#3178C6',
+  rust: '#CE422B',
+  yaml: '#CB171E',
+  json: '#000000',
+};
+
+const languageBadgeClass = css({
+  fontSize: 'xs',
+  fontWeight: '500',
+  color: 'white',
+  padding: '0.125rem 0.375rem',
+  borderRadius: 'sm',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+});
+---
+
+<div class={cx(codeBlockClass, className)}>
+  {
+    (title || showCopy) && (
+      <div class={headerClass}>
+        <div class={css({ display: 'flex', alignItems: 'center', gap: 'sm' })}>
+          {language && (
+            <span
+              class={languageBadgeClass}
+              style={`background-color: ${languageColors[language] || '#666'}`}
+            >
+              {language}
+            </span>
+          )}
+          {title && <span class={titleClass}>{title}</span>}
+        </div>
+        {showCopy && (
+          <button class={copyButtonClass} id="copy-button" data-code={code}>
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          </button>
+        )}
+      </div>
+    )
+  }
+  <div class={cx(preClass, codeContainerClass)} set:html={highlightedCode} />
+</div>
+
+<script>
+  // Copy to clipboard functionality
+  document.addEventListener('DOMContentLoaded', () => {
+    const copyButtons = document.querySelectorAll('#copy-button');
+
+    copyButtons.forEach(button => {
+      button.addEventListener('click', async () => {
+        const code = button.getAttribute('data-code');
+        if (code) {
+          try {
+            await navigator.clipboard.writeText(code);
+
+            // Visual feedback
+            const originalIcon = button.innerHTML;
+            button.innerHTML = `
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20,6 9,17 4,12"></polyline>
+              </svg>
+            `;
+
+            setTimeout(() => {
+              button.innerHTML = originalIcon;
+            }, 2000);
+          } catch (err) {
+            console.error('Failed to copy code:', err);
+          }
+        }
+      });
+    });
+  });
+</script>

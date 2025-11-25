@@ -1,0 +1,324 @@
+use anyhow::{Context, Result};
+use sqlx::PgPool;
+use std::path::{Path, PathBuf};
+use tracing::info;
+
+use crate::catalog::Catalog;
+use crate::config::Config;
+use crate::db::cleaner;
+use crate::db::schema_executor::BaselineExecutor;
+use crate::migration::{
+    find_baseline_for_version, find_latest_baseline, generate_baseline_filename,
+};
+use crate::validation::validate_baseline_consistency_with_suggestions;
+
+/// Configuration for baseline operations
+#[derive(Debug, Clone)]
+pub struct BaselineConfig {
+    pub validate_consistency: bool,
+    pub verbose: bool,
+}
+
+impl Default for BaselineConfig {
+    fn default() -> Self {
+        Self {
+            validate_consistency: true,
+            verbose: true,
+        }
+    }
+}
+
+/// Result of baseline operations
+#[derive(Debug)]
+pub struct BaselineOperationResult {
+    pub path: PathBuf,
+}
+
+/// Load a baseline SQL file into a shadow database and return the resulting catalog
+pub async fn load_baseline_into_shadow(
+    shadow_pool: &PgPool,
+    baseline_path: &Path,
+) -> Result<Catalog> {
+    cleaner::clean_shadow_db(shadow_pool).await?;
+
+    let baseline_sql = std::fs::read_to_string(baseline_path)
+        .with_context(|| format!("Failed to read baseline file: {}", baseline_path.display()))?;
+
+    let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
+    let source = baseline_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown_baseline.sql");
+
+    executor
+        .execute_baseline(&baseline_sql, source)
+        .await
+        .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
+
+    Catalog::load(shadow_pool).await
+}
+
+/// Update or create a baseline file for a migration
+pub async fn ensure_baseline_for_migration(
+    baselines_dir: &Path,
+    version: u64,
+    baseline_sql: &str,
+    config: &BaselineConfig,
+) -> Result<BaselineOperationResult> {
+    let baseline_filename = generate_baseline_filename(version);
+    let baseline_path = baselines_dir.join(&baseline_filename);
+
+    std::fs::create_dir_all(baselines_dir).with_context(|| {
+        format!(
+            "Failed to create baselines directory: {}",
+            baselines_dir.display()
+        )
+    })?;
+
+    if config.verbose {
+        println!("💾 Writing baseline: {}", baseline_path.display());
+    }
+    std::fs::write(&baseline_path, baseline_sql)
+        .with_context(|| format!("Failed to write baseline file: {}", baseline_path.display()))?;
+
+    Ok(BaselineOperationResult {
+        path: baseline_path,
+    })
+}
+
+/// Enhanced validation with optional file dependency suggestions
+pub async fn validate_baseline_against_catalog_with_suggestions(
+    shadow_pool: &PgPool,
+    baseline_path: &Path,
+    expected_catalog: &Catalog,
+    config: &BaselineConfig,
+    suggest_file_dependencies: bool,
+) -> Result<()> {
+    if !config.validate_consistency {
+        return Ok(());
+    }
+
+    if config.verbose {
+        println!("Validating baseline matches intended schema...");
+    }
+
+    let baseline_catalog = load_baseline_into_shadow(shadow_pool, baseline_path).await?;
+    validate_baseline_consistency_with_suggestions(
+        &baseline_catalog,
+        expected_catalog,
+        suggest_file_dependencies,
+    )?;
+
+    if config.verbose {
+        println!("✓ Baseline validation passed");
+    }
+
+    Ok(())
+}
+
+/// Get the starting catalog state for migration generation
+/// Returns either the latest baseline or reconstructs from migration chain
+pub async fn get_migration_starting_state(
+    shadow_pool: &PgPool,
+    baselines_dir: &Path,
+    migrations_dir: &Path,
+    config: &BaselineConfig,
+) -> Result<Catalog> {
+    let latest_baseline = find_latest_baseline(baselines_dir)?;
+
+    if let Some(baseline) = latest_baseline {
+        if config.verbose {
+            info!("Loading baseline: {}", baseline.path.display());
+        }
+        load_baseline_into_shadow(shadow_pool, &baseline.path).await
+    } else {
+        if config.verbose {
+            info!("No existing baseline found, reconstructing from existing migrations");
+        }
+        reconstruct_from_migration_chain(shadow_pool, migrations_dir).await
+    }
+}
+
+/// Get the starting catalog state for updating a specific migration version
+pub async fn get_migration_update_starting_state(
+    shadow_pool: &PgPool,
+    baselines_dir: &Path,
+    migrations_dir: &Path,
+    target_version: u64,
+    config: &BaselineConfig,
+) -> Result<Catalog> {
+    let previous_baseline = find_baseline_for_version(baselines_dir, target_version)?;
+
+    if let Some(baseline) = previous_baseline {
+        if config.verbose {
+            info!("Loading previous baseline: {}", baseline.path.display());
+        }
+        load_baseline_into_shadow(shadow_pool, &baseline.path).await
+    } else {
+        if config.verbose {
+            info!(
+                "No previous baseline found, reconstructing from migrations before V{}",
+                target_version
+            );
+        }
+        reconstruct_from_migration_chain_before_version(shadow_pool, migrations_dir, target_version)
+            .await
+    }
+}
+
+/// Reconstruct catalog by applying all migrations in chronological order
+async fn reconstruct_from_migration_chain(
+    shadow_pool: &PgPool,
+    migrations_dir: &Path,
+) -> Result<Catalog> {
+    use crate::migration::discover_migrations;
+
+    cleaner::clean_shadow_db(shadow_pool).await?;
+
+    let migrations = discover_migrations(migrations_dir)?;
+
+    if migrations.is_empty() {
+        println!("No existing migrations found, starting from empty schema");
+        return Catalog::load(shadow_pool).await;
+    }
+
+    println!(
+        "Applying {} existing migration(s) to reconstruct state",
+        migrations.len()
+    );
+
+    for migration in migrations {
+        println!(
+            "  Applying V{} - {}",
+            migration.version, migration.description
+        );
+
+        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
+            format!(
+                "Failed to read migration file: {}",
+                migration.path.display()
+            )
+        })?;
+
+        let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
+        let source = format!("V{} - {}", migration.version, migration.description);
+        executor
+            .execute_baseline(&migration_sql, &source)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to apply migration V{}: {}",
+                    migration.version,
+                    migration.path.display()
+                )
+            })?;
+    }
+
+    Catalog::load(shadow_pool).await
+}
+
+/// Reconstruct catalog by applying migrations before a specific version
+async fn reconstruct_from_migration_chain_before_version(
+    shadow_pool: &PgPool,
+    migrations_dir: &Path,
+    target_version: u64,
+) -> Result<Catalog> {
+    use crate::migration::find_migrations_before_version;
+
+    cleaner::clean_shadow_db(shadow_pool).await?;
+
+    let migrations = find_migrations_before_version(migrations_dir, target_version)?;
+
+    if migrations.is_empty() {
+        println!(
+            "No existing migrations found before V{}, starting from empty schema",
+            target_version
+        );
+        return Catalog::load(shadow_pool).await;
+    }
+
+    println!(
+        "Applying {} existing migration(s) before V{}",
+        migrations.len(),
+        target_version
+    );
+
+    for migration in migrations {
+        println!(
+            "  Applying V{} - {}",
+            migration.version, migration.description
+        );
+
+        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
+            format!(
+                "Failed to read migration file: {}",
+                migration.path.display()
+            )
+        })?;
+
+        let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
+        let source = format!("V{} - {}", migration.version, migration.description);
+        executor
+            .execute_baseline(&migration_sql, &source)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to apply migration V{}: {}",
+                    migration.version,
+                    migration.path.display()
+                )
+            })?;
+    }
+
+    Catalog::load(shadow_pool).await
+}
+
+/// Helper to determine if a baseline should be created or updated for a migration
+pub fn should_manage_baseline_for_migration(
+    _config: &Config,
+    baseline_path: &Path,
+    create_baselines_by_default: bool,
+) -> bool {
+    create_baselines_by_default || baseline_path.exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_baseline_config_default() {
+        let config = BaselineConfig::default();
+        assert!(config.validate_consistency);
+        assert!(config.verbose);
+    }
+
+    #[test]
+    fn test_should_manage_baseline_for_migration() {
+        let temp_dir = env::temp_dir().join("pgmt_test_baseline_management");
+        let baseline_path = temp_dir.join("baseline_V123.sql");
+
+        assert!(should_manage_baseline_for_migration(
+            &Config::default(),
+            &baseline_path,
+            true
+        ));
+
+        assert!(!should_manage_baseline_for_migration(
+            &Config::default(),
+            &baseline_path,
+            false
+        ));
+
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(&baseline_path, "test").unwrap();
+        assert!(should_manage_baseline_for_migration(
+            &Config::default(),
+            &baseline_path,
+            false
+        ));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}

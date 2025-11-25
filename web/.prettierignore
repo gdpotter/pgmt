@@ -1,0 +1,26 @@
+# Build outputs
+dist/
+.astro/
+
+# Generated files
+styled-system/
+
+# Dependencies
+node_modules/
+
+# Package files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environment files
+.env
+.env.*
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

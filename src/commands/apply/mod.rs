@@ -1,0 +1,185 @@
+pub mod execution;
+pub mod execution_helpers;
+pub mod lock;
+pub mod shutdown;
+pub mod user_interaction;
+pub mod verification;
+pub mod watch;
+
+pub use crate::db::connection::connect_with_retry;
+pub use crate::db::sql_executor::execute_sql_with_context;
+pub use lock::ApplyLock;
+pub use shutdown::ShutdownSignal;
+
+/// Execution mode for apply operations
+#[derive(Clone)]
+pub enum ExecutionMode {
+    /// Preview changes without applying them
+    DryRun,
+    /// Apply all changes without user confirmation
+    ForceAll,
+    /// Prompt for confirmation before each change
+    ConfirmAll,
+    /// Apply only safe operations, skip destructive ones
+    SafeOnly,
+    /// Auto-apply when all operations are safe, prompt when any are destructive
+    AutoSafe,
+}
+
+use crate::catalog::Catalog;
+use crate::config::{Config, ObjectFilter};
+use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+use crate::diff::operations::SqlRenderer;
+use crate::diff::{cascade, diff_all, diff_order};
+use anyhow::Result;
+use sqlx::PgPool;
+use std::path::Path;
+
+/// Main apply command entry point
+pub async fn cmd_apply(
+    config: &Config,
+    root_dir: &Path,
+    execution_mode: ExecutionMode,
+) -> Result<()> {
+    println!("🔄 Applying modular schema to development database...");
+
+    let shutdown_signal = ShutdownSignal::new();
+    shutdown_signal.wait_for_signal().await;
+
+    println!("🔒 Checking for concurrent operations...");
+    let _lock = ApplyLock::new(root_dir);
+    _lock.acquire()?;
+
+    println!("📊 Connecting to development database...");
+    let dev_pool = PgPool::connect(&config.databases.dev)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to development database: {}", e))?;
+
+    println!("🛡️  Setting up shadow database...");
+    let shadow_url = config.databases.shadow.get_connection_string().await?;
+
+    let shadow_pool = connect_with_retry(&shadow_url).await?;
+
+    println!("🔄 Processing schema to shadow database...");
+    let schema_dir = root_dir.join(&config.directories.schema);
+    let processor_config = SchemaProcessorConfig {
+        verbose: true,
+        clean_before_apply: true,
+    };
+    let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
+    let processed_schema = processor.process_schema_directory(&schema_dir).await
+        .map_err(|e| anyhow::anyhow!("Failed to process schema to shadow database: {}\n\nThis usually indicates a syntax error in your schema files.", e))?;
+
+    println!("📊 Analyzing database catalogs...");
+    let old_catalog = Catalog::load(&dev_pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load catalog from development database: {}", e))?;
+    let new_catalog = processed_schema.with_file_dependencies_applied();
+
+    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
+    let old = filter.filter_catalog(old_catalog);
+    let new = filter.filter_catalog(new_catalog);
+
+    println!("🔍 Computing schema differences...");
+    let raw_steps = diff_all(&old, &new);
+    let full_steps = cascade::expand(raw_steps, &old, &new);
+    let ordered = diff_order(full_steps, &old, &new)?;
+
+    if ordered.is_empty() {
+        println!("✅ No schema changes detected - database is up to date");
+        return Ok(());
+    }
+
+    println!(
+        "📋 Found {} migration step{}",
+        ordered.len(),
+        if ordered.len() == 1 { "" } else { "s" }
+    );
+
+    loop {
+        if shutdown_signal.is_shutdown() {
+            println!("🛑 Shutdown signal received, stopping gracefully...");
+            return Ok(());
+        }
+
+        match execution::execute_plan(&ordered, &dev_pool, execution_mode.clone(), &new, config)
+            .await
+        {
+            Ok(()) => break,
+            Err(e) if e.to_string() == "REFRESH_REQUESTED" => {
+                println!("🔄 Refreshing schema analysis...");
+
+                println!("🔄 Re-processing schema to shadow database...");
+                let reprocessor =
+                    SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
+                let reprocessed_schema = reprocessor
+                    .process_schema_directory(&schema_dir)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to re-process schema to shadow database: {}", e)
+                    })?;
+
+                println!("📊 Re-analyzing database catalogs...");
+                let new_old_catalog = Catalog::load(&dev_pool).await?;
+                let new_new_catalog = reprocessed_schema.with_file_dependencies_applied();
+
+                let old_filtered = filter.filter_catalog(new_old_catalog);
+                let new_filtered = filter.filter_catalog(new_new_catalog);
+
+                println!("🔍 Re-computing schema differences...");
+                let new_raw_steps = diff_all(&old_filtered, &new_filtered);
+                let new_full_steps = cascade::expand(new_raw_steps, &old_filtered, &new_filtered);
+                let new_ordered = diff_order(new_full_steps, &old_filtered, &new_filtered)?;
+
+                if new_ordered.is_empty() {
+                    println!(
+                        "✅ No schema changes detected after refresh - database is up to date"
+                    );
+                    break;
+                }
+
+                println!(
+                    "📋 Found {} migration step{} after refresh",
+                    new_ordered.len(),
+                    if new_ordered.len() == 1 { "" } else { "s" }
+                );
+
+                if matches!(execution_mode, ExecutionMode::ConfirmAll) {
+                    use crate::render::RenderedSql;
+                    let rendered: Vec<RenderedSql> =
+                        new_ordered.iter().flat_map(|step| step.to_sql()).collect();
+                    execution::print_migration_summary(&rendered);
+
+                    match user_interaction::execute_with_user_control(
+                        &rendered,
+                        &dev_pool,
+                        &new_filtered,
+                        config,
+                    )
+                    .await
+                    {
+                        Ok(()) => break,
+                        Err(refresh_err) if refresh_err.to_string() == "REFRESH_REQUESTED" => {
+                            continue;
+                        }
+                        Err(other_err) => return Err(other_err),
+                    }
+                } else {
+                    continue;
+                }
+            }
+            Err(other_err) => return Err(other_err),
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply command with file watching support
+pub async fn cmd_apply_watch(
+    config: &Config,
+    root_dir: &Path,
+    execution_mode: ExecutionMode,
+) -> Result<()> {
+    watch::cmd_apply_watch_impl(config, root_dir, execution_mode).await
+}

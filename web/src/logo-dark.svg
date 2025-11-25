@@ -1,0 +1,34 @@
+<svg width="120" height="32" viewBox="0 0 120 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Logo icon (scaled up and positioned) -->
+  <g transform="translate(4, 4) scale(1)">
+    <!-- Main table blocks -->
+    <rect x="2" y="3" width="7" height="9" stroke="#f9fafb" stroke-width="1" fill="none" rx="1.5"/>
+    <rect x="15" y="3" width="7" height="9" stroke="#f9fafb" stroke-width="1" fill="none" rx="1.5"/>
+    <rect x="8" y="14" width="8" height="7" stroke="#f9fafb" stroke-width="1" fill="none" rx="1.5"/>
+    
+    <!-- Relationship connections -->
+    <line x1="9" y1="7.5" x2="15" y2="7.5" stroke="#f9fafb" stroke-width="1"/>
+    <line x1="12" y1="12" x2="12" y2="14" stroke="#f9fafb" stroke-width="1"/>
+    
+    <!-- Connection points -->
+    <circle cx="9" cy="7.5" r="1.5" fill="#f9fafb"/>
+    <circle cx="15" cy="7.5" r="1.5" fill="#f9fafb"/>
+    <circle cx="12" cy="12" r="1.5" fill="#f9fafb"/>
+    <circle cx="12" cy="14" r="1.5" fill="#f9fafb"/>
+    
+    <!-- Table field indicators -->
+    <line x1="3.5" y1="5.5" x2="7" y2="5.5" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    <line x1="3.5" y1="7" x2="6" y2="7" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    <line x1="3.5" y1="8.5" x2="6.5" y2="8.5" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    
+    <line x1="16.5" y1="5.5" x2="20" y2="5.5" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    <line x1="16.5" y1="7" x2="19" y2="7" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    <line x1="16.5" y1="8.5" x2="19.5" y2="8.5" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    
+    <line x1="9.5" y1="16.5" x2="14" y2="16.5" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+    <line x1="9.5" y1="18" x2="13" y2="18" stroke="#f9fafb" stroke-width="0.5" opacity="0.6"/>
+  </g>
+  
+  <!-- Text "pgmt" -->
+  <text x="36" y="22" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="700" fill="#f9fafb">pgmt</text>
+</svg>

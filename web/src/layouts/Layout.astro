@@ -1,0 +1,142 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import '../index.css';
+
+export interface Props {
+  title: string;
+  description?: string;
+  ogImage?: string;
+  currentPath?: string;
+}
+
+const {
+  title,
+  description = 'Edit database objects like code. See changes instantly. Deploy with confidence. The PostgreSQL migration tool built for modern development.',
+  ogImage = '/og-default.png',
+  currentPath = Astro.url.pathname,
+} = Astro.props;
+
+const fullTitle = title.includes('pgmt') ? title : `${title} - pgmt`;
+---
+
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- SEO Meta Tags -->
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL(ogImage, Astro.url)} />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content={Astro.url} />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={new URL(ogImage, Astro.url)} />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Canonical URL -->
+    <link rel="canonical" href={Astro.url} />
+
+    <script
+      defer
+      src="https://cloud.umami.is/script.js"
+      data-website-id="75961656-c785-4cb7-9f25-3c8ea2b4e83e"
+      is:inline></script>
+  </head>
+  <body
+    style="background-color: #0a0a0a; color: #ffffff; margin: 0; padding: 0;"
+  >
+    <Header currentPath={currentPath} />
+    <main>
+      <slot />
+    </main>
+    <Footer />
+
+    <style>
+      /* Global syntax highlighting styles for inline code in text */
+      .highlight-error {
+        color: #ff5555;
+        font-weight: 600;
+      }
+
+      .highlight-success {
+        color: #50fa7b;
+        font-weight: 600;
+      }
+
+      .highlight-muted {
+        color: #6272a4;
+        font-style: italic;
+      }
+
+      /* Enhanced Shiki token colors for better visibility */
+      .shiki .token.keyword {
+        color: #ff79c6 !important;
+        font-weight: 600;
+      }
+
+      .shiki .token.function {
+        color: #50fa7b !important;
+      }
+
+      .shiki .token.string {
+        color: #f1fa8c !important;
+      }
+
+      .shiki .token.comment {
+        color: #6272a4 !important;
+        font-style: italic;
+      }
+
+      .shiki .token.number {
+        color: #bd93f9 !important;
+      }
+
+      .shiki .token.operator {
+        color: #ff79c6 !important;
+      }
+
+      /* SQL specific highlighting */
+      .shiki .token.keyword.sql {
+        color: #ff79c6 !important;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      /* Bash/Shell specific highlighting */
+      .shiki .token.builtin {
+        color: #8be9fd !important;
+      }
+
+      .shiki .token.parameter {
+        color: #ffb86c !important;
+      }
+
+      /* Better contrast for punctuation */
+      .shiki .token.punctuation {
+        color: #f8f8f2 !important;
+        opacity: 0.7;
+      }
+    </style>
+  </body>
+</html>

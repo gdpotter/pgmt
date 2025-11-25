@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.conname AS constraint_name,\n            n.nspname AS schema_name,\n            cl.relname AS table_name,\n            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS pk_columns\n        FROM pg_constraint c\n        JOIN pg_class cl ON c.conrelid = cl.oid\n        JOIN pg_namespace n ON cl.relnamespace = n.oid\n        JOIN pg_attribute a ON\n            a.attrelid = c.conrelid AND\n            a.attnum = ANY(c.conkey)\n        WHERE\n            c.contype = 'p' AND\n            n.nspname NOT IN ('pg_catalog', 'information_schema')\n        GROUP BY c.conname, n.nspname, cl.relname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "constraint_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "pk_columns",
+        "type_info": "NameArray"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "4282625b6275be17e3216b2c9a82f77b720990786bae46f7b2b4f3bff005f6b5"
+}

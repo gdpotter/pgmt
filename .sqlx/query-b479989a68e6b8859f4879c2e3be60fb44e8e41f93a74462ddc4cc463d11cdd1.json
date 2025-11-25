@@ -1,0 +1,128 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS schema_name,\n            cl.relname AS table_name,\n            c.conname AS constraint_name,\n            c.contype::text AS \"constraint_type!\",\n            CASE\n                WHEN c.contype IN ('u', 'f') THEN\n                    ARRAY(\n                        SELECT a.attname\n                        FROM pg_attribute a\n                        WHERE a.attrelid = c.conrelid\n                          AND a.attnum = ANY(c.conkey)\n                        ORDER BY array_position(c.conkey, a.attnum)\n                    )\n                ELSE NULL\n            END AS \"column_names?\",\n\n            -- Foreign key specific fields\n            fn.nspname AS \"foreign_schema?\",\n            fcl.relname AS \"foreign_table?\",\n            CASE\n                WHEN c.contype = 'f' THEN\n                    ARRAY(\n                        SELECT a.attname\n                        FROM pg_attribute a\n                        WHERE a.attrelid = c.confrelid\n                          AND a.attnum = ANY(c.confkey)\n                        ORDER BY array_position(c.confkey, a.attnum)\n                    )\n                ELSE NULL\n            END AS \"foreign_columns?\",\n\n            CASE c.confdeltype\n                WHEN 'a' THEN NULL  -- NO ACTION (default)\n                WHEN 'r' THEN 'RESTRICT'\n                WHEN 'c' THEN 'CASCADE'\n                WHEN 'n' THEN 'SET NULL'\n                WHEN 'd' THEN 'SET DEFAULT'\n                ELSE NULL\n            END AS \"on_delete?\",\n\n            CASE c.confupdtype\n                WHEN 'a' THEN NULL  -- NO ACTION (default)\n                WHEN 'r' THEN 'RESTRICT'\n                WHEN 'c' THEN 'CASCADE'\n                WHEN 'n' THEN 'SET NULL'\n                WHEN 'd' THEN 'SET DEFAULT'\n                ELSE NULL\n            END AS \"on_update?\",\n\n            c.condeferrable AS \"deferrable!\",\n            c.condeferred AS \"initially_deferred!\",\n\n            -- Check constraint specific\n            CASE\n                WHEN c.contype = 'c' THEN pg_get_constraintdef(c.oid, true)\n                ELSE NULL\n            END AS \"check_clause?\",\n\n            -- Exclusion constraint specific\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT pg_get_indexdef(idx.indexrelid, col_pos, true)\n                        FROM pg_index idx\n                        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos\n                        WHERE idx.indexrelid = c.conindid\n                        ORDER BY col_pos\n                    )\n                ELSE NULL\n            END AS \"exclusion_elements?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT opc.opcname\n                        FROM pg_index idx\n                        JOIN pg_opclass opc ON opc.oid = ANY(idx.indclass)\n                        WHERE idx.indexrelid = c.conindid\n                        ORDER BY opc.opcname\n                    )\n                ELSE NULL\n            END AS \"exclusion_opcnames?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT po.oprname\n                        FROM pg_constraint exc\n                        JOIN pg_operator po ON po.oid = ANY(exc.conexclop)\n                        WHERE exc.oid = c.oid\n                        ORDER BY po.oprname\n                    )\n                ELSE NULL\n            END AS \"exclusion_operators?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    (SELECT am.amname\n                     FROM pg_index idx\n                     JOIN pg_class idx_cl ON idx.indexrelid = idx_cl.oid\n                     JOIN pg_am am ON idx_cl.relam = am.oid\n                     WHERE idx.indexrelid = c.conindid)\n                ELSE NULL\n            END AS \"index_method?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    (SELECT pg_get_expr(idx.indpred, idx.indrelid, true)\n                     FROM pg_index idx\n                     WHERE idx.indexrelid = c.conindid AND idx.indpred IS NOT NULL)\n                ELSE NULL\n            END AS \"predicate?\",\n\n            d.description AS \"constraint_comment?\"\n\n        FROM pg_constraint c\n        JOIN pg_class cl ON c.conrelid = cl.oid\n        JOIN pg_namespace n ON cl.relnamespace = n.oid\n        LEFT JOIN pg_class fcl ON c.confrelid = fcl.oid\n        LEFT JOIN pg_namespace fn ON fcl.relnamespace = fn.oid\n        LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND cl.relkind = 'r'  -- Only regular tables\n          AND c.contype IN ('u', 'f', 'c', 'x')  -- Unique, Foreign, Check, Exclusion (Primary keys handled by table catalog)\n        ORDER BY n.nspname, cl.relname, c.conname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "constraint_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "constraint_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "column_names?",
+        "type_info": "NameArray"
+      },
+      {
+        "ordinal": 5,
+        "name": "foreign_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "foreign_table?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 7,
+        "name": "foreign_columns?",
+        "type_info": "NameArray"
+      },
+      {
+        "ordinal": 8,
+        "name": "on_delete?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "on_update?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "deferrable!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "initially_deferred!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "check_clause?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "exclusion_elements?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 14,
+        "name": "exclusion_opcnames?",
+        "type_info": "NameArray"
+      },
+      {
+        "ordinal": 15,
+        "name": "exclusion_operators?",
+        "type_info": "NameArray"
+      },
+      {
+        "ordinal": 16,
+        "name": "index_method?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 17,
+        "name": "predicate?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
+        "name": "constraint_comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "b479989a68e6b8859f4879c2e3be60fb44e8e41f93a74462ddc4cc463d11cdd1"
+}

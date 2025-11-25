@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            t.typname AS \"type_name!\",\n            e.enumlabel AS \"enum_value!\",\n            e.enumsortorder AS \"sort_order!\"\n        FROM pg_enum e\n        JOIN pg_type t ON e.enumtypid = t.oid\n        JOIN pg_namespace n ON t.typnamespace = n.oid\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ORDER BY n.nspname, t.typname, e.enumsortorder\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "type_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "enum_value!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_order!",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bbb025202759ee2981080d15026604356d5427f8da3fca2fdb59d4c97c45ab56"
+}

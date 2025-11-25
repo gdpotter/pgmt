@@ -1,0 +1,348 @@
+---
+import { css, cx } from '../../styled-system/css';
+import { vstack } from '../../styled-system/patterns';
+import { links, externalLinkAttrs } from '../config/links';
+
+interface Props {
+  currentPath?: string;
+}
+
+const { currentPath = '/' } = Astro.props;
+
+const overlayClass = css({
+  position: 'fixed',
+  top: '0',
+  left: '0',
+  right: '0',
+  bottom: '0',
+  backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  backdropFilter: 'blur(4px)',
+  zIndex: '100',
+  opacity: '0',
+  visibility: 'hidden',
+  transition: 'all 0.3s ease',
+  '&.open': {
+    opacity: '1',
+    visibility: 'visible',
+  },
+});
+
+const menuClass = css({
+  position: 'fixed',
+  top: '0',
+  right: '0',
+  height: '100vh',
+  width: '280px',
+  maxWidth: '80vw',
+  backgroundColor: 'rgba(8, 8, 8, 0.95)',
+  backdropFilter: 'blur(20px)',
+  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+  zIndex: '101',
+  transform: 'translateX(100%)',
+  transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  overflowY: 'auto',
+  '&.open': {
+    transform: 'translateX(0)',
+  },
+});
+
+const menuHeaderClass = css({
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: 'xl',
+  borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+});
+
+const closeButtonClass = css({
+  backgroundColor: 'transparent',
+  border: 'none',
+  color: 'text-secondary',
+  fontSize: 'xl',
+  padding: 'sm',
+  cursor: 'pointer',
+  borderRadius: 'md',
+  transition: 'all 0.2s ease',
+  _hover: {
+    color: 'text-primary',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+});
+
+const menuNavClass = css({
+  padding: 'xl',
+});
+
+const navLinkClass = css({
+  display: 'block',
+  color: 'text-secondary',
+  fontSize: 'lg',
+  fontWeight: '500',
+  textDecoration: 'none',
+  padding: 'lg',
+  borderRadius: 'md',
+  marginBottom: 'sm',
+  transition: 'all 0.2s ease',
+  _hover: {
+    color: 'accent',
+    backgroundColor: 'rgba(0, 212, 255, 0.1)',
+    transform: 'translateX(4px)',
+  },
+});
+
+const activeNavLinkClass = css({
+  color: 'accent',
+  backgroundColor: 'rgba(0, 212, 255, 0.15)',
+  boxShadow: '0 0 0 1px rgba(0, 212, 255, 0.3)',
+});
+
+const ctaButtonClass = css({
+  display: 'block',
+  backgroundColor: 'pgblue.500',
+  color: 'white',
+  padding: 'lg xl',
+  borderRadius: 'md',
+  fontSize: 'lg',
+  fontWeight: '600',
+  textDecoration: 'none',
+  textAlign: 'center',
+  marginTop: 'xl',
+  transition: 'all 0.2s ease',
+  _hover: {
+    backgroundColor: 'pgblue.400',
+    transform: 'translateY(-1px)',
+    boxShadow: 'glow',
+  },
+});
+
+const githubLinkClass = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'md',
+  color: 'text-secondary',
+  fontSize: 'lg',
+  textDecoration: 'none',
+  padding: 'lg',
+  borderRadius: 'md',
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+  background: 'rgba(255, 255, 255, 0.05)',
+  marginTop: 'lg',
+  transition: 'all 0.2s ease',
+  _hover: {
+    color: 'text-primary',
+    borderColor: 'rgba(0, 212, 255, 0.6)',
+    backgroundColor: 'rgba(0, 212, 255, 0.1)',
+  },
+});
+
+const logoClass = css({
+  fontSize: 'xl',
+  fontWeight: '700',
+  fontFamily: 'heading',
+  color: 'text-primary',
+  textDecoration: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'sm',
+});
+---
+
+<div id="mobile-menu-overlay" class={overlayClass}>
+  <nav id="mobile-menu" class={menuClass}>
+    <!-- Header -->
+    <div class={menuHeaderClass}>
+      <a href="/" class={logoClass}>
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12 3L2 9V21H22V9L12 3Z"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+          </path>
+          <path
+            d="M12 3V12M12 12L7 9M12 12L17 9"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+          </path>
+        </svg>
+        pgmt
+      </a>
+      <button id="mobile-menu-close" class={closeButtonClass}>
+        <svg
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Navigation Links -->
+    <div class={menuNavClass}>
+      <div class={vstack({ alignItems: 'stretch', gap: '0' })}>
+        <a
+          href="/why-pgmt"
+          class={cx(
+            navLinkClass,
+            currentPath === '/why-pgmt' ? activeNavLinkClass : ''
+          )}
+        >
+          Why pgmt
+        </a>
+        <a
+          href="/docs"
+          class={cx(
+            navLinkClass,
+            currentPath === '/docs' ? activeNavLinkClass : ''
+          )}
+        >
+          Docs
+        </a>
+        <a
+          href="/blog"
+          class={cx(
+            navLinkClass,
+            currentPath === '/blog' ? activeNavLinkClass : ''
+          )}
+        >
+          Blog
+        </a>
+
+        <!-- GitHub Link -->
+        <a
+          href={links.github.repo}
+          {...externalLinkAttrs}
+          class={githubLinkClass}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path
+              d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"
+            >
+            </path>
+          </svg>
+          <span>GitHub</span>
+          <!--<span-->
+          <!--  class={css({-->
+          <!--    fontSize: 'sm',-->
+          <!--    color: 'text-muted',-->
+          <!--    fontWeight: 'normal',-->
+          <!--  })}>2.3k</span>-->
+        </a>
+
+        <!-- CTA Button -->
+        <a href={links.docs.quickStart} class={ctaButtonClass}>Get Started</a>
+      </div>
+    </div>
+  </nav>
+</div>
+
+<script>
+  // Mobile menu functionality
+  function initMobileMenu() {
+    const overlay = document.getElementById('mobile-menu-overlay');
+    const menu = document.getElementById('mobile-menu');
+    const openButton = document.getElementById('mobile-menu-toggle');
+    const closeButton = document.getElementById('mobile-menu-close');
+
+    if (!overlay || !menu || !openButton || !closeButton) return;
+
+    // Open menu
+    openButton.addEventListener('click', () => {
+      overlay.classList.add('open');
+      menu.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    });
+
+    // Close menu
+    const closeMenu = () => {
+      overlay.classList.remove('open');
+      menu.classList.remove('open');
+      document.body.style.overflow = '';
+    };
+
+    closeButton.addEventListener('click', closeMenu);
+
+    // Close on overlay click
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) {
+        closeMenu();
+      }
+    });
+
+    // Close on escape key
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && overlay.classList.contains('open')) {
+        closeMenu();
+      }
+    });
+
+    // Close menu when clicking on nav links
+    const navLinks = menu.querySelectorAll('a');
+    navLinks.forEach(link => {
+      link.addEventListener('click', () => {
+        // Small delay to allow navigation to start
+        setTimeout(closeMenu, 150);
+      });
+    });
+  }
+
+  // Initialize on DOM load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initMobileMenu);
+  } else {
+    initMobileMenu();
+  }
+
+  // Re-initialize on page navigation (for SPAs)
+  document.addEventListener('astro:page-load', initMobileMenu);
+</script>
+
+<style>
+  /* Prevent body scroll when menu is open */
+  body:has(#mobile-menu-overlay.open) {
+    overflow: hidden !important;
+  }
+
+  /* Smooth animations */
+  #mobile-menu-overlay {
+    will-change: opacity, visibility;
+  }
+
+  #mobile-menu {
+    will-change: transform;
+  }
+
+  /* Scrollbar styling for mobile menu */
+  #mobile-menu::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  #mobile-menu::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  #mobile-menu::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+  }
+
+  #mobile-menu::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+</style>

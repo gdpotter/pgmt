@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            e.extname AS name,\n            n.nspname AS schema,\n            e.extversion AS version,\n            e.extrelocatable AS relocatable,\n\n            -- Comments\n            d.description AS \"comment?\"\n\n        FROM pg_extension e\n        JOIN pg_namespace n ON e.extnamespace = n.oid\n        LEFT JOIN pg_description d ON d.objoid = e.oid AND d.objsubid = 0\n\n        -- Exclude built-in extensions that come with PostgreSQL\n        WHERE e.extname NOT IN ('plpgsql')\n\n        ORDER BY e.extname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "relocatable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d588d8906e9d0bc455d58f58ff9d7df9938336dd01336301d9d50f9938d183ee"
+}

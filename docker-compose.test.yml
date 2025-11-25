@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  postgres-13:
+    image: postgres:13-alpine
+    container_name: pgmt-test-pg13
+    environment: &pg-env
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432"  # Dynamic port assignment
+    healthcheck: &pg-healthcheck
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    volumes: &pg-volumes
+      # Use tmpfs for faster tests (data doesn't need to persist)
+      - type: tmpfs
+        target: /var/lib/postgresql/data
+        tmpfs:
+          size: 1G
+
+  postgres-14:
+    image: postgres:14-alpine
+    container_name: pgmt-test-pg14
+    environment: *pg-env
+    ports: ["5432"]
+    healthcheck: *pg-healthcheck
+    volumes: *pg-volumes
+
+  postgres-15:
+    image: postgres:15-alpine
+    container_name: pgmt-test-pg15
+    environment: *pg-env
+    ports: ["5432"]
+    healthcheck: *pg-healthcheck
+    volumes: *pg-volumes
+
+  postgres-16:
+    image: postgres:16-alpine
+    container_name: pgmt-test-pg16
+    environment: *pg-env
+    ports: ["5432"]
+    healthcheck: *pg-healthcheck
+    volumes: *pg-volumes
+    
+  postgres-17:
+    image: postgres:17-alpine
+    container_name: pgmt-test-pg17
+    environment: *pg-env
+    ports: ["5432"]
+    healthcheck: *pg-healthcheck
+    volumes: *pg-volumes
+
+  postgres-18:
+    image: postgres:18-alpine
+    container_name: pgmt-test-pg18
+    environment: *pg-env
+    ports: ["5432"]
+    healthcheck: *pg-healthcheck
+    volumes: *pg-volumes

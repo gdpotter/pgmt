@@ -1,0 +1,420 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Button from '../components/Button.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import { css } from '../../styled-system/css';
+import { links, externalLinkAttrs } from '../config/links';
+---
+
+<Layout
+  title="pgmt - PostgreSQL Schema Development, Reimagined"
+  description="Edit database objects like code. See changes instantly. Deploy with confidence. The PostgreSQL migration tool built for modern development."
+>
+  <!-- Hero -->
+  <section
+    class={css({
+      paddingTop: { base: '3xl', md: '4xl' },
+      paddingBottom: { base: 'xl', md: '2xl' },
+      background:
+        'linear-gradient(180deg, rgba(79, 195, 247, 0.08) 0%, transparent 100%)',
+    })}
+  >
+    <div
+      class={css({
+        maxWidth: '6xl',
+        marginX: 'auto',
+        paddingX: { base: 'lg', md: 'xl' },
+      })}
+    >
+      <!-- Headline -->
+      <div class={css({ textAlign: 'center', marginBottom: '2xl' })}>
+        <h1
+          class={css({
+            fontSize: { base: '3xl', md: '5xl' },
+            fontWeight: '700',
+            fontFamily: 'heading',
+            color: 'text.primary',
+            marginBottom: 'lg',
+            lineHeight: '1.1',
+          })}
+        >
+          PostgreSQL Development<br />That Finally{' '}
+          <span
+            class={css({
+              background:
+                'linear-gradient(135deg, #00D4FF 0%, #FF6B9D 50%, #00D4FF 100%)',
+              backgroundClip: 'text',
+              color: 'transparent',
+              backgroundSize: '200% 200%',
+              animation: 'gradient-shift',
+            })}
+          >
+            Feels Natural
+          </span>
+        </h1>
+        <p
+          class={css({
+            fontSize: { base: 'lg', md: 'xl' },
+            color: 'text.secondary',
+            maxWidth: '3xl',
+            marginX: 'auto',
+            marginBottom: '2xl',
+          })}
+        >
+          Edit schema files like code. pgmt handles dependencies automatically.
+          Generate migrations when you're ready.
+        </p>
+
+        <!-- CTA -->
+        <div
+          class={css({
+            display: 'flex',
+            justifyContent: 'center',
+            gap: 'lg',
+            flexWrap: 'wrap',
+          })}
+        >
+          <Button href={links.docs.quickStart} size="lg">Get Started</Button>
+          <Button
+            href={links.github.repo}
+            variant="outline"
+            size="lg"
+            {...externalLinkAttrs}
+          >
+            View on GitHub
+          </Button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The Problem/Solution Demo -->
+  <section
+    class={css({
+      paddingTop: { base: 'xl', md: '2xl' },
+      paddingBottom: { base: '2xl', md: '3xl' },
+    })}
+  >
+    <div
+      class={css({
+        maxWidth: '6xl',
+        marginX: 'auto',
+        paddingX: { base: 'lg', md: 'xl' },
+      })}
+    >
+      <!-- The Error Everyone Knows -->
+      <div class={css({ textAlign: 'center', marginBottom: 'xl' })}>
+        <p
+          class={css({
+            fontSize: { base: 'md', md: 'lg' },
+            color: 'text.secondary',
+          })}
+        >
+          You've seen this before:
+        </p>
+      </div>
+
+      <div
+        class={css({
+          maxWidth: '4xl',
+          marginX: 'auto',
+          marginBottom: '2xl',
+        })}
+      >
+        <CodeBlock
+          code={`ERROR: cannot drop function calculate_score(integer) because other objects depend on it
+DETAIL: view user_rankings depends on function calculate_score(integer)
+DETAIL: view daily_stats depends on view user_rankings
+DETAIL: view executive_dashboard depends on view daily_stats
+HINT: Use DROP ... CASCADE to drop the dependent objects too.`}
+          language="sql"
+          title="The PostgreSQL error that ruins your afternoon"
+          showCopy={false}
+        />
+      </div>
+
+      <div class={css({ textAlign: 'center', marginBottom: 'xl' })}>
+        <p
+          class={css({
+            fontSize: { base: 'md', md: 'lg' },
+            color: 'text.secondary',
+          })}
+        >
+          So you manually figure out the dependency chain:
+        </p>
+      </div>
+
+      <div
+        class={css({
+          maxWidth: '4xl',
+          marginX: 'auto',
+          marginBottom: '3xl',
+        })}
+      >
+        <CodeBlock
+          code={`-- To change ONE function, you have to:
+DROP VIEW executive_dashboard;
+DROP VIEW daily_stats;
+DROP VIEW user_rankings;
+
+-- NOW you can finally update your function
+CREATE OR REPLACE FUNCTION calculate_score(...) ...
+
+-- Then recreate everything in the right order
+CREATE VIEW user_rankings AS ...
+CREATE VIEW daily_stats AS ...
+CREATE VIEW executive_dashboard AS ...
+
+-- Hope you didn't miss anything. Hope the order is right.
+-- Hope you remember to do this again for the migration file.`}
+          language="sql"
+          title="The manual fix (every single time)"
+          showCopy={false}
+        />
+      </div>
+
+      <!-- The pgmt way -->
+      <div class={css({ textAlign: 'center', marginBottom: 'xl' })}>
+        <p
+          class={css({
+            fontSize: { base: 'md', md: 'lg' },
+            color: 'text.secondary',
+          })}
+        >
+          With pgmt, just edit the file:
+        </p>
+      </div>
+
+      <div
+        class={css({
+          maxWidth: '4xl',
+          marginX: 'auto',
+          marginBottom: 'xl',
+        })}
+      >
+        <CodeBlock
+          code={`-- schema/functions/calculate_score.sql
+
+CREATE OR REPLACE FUNCTION calculate_score(
+  user_id INTEGER,
+  include_bonus BOOLEAN DEFAULT false  -- new parameter
+) RETURNS INTEGER AS $$
+BEGIN
+  RETURN (
+    SELECT SUM(points) + CASE WHEN include_bonus THEN bonus ELSE 0 END
+    FROM user_activities WHERE user_id = $1
+  );
+END;
+$$ LANGUAGE plpgsql;`}
+          language="sql"
+          title="Edit your schema file"
+          showCopy={false}
+        />
+      </div>
+
+      <div class={css({ textAlign: 'center', marginBottom: 'xl' })}>
+        <p
+          class={css({
+            fontSize: { base: 'md', md: 'lg' },
+            color: 'text.secondary',
+          })}
+        >
+          Then run:
+        </p>
+      </div>
+
+      <div
+        class={css({
+          maxWidth: '4xl',
+          marginX: 'auto',
+        })}
+      >
+        <CodeBlock
+          code={`$ pgmt apply
+✓ Dropping view executive_dashboard
+✓ Dropping view daily_stats
+✓ Dropping view user_rankings
+✓ Updating function calculate_score
+✓ Recreating view user_rankings
+✓ Recreating view daily_stats
+✓ Recreating view executive_dashboard
+✓ Done.`}
+          language="shell"
+          title="pgmt figures out the dependencies"
+          showCopy={false}
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature Teaser -->
+  <section
+    class={css({
+      paddingY: { base: '2xl', md: '3xl' },
+      backgroundColor: 'surface',
+    })}
+  >
+    <div
+      class={css({
+        maxWidth: '4xl',
+        marginX: 'auto',
+        paddingX: { base: 'lg', md: 'xl' },
+        textAlign: 'center',
+      })}
+    >
+      <h2
+        class={css({
+          fontSize: { base: 'xl', md: '2xl' },
+          fontWeight: '600',
+          color: 'text.primary',
+          marginBottom: 'xl',
+        })}
+      >
+        And that's just the start
+      </h2>
+
+      <div
+        class={css({
+          display: 'grid',
+          gridTemplateColumns: { base: '1fr', md: 'repeat(3, 1fr)' },
+          gap: 'xl',
+          marginBottom: '2xl',
+          textAlign: 'left',
+        })}
+      >
+        <div>
+          <h3
+            class={css({
+              fontSize: 'md',
+              fontWeight: '600',
+              color: 'text.primary',
+              marginBottom: 'sm',
+            })}
+          >
+            Full PostgreSQL Support
+          </h3>
+          <p class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Triggers, functions, custom types, grants, extensions - everything
+            other tools ignore.
+          </p>
+        </div>
+
+        <div>
+          <h3
+            class={css({
+              fontSize: 'md',
+              fontWeight: '600',
+              color: 'text.primary',
+              marginBottom: 'sm',
+            })}
+          >
+            Safe Migrations
+          </h3>
+          <p class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Shadow database testing, explicit generation, review before deploy.
+            Never be surprised.
+          </p>
+        </div>
+
+        <div>
+          <h3
+            class={css({
+              fontSize: 'md',
+              fontWeight: '600',
+              color: 'text.primary',
+              marginBottom: 'sm',
+            })}
+          >
+            Production Ready
+          </h3>
+          <p class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Sectioned migrations with retries, drift detection, flexible
+            timeouts.
+          </p>
+        </div>
+      </div>
+
+      <Button href={links.whyPgmt} variant="outline">
+        Learn more about pgmt →
+      </Button>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section
+    class={css({
+      paddingY: { base: '3xl', md: '4xl' },
+    })}
+  >
+    <div
+      class={css({
+        maxWidth: '4xl',
+        marginX: 'auto',
+        paddingX: { base: 'lg', md: 'xl' },
+        textAlign: 'center',
+      })}
+    >
+      <h2
+        class={css({
+          fontSize: { base: '2xl', md: '3xl' },
+          fontWeight: '700',
+          fontFamily: 'heading',
+          color: 'text.primary',
+          marginBottom: 'md',
+        })}
+      >
+        Ready to try it?
+      </h2>
+      <p
+        class={css({
+          fontSize: { base: 'md', md: 'lg' },
+          color: 'text.secondary',
+          marginBottom: '2xl',
+        })}
+      >
+        Get started in minutes.
+      </p>
+
+      <div
+        class={css({
+          maxWidth: '24rem',
+          marginX: 'auto',
+          marginBottom: 'xl',
+        })}
+      >
+        <CodeBlock
+          code="cargo install --git https://github.com/gdpotter/pgmt.git"
+          language="bash"
+          title="Install pgmt"
+        />
+      </div>
+
+      <div
+        class={css({
+          display: 'flex',
+          justifyContent: 'center',
+          gap: 'lg',
+          flexWrap: 'wrap',
+        })}
+      >
+        <Button href={links.docs.quickStart} size="lg">Get Started</Button>
+        <Button href={links.docs.root} variant="outline" size="lg">
+          Read the Docs
+        </Button>
+      </div>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+</style>

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            i.relname AS \"name!\",\n            pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true) AS \"expression!\",\n            CASE\n                WHEN c.collname IS NOT NULL AND c.collname != 'default'\n                THEN quote_ident(cn.nspname) || '.' || quote_ident(c.collname)\n                ELSE NULL\n            END AS \"collation?\",\n            CASE\n                WHEN op.opcname IS NOT NULL\n                THEN quote_ident(opn.nspname) || '.' || quote_ident(op.opcname)\n                ELSE NULL\n            END AS \"opclass?\",\n            CASE\n                WHEN idx.indoption[col_pos-1] & 1 = 1 THEN 'DESC'\n                ELSE 'ASC'\n            END AS \"ordering!\",\n            CASE\n                WHEN idx.indoption[col_pos-1] & 2 = 2 THEN 'NULLS FIRST'\n                ELSE 'NULLS LAST'\n            END AS \"nulls_ordering!\",\n            col_pos > idx.indnkeyatts AS \"is_included!\"\n        FROM pg_index idx\n        JOIN pg_class i ON idx.indexrelid = i.oid\n        JOIN pg_namespace n ON i.relnamespace = n.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_namespace tn ON t.relnamespace = tn.oid\n        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos\n        LEFT JOIN pg_attribute a ON a.attrelid = t.oid\n                                 AND a.attnum = idx.indkey[col_pos-1]\n                                 AND idx.indkey[col_pos-1] > 0\n        LEFT JOIN pg_collation c ON a.attcollation = c.oid\n        LEFT JOIN pg_namespace cn ON c.collnamespace = cn.oid\n        LEFT JOIN pg_opclass op ON col_pos <= array_length(idx.indclass, 1)\n                                AND idx.indclass[col_pos-1] = op.oid\n        LEFT JOIN pg_namespace opn ON op.opcnamespace = opn.oid\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND NOT idx.indisprimary\n        ORDER BY n.nspname, i.relname, col_pos\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "expression!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "collation?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "opclass?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "ordering!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "nulls_ordering!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "is_included!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d864a7fb5f87824591b600e3884c5079ed6fec9e0ae644bc6729de9644bf2d32"
+}

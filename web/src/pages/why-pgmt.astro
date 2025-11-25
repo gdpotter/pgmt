@@ -1,0 +1,1115 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Button from '../components/Button.astro';
+import Card from '../components/Card.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import MultiCodeBlock from '../components/MultiCodeBlock.astro';
+import { css, cx } from '../../styled-system/css';
+import {
+  container,
+  grid,
+  vstack,
+  hstack,
+  hero,
+  sectionWrapper,
+} from '../../styled-system/patterns';
+import {
+  heroTitle,
+  heroSubtitle,
+  featureTitle,
+  featureDescription,
+} from '../../styled-system/recipes';
+import { links } from '../config/links';
+
+// All classes now use design system patterns and recipes
+
+const codeExamples = {
+  dependencyProblem: `-- You want to update a function
+ALTER FUNCTION calculate_score(user_id INTEGER) 
+RETURNS INTEGER AS $$ ... $$;
+
+-- But PostgreSQL says NO:
+ERROR: cannot drop function calculate_score(integer)
+DETAIL: view user_rankings depends on it
+DETAIL: view daily_stats depends on user_rankings
+DETAIL: view analytics_summary depends on daily_stats
+
+-- Manual steps required:
+-- 1. DROP VIEW analytics_summary;
+-- 2. DROP VIEW daily_stats;
+-- 3. DROP VIEW user_rankings;
+-- 4. Update function
+-- 5. Recreate user_rankings
+-- 6. Recreate daily_stats
+-- 7. Recreate analytics_summary
+-- 8. Hope you didn't miss anything...`,
+
+  pgmtSolution: `-- Just edit the function in your schema file
+-- schema/functions/calculate_score.sql
+CREATE OR REPLACE FUNCTION calculate_score(user_id INTEGER)
+RETURNS INTEGER AS $$
+  -- Your updated logic here
+  RETURN (SELECT points * 2 FROM user_activities WHERE id = user_id);
+$$ LANGUAGE plpgsql;
+
+-- Apply instantly to development
+$ pgmt apply
+✓ Dropping view analytics_summary
+✓ Dropping view daily_stats
+✓ Dropping view user_rankings
+✓ Updating function calculate_score
+✓ Recreating view user_rankings
+✓ Recreating view daily_stats
+✓ Recreating view analytics_summary
+✓ Done.`,
+
+  migration: `-- When ready for production:
+$ pgmt migrate new "improve scoring algorithm"
+✓ Generated migration: V20240315_143022__improve_scoring_algorithm.sql
+
+-- Review the exact SQL that will run in production:
+-- Drop dependent objects in correct order
+-- Update your function  
+-- Recreate everything with proper dependencies
+-- Deploy with confidence`,
+};
+---
+
+<Layout
+  title="Why pgmt - The PostgreSQL-First Migration Tool"
+  description="Learn why development teams choose pgmt for PostgreSQL schema management over Flyway, Prisma, Atlas, and raw SQL migrations."
+  currentPath="/why-pgmt"
+>
+  <!-- Hero Section -->
+  <section class={hero({ background: 'default', padding: 'lg' })}>
+    <div class={container({ maxW: '6xl', px: { base: 'lg', md: 'xl' } })}>
+      <h1 class={heroTitle({ size: 'large' })}>
+        Built for How PostgreSQL
+        <br />
+        <span class={css({ color: 'pgblue.400' })}>
+          Developers Actually Work
+        </span>
+      </h1>
+      <p class={heroSubtitle({ size: 'large' })}>
+        Stop fighting your migration tool. Start shipping database changes with
+        the confidence and speed of modern software development.
+      </p>
+    </div>
+  </section>
+
+  <!-- The Problem -->
+  <section class={sectionWrapper({ background: 'default', padding: 'lg' })}>
+    <div class={container({ maxW: '7xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        The PostgreSQL Development Problem
+      </h2>
+      <p
+        class={cx(
+          featureDescription({ size: 'lg', align: 'center' }),
+          css({
+            marginBottom: '3xl',
+            maxWidth: '48rem',
+            marginX: 'auto',
+          })
+        )}
+      >
+        Current migration tools weren't built for PostgreSQL's advanced features
+        and complex dependencies.
+      </p>
+
+      <div class={grid({ columns: { base: 1, lg: 2 }, gap: '2xl' })}>
+        <Card
+          variant="bordered"
+          class={css({
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            borderColor: 'rgba(239, 68, 68, 0.2)',
+          })}
+        >
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'error',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <path
+                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              >
+              </path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            Dependency Hell Stops Development Cold
+          </h3>
+          <p class={css({ color: 'text-secondary', marginBottom: 'lg' })}>
+            Change one function → break three views → spend 2 hours manually
+            fixing dependencies → repeat for every change.
+          </p>
+          <CodeBlock
+            code={codeExamples.dependencyProblem}
+            language="sql"
+            title="The daily PostgreSQL developer nightmare"
+            showCopy={false}
+          />
+        </Card>
+
+        <Card
+          variant="bordered"
+          class={css({
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            borderColor: 'rgba(34, 197, 94, 0.2)',
+          })}
+        >
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'success',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <polygon
+                points="12,2 15.09,8.26 22,9 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9 8.91,8.26"
+              >
+              </polygon>
+            </svg>
+            pgmt Handles Dependencies Automatically
+          </h3>
+          <p class={css({ color: 'text-secondary', marginBottom: 'lg' })}>
+            Edit schema files like code. pgmt figures out the dependency chain
+            and applies changes in the correct order.
+          </p>
+          <MultiCodeBlock
+            sections={[
+              {
+                code: `-- Just edit the function in your schema file
+-- schema/functions/calculate_score.sql
+CREATE OR REPLACE FUNCTION calculate_score(user_id INTEGER)
+RETURNS INTEGER AS $$
+  -- Your updated logic here
+  RETURN (SELECT points * 2 FROM user_activities WHERE id = user_id);
+$$ LANGUAGE plpgsql;`,
+                language: 'sql',
+              },
+              {
+                code: `# Apply instantly to development
+$ pgmt apply
+✓ Dropping view analytics_summary
+✓ Dropping view daily_stats
+✓ Dropping view user_rankings
+✓ Updating function calculate_score
+✓ Recreating view user_rankings
+✓ Recreating view daily_stats
+✓ Recreating view analytics_summary
+✓ Done.`,
+                language: 'shell',
+              },
+            ]}
+            title="The same change with pgmt!"
+            showCopy={false}
+          />
+        </Card>
+      </div>
+    </div>
+  </section>
+
+  <!-- Key Problems with Current Tools -->
+  <section class={sectionWrapper({ background: 'surface', padding: 'lg' })}>
+    <div class={container({ maxW: '7xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        Why Current Tools Fall Short
+      </h2>
+
+      <div class={grid({ columns: { base: 1, md: 2 }, gap: 'xl' })}>
+        <Card variant="bordered">
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'error',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            Generic Database Tools (Flyway, Liquibase)
+          </h3>
+          <ul class={css({ color: 'text-secondary', lineHeight: '1.6' })}>
+            <li>• Treat PostgreSQL like MySQL - miss advanced features</li>
+            <li>• No dependency resolution for views and functions</li>
+            <li>• Migration-first workflow slows development</li>
+            <li>• Production failures from untested complex changes</li>
+          </ul>
+        </Card>
+
+        <Card variant="bordered">
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'error',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            ORM Migrations (Prisma, ActiveRecord)
+          </h3>
+          <ul class={css({ color: 'text-secondary', lineHeight: '1.6' })}>
+            <li>• Limited to basic table operations</li>
+            <li>• Can't handle PostgreSQL functions, triggers, views</li>
+            <li>• Magic auto-generation hides what's actually happening</li>
+            <li>• Lock you out of PostgreSQL's powerful features</li>
+          </ul>
+        </Card>
+
+        <Card variant="bordered">
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'error',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            Raw SQL Scripts
+          </h3>
+          <ul class={css({ color: 'text-secondary', lineHeight: '1.6' })}>
+            <li>• Full PostgreSQL power but zero safety net</li>
+            <li>• Manual dependency management (error-prone)</li>
+            <li>• No development workflow - straight to production</li>
+            <li>• Team collaboration nightmares</li>
+          </ul>
+        </Card>
+
+        <Card variant="bordered">
+          <h3
+            class={css({
+              fontSize: 'xl',
+              fontWeight: '600',
+              color: 'success',
+              marginBottom: 'md',
+            })}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22,4 12,14.01 9,11.01"></polyline>
+            </svg>
+            pgmt: The PostgreSQL-Native Solution
+          </h3>
+          <ul class={css({ color: 'text-secondary', lineHeight: '1.6' })}>
+            <li>• Full PostgreSQL feature support</li>
+            <li>• Automatic smart dependency resolution</li>
+            <li>• Instant development feedback</li>
+            <li>• Explicit production control with review</li>
+          </ul>
+        </Card>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflow Comparison -->
+  <section class={sectionWrapper({ background: 'default', padding: 'lg' })}>
+    <div class={container({ maxW: '7xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        Development Workflow Comparison
+      </h2>
+      <p
+        class={cx(
+          featureDescription({ size: 'lg', align: 'center' }),
+          css({
+            marginBottom: '3xl',
+            maxWidth: '48rem',
+            marginX: 'auto',
+          })
+        )}
+      >
+        See how pgmt transforms the PostgreSQL development experience from start
+        to finish.
+      </p>
+
+      <div
+        class={grid({
+          columns: { base: 1, lg: 2 },
+          gap: '3xl',
+          marginBottom: '4xl',
+        })}
+      >
+        <!-- Traditional Workflow -->
+        <div
+          class={css({
+            padding: 'xl',
+            backgroundColor: 'rgba(239, 68, 68, 0.05)',
+            border: '1px solid rgba(239, 68, 68, 0.2)',
+            borderRadius: 'lg',
+          })}
+        >
+          <h3
+            class={css({
+              fontSize: '2xl',
+              fontWeight: '600',
+              color: 'error',
+              marginBottom: 'xl',
+            })}
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+            >
+              <path
+                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              >
+              </path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            Traditional Way
+          </h3>
+
+          <!-- Workflow Steps -->
+          <div class={vstack({ gap: 'lg', alignItems: 'flex-start' })}>
+            <div
+              class={css({
+                display: 'flex',
+                gap: 'md',
+                alignItems: 'flex-start',
+              })}
+            >
+              <div
+                class={css({
+                  minWidth: '24px',
+                  height: '24px',
+                  borderRadius: 'full',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'xs',
+                  fontWeight: '600',
+                })}
+              >
+                1
+              </div>
+              <div>
+                <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                  Write Migration SQL
+                </div>
+                <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                  Manual SQL writing, prone to errors
+                </div>
+              </div>
+            </div>
+
+            <div
+              class={css({
+                display: 'flex',
+                gap: 'md',
+                alignItems: 'flex-start',
+              })}
+            >
+              <div
+                class={css({
+                  minWidth: '24px',
+                  height: '24px',
+                  borderRadius: 'full',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'xs',
+                  fontWeight: '600',
+                })}
+              >
+                2
+              </div>
+              <div>
+                <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                  Apply to Dev
+                </div>
+                <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                  Wait for migration runner, debug failures
+                </div>
+              </div>
+            </div>
+
+            <div
+              class={css({
+                display: 'flex',
+                gap: 'md',
+                alignItems: 'flex-start',
+              })}
+            >
+              <div
+                class={css({
+                  minWidth: '24px',
+                  height: '24px',
+                  borderRadius: 'full',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'xs',
+                  fontWeight: '600',
+                })}
+              >
+                3
+              </div>
+              <div>
+                <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                  Open PR
+                </div>
+                <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                  Reviewers see migration noise, not intent
+                </div>
+              </div>
+            </div>
+
+            <div
+              class={css({
+                display: 'flex',
+                gap: 'md',
+                alignItems: 'flex-start',
+              })}
+            >
+              <div
+                class={css({
+                  minWidth: '24px',
+                  height: '24px',
+                  borderRadius: 'full',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'xs',
+                  fontWeight: '600',
+                })}
+              >
+                4
+              </div>
+              <div>
+                <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                  Deploy
+                </div>
+                <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                  Cross fingers, hope nothing breaks
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class={css({
+              marginTop: 'xl',
+              padding: 'lg',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              borderRadius: 'md',
+              textAlign: 'center',
+            })}
+          >
+            <div
+              class={css({
+                color: 'error',
+                fontWeight: '600',
+                marginBottom: 'xs',
+              })}
+            >
+              Slow iteration cycles
+            </div>
+            <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+              Write → fail → debug → rollback → repeat
+            </div>
+          </div>
+        </div>
+
+        <!-- pgmt Workflow -->
+        <div
+          class={css({
+            padding: 'xl',
+            backgroundColor: 'rgba(34, 197, 94, 0.05)',
+            border: '1px solid rgba(34, 197, 94, 0.2)',
+            borderRadius: 'lg',
+            display: 'flex',
+            justifyContent: 'space-between',
+            flexDirection: 'column',
+          })}
+        >
+          <div>
+            <h3
+              class={css({
+                fontSize: '2xl',
+                fontWeight: '600',
+                color: 'success',
+                marginBottom: 'xl',
+              })}
+            >
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                style="display: inline-block; vertical-align: middle; margin-right: 8px;"
+              >
+                <polygon
+                  points="12,2 15.09,8.26 22,9 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9 8.91,8.26"
+                >
+                </polygon>
+              </svg>
+              pgmt Way
+            </h3>
+
+            <!-- Workflow Steps -->
+            <div class={vstack({ gap: 'lg', alignItems: 'flex-start' })}>
+              <div
+                class={css({
+                  display: 'flex',
+                  gap: 'md',
+                  alignItems: 'flex-start',
+                })}
+              >
+                <div
+                  class={css({
+                    minWidth: '24px',
+                    height: '24px',
+                    borderRadius: 'full',
+                    backgroundColor: '#059669',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'xs',
+                    fontWeight: '600',
+                  })}
+                >
+                  1
+                </div>
+                <div>
+                  <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                    Edit & Apply
+                  </div>
+                  <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                    Edit schema files + pgmt apply - instant feedback
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class={css({
+                  display: 'flex',
+                  gap: 'md',
+                  alignItems: 'flex-start',
+                })}
+              >
+                <div
+                  class={css({
+                    minWidth: '24px',
+                    height: '24px',
+                    borderRadius: 'full',
+                    backgroundColor: '#059669',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'xs',
+                    fontWeight: '600',
+                  })}
+                >
+                  2
+                </div>
+                <div>
+                  <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                    Generate Migration
+                  </div>
+                  <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                    Only when ready - reviewable, explicit
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class={css({
+                  display: 'flex',
+                  gap: 'md',
+                  alignItems: 'flex-start',
+                })}
+              >
+                <div
+                  class={css({
+                    minWidth: '24px',
+                    height: '24px',
+                    borderRadius: 'full',
+                    backgroundColor: '#059669',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'xs',
+                    fontWeight: '600',
+                  })}
+                >
+                  3
+                </div>
+                <div>
+                  <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+                    Deploy Safely
+                  </div>
+                  <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+                    Staged deployment, drift detection
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class={css({
+              marginTop: 'xl',
+              padding: 'lg',
+              backgroundColor: 'rgba(34, 197, 94, 0.1)',
+              borderRadius: 'md',
+              textAlign: 'center',
+            })}
+          >
+            <div
+              class={css({
+                color: 'success',
+                fontWeight: '600',
+                marginBottom: 'xs',
+              })}
+            >
+              Instant iteration
+            </div>
+            <div class={css({ fontSize: 'sm', color: 'text-muted' })}>
+              Edit → apply → done
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PostgreSQL Features -->
+  <section class={sectionWrapper({ background: 'surface', padding: 'lg' })}>
+    <div class={container({ maxW: '6xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        Full PostgreSQL Support
+      </h2>
+      <p
+        class={cx(
+          featureDescription({ size: 'lg', align: 'center' }),
+          css({
+            marginBottom: '3xl',
+            maxWidth: '48rem',
+            marginX: 'auto',
+          })
+        )}
+      >
+        Everything other tools ignore. pgmt handles the full range of PostgreSQL
+        objects.
+      </p>
+
+      <div
+        class={grid({
+          columns: { base: 2, md: 3, lg: 6 },
+          gap: 'lg',
+        })}
+      >
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Tables
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Columns, constraints, defaults
+          </div>
+        </div>
+
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Views
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Regular and recursive
+          </div>
+        </div>
+
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Functions
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            plpgsql, overloads
+          </div>
+        </div>
+
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Triggers
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Row and statement level
+          </div>
+        </div>
+
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Types
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Enums, composites, domains
+          </div>
+        </div>
+
+        <div
+          class={css({
+            textAlign: 'center',
+            padding: 'lg',
+            backgroundColor: 'rgba(79, 195, 247, 0.05)',
+            borderRadius: 'lg',
+            border: '1px solid rgba(79, 195, 247, 0.2)',
+          })}
+        >
+          <div class={css({ fontWeight: '600', marginBottom: 'xs' })}>
+            Grants
+          </div>
+          <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+            Table, schema, function
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sectioned Migrations -->
+  <section class={sectionWrapper({ background: 'default', padding: 'lg' })}>
+    <div class={container({ maxW: '6xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        Production-Ready Migrations
+      </h2>
+      <p
+        class={cx(
+          featureDescription({ size: 'lg', align: 'center' }),
+          css({
+            marginBottom: '3xl',
+            maxWidth: '48rem',
+            marginX: 'auto',
+          })
+        )}
+      >
+        Break complex migrations into retryable sections with individual
+        timeouts and transaction controls.
+      </p>
+
+      <div class={css({ maxWidth: '4xl', marginX: 'auto' })}>
+        <CodeBlock
+          code={`-- migrations/V001__user_migration.sql
+
+-- pgmt:section name="schema_changes"
+-- pgmt:  mode="transactional"
+-- pgmt:  timeout="5s"
+ALTER TABLE users ADD COLUMN last_login TIMESTAMPTZ;
+
+-- pgmt:section name="add_index"
+-- pgmt:  mode="non-transactional"
+-- pgmt:  timeout="5m"
+CREATE INDEX CONCURRENTLY idx_users_last_login ON users(last_login);
+
+-- pgmt:section name="backfill_data"
+-- pgmt:  mode="transactional"
+-- pgmt:  timeout="30s"
+UPDATE users SET last_login = created_at WHERE last_login IS NULL;`}
+          language="sql"
+          title="Multi-section migration with different settings per section"
+          showCopy={false}
+        />
+
+        <div
+          class={css({
+            marginTop: 'xl',
+            display: 'grid',
+            gridTemplateColumns: { base: '1fr', md: 'repeat(3, 1fr)' },
+            gap: 'lg',
+          })}
+        >
+          <div class={css({ textAlign: 'center' })}>
+            <div
+              class={css({
+                fontWeight: '600',
+                color: 'text.primary',
+                marginBottom: 'xs',
+              })}
+            >
+              Retryable
+            </div>
+            <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+              Failed at step 47? Retry just that section.
+            </div>
+          </div>
+          <div class={css({ textAlign: 'center' })}>
+            <div
+              class={css({
+                fontWeight: '600',
+                color: 'text.primary',
+                marginBottom: 'xs',
+              })}
+            >
+              Flexible Timeouts
+            </div>
+            <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+              Quick DDL vs long data migrations.
+            </div>
+          </div>
+          <div class={css({ textAlign: 'center' })}>
+            <div
+              class={css({
+                fontWeight: '600',
+                color: 'text.primary',
+                marginBottom: 'xs',
+              })}
+            >
+              Transaction Control
+            </div>
+            <div class={css({ fontSize: 'sm', color: 'text.secondary' })}>
+              Mix transactional and non-transactional.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Get Started -->
+  <section class={sectionWrapper({ background: 'surface', padding: 'lg' })}>
+    <div class={container({ maxW: '5xl', px: { base: 'lg', md: 'xl' } })}>
+      <h2 class={featureTitle({ size: 'xl', align: 'center' })}>
+        Get Started in Minutes
+      </h2>
+      <p
+        class={cx(
+          featureDescription({ size: 'lg', align: 'center' }),
+          css({
+            marginBottom: '3xl',
+            maxWidth: '48rem',
+            marginX: 'auto',
+          })
+        )}
+      >
+        Works with any existing PostgreSQL database. No complex migration
+        required.
+      </p>
+
+      <div class={css({ maxWidth: '4xl', marginX: 'auto' })}>
+        <Card>
+          <div class={css({ textAlign: 'center', marginBottom: 'xl' })}>
+            <h3
+              class={css({
+                fontSize: 'xl',
+                fontWeight: '600',
+                color: 'text-primary',
+                marginBottom: 'md',
+              })}
+            >
+              From Zero to Schema-as-Code
+            </h3>
+          </div>
+
+          <CodeBlock
+            code={`# Install pgmt
+$ cargo install --git https://github.com/gdpotter/pgmt.git
+
+# Initialize in your project
+$ pgmt init
+✓ Created schema/ directory
+✓ Created pgmt.yaml configuration
+
+# Start developing - edit schema files, then:
+$ pgmt apply
+✓ Schema applied to development database
+
+# When ready for production:
+$ pgmt migrate new "add user preferences"
+✓ Generated migration: V20240315__add_user_preferences.sql`}
+            language="bash"
+            title="Get started in minutes"
+            showCopy={false}
+          />
+        </Card>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bottom Line -->
+  <section class={sectionWrapper({ background: 'default', padding: 'lg' })}>
+    <div
+      class={container({
+        maxW: '4xl',
+        px: { base: 'lg', md: 'xl' },
+        textAlign: 'center',
+      })}
+    >
+      <h2
+        class={css({
+          fontSize: { base: '2xl', md: '3xl' },
+          fontWeight: '700',
+          fontFamily: 'heading',
+          color: 'text-primary',
+          marginBottom: 'lg',
+        })}
+      >
+        The Bottom Line
+      </h2>
+      <p
+        class={css({
+          fontSize: 'xl',
+          color: 'text-secondary',
+          marginBottom: '2xl',
+          lineHeight: '1.6',
+        })}
+      >
+        pgmt is the only tool that gives you <strong>
+          PostgreSQL's full power
+        </strong> with <strong>instant development feedback</strong> and <strong
+        >
+          production-grade safety
+        </strong>.
+      </p>
+
+      <div class={vstack({ gap: 'lg', alignItems: 'center' })}>
+        <!-- Testimonial placeholder - uncomment when we have real user feedback
+        <div class={css({ 
+          padding: 'xl',
+          backgroundColor: 'rgba(0, 212, 255, 0.1)',
+          borderRadius: 'lg',
+          border: '1px solid rgba(0, 212, 255, 0.2)',
+          maxWidth: '32rem',
+        })}>
+          <p class={css({ fontSize: 'lg', color: 'pgblue.300', fontWeight: '600', marginBottom: 'sm' })}>
+            [User testimonial will go here]
+          </p>
+          <p class={css({ fontSize: 'sm', color: 'text-muted' })}>
+            — [Customer name]
+          </p>
+        </div>
+        -->
+
+        <div class={hstack({ gap: 'lg', justify: 'center', flexWrap: 'wrap' })}>
+          <Button href={links.docs.quickStart} size="lg">Get Started</Button>
+          <Button href={links.docs.root} variant="outline" size="lg">
+            Read the Docs
+          </Button>
+        </div>
+      </div>
+    </div>
+  </section>
+</Layout>
