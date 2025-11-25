@@ -69,6 +69,8 @@ pgmt init [OPTIONS]
 --defaults                    # Use defaults for all prompts
 --schema-dir <DIR>            # Schema directory name (default: "schema")
 --auto-shadow                 # Use auto shadow database
+--shadow-pg-version <VER>     # PostgreSQL version for auto shadow (e.g., "14", "15", "16")
+--roles-file <PATH>           # Path to roles file (default: auto-detect roles.sql)
 ```
 
 **Examples:**
@@ -82,6 +84,9 @@ pgmt init --dev-url postgres://localhost/existing_db --create-baseline
 
 # Empty project
 pgmt init --defaults --no-import
+
+# Specify PostgreSQL version for shadow database
+pgmt init --dev-url postgres://localhost/myapp_dev --auto-shadow --shadow-pg-version 14
 ```
 
 ---

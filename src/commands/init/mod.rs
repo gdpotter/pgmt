@@ -33,6 +33,10 @@ pub struct InitArgs {
     #[clap(long)]
     pub auto_shadow: bool,
 
+    /// PostgreSQL version for auto shadow database (e.g., "14", "15", "16")
+    #[clap(long)]
+    pub shadow_pg_version: Option<String>,
+
     /// Create baseline from existing database (non-interactive)
     #[clap(long)]
     pub create_baseline: bool,

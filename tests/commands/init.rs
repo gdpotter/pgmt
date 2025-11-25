@@ -199,6 +199,7 @@ fn test_generate_config_file_auto_shadow() -> Result<()> {
         project_dir: temp_dir.clone(),
         dev_database_url: "postgres://localhost/myapp_dev".to_string(),
         shadow_config: ShadowDatabaseInput::Auto,
+        shadow_pg_version: None,
         schema_dir: PathBuf::from("schema"),
         import_source: None,
         object_config: ObjectManagementConfig::default(),
@@ -240,6 +241,7 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
         project_dir: temp_dir.clone(),
         dev_database_url: "postgres://localhost/myapp_dev".to_string(),
         shadow_config: ShadowDatabaseInput::Manual("postgres://localhost/myapp_shadow".to_string()),
+        shadow_pg_version: None,
         schema_dir: PathBuf::from("custom_schema"),
         import_source: None,
         object_config: ObjectManagementConfig {
@@ -283,6 +285,7 @@ fn test_init_options_debug() {
         project_dir: PathBuf::from("/tmp/test"),
         dev_database_url: "postgres://localhost/test".to_string(),
         shadow_config: ShadowDatabaseInput::Auto,
+        shadow_pg_version: None,
         schema_dir: PathBuf::from("schema"),
         import_source: Some(ImportSource::Directory(PathBuf::from("migrations"))),
         object_config: ObjectManagementConfig::default(),

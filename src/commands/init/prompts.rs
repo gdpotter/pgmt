@@ -76,6 +76,7 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         project_dir,
         dev_database_url,
         shadow_config,
+        shadow_pg_version: args.shadow_pg_version.clone(),
         schema_dir,
         import_source,
         object_config,

@@ -32,9 +32,14 @@ pub fn create_project_structure(project_dir: &PathBuf, schema_dir: &PathBuf) -> 
 
 /// Generate pgmt.yaml configuration file
 pub fn generate_config_file(options: &super::InitOptions, project_dir: &Path) -> Result<()> {
-    let shadow_config = match &options.shadow_config {
-        crate::prompts::ShadowDatabaseInput::Auto => "  shadow:\n    auto: true".to_string(),
-        crate::prompts::ShadowDatabaseInput::Manual(url) => {
+    let shadow_config = match (&options.shadow_config, &options.shadow_pg_version) {
+        (crate::prompts::ShadowDatabaseInput::Auto, Some(version)) => {
+            format!("  shadow:\n    docker:\n      version: \"{}\"", version)
+        }
+        (crate::prompts::ShadowDatabaseInput::Auto, None) => {
+            "  shadow:\n    auto: true".to_string()
+        }
+        (crate::prompts::ShadowDatabaseInput::Manual(url), _) => {
             format!("  shadow:\n    auto: false\n    url: {}", url)
         }
     };
@@ -128,6 +133,7 @@ mod tests {
             project_dir: temp_dir.clone(),
             dev_database_url: "postgres://localhost/test_db".to_string(),
             shadow_config: crate::prompts::ShadowDatabaseInput::Auto,
+            shadow_pg_version: None,
             schema_dir: PathBuf::from("custom_schema"),
             import_source: None,
             object_config: ObjectManagementConfig::default(),

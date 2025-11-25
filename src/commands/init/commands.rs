@@ -18,6 +18,8 @@ pub struct InitOptions {
     pub project_dir: std::path::PathBuf,
     pub dev_database_url: String,
     pub shadow_config: ShadowDatabaseInput,
+    /// PostgreSQL version for auto shadow database (e.g., "14", "15", "16")
+    pub shadow_pg_version: Option<String>,
     pub schema_dir: std::path::PathBuf,
     pub import_source: Option<ImportSource>,
     pub object_config: ObjectManagementConfig,
