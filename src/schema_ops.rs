@@ -2,6 +2,7 @@ use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::db::cleaner;
 use crate::db::connection::connect_with_retry;
+use crate::db::error_context::SqlErrorContext;
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -119,11 +120,10 @@ pub async fn apply_roles_file(pool: &PgPool, roles_file: &Path) -> Result<()> {
     debug!("Executing roles file: {}", truncate_for_log(&content));
 
     sqlx::raw_sql(&content).execute(pool).await.map_err(|e| {
+        let ctx = SqlErrorContext::from_sqlx_error(&e, &content);
         anyhow::anyhow!(
-            "Failed to execute roles file {}:\n  Database error: {}\n  File preview: {}",
-            roles_file.display(),
-            e,
-            truncate_for_log(&content)
+            "{}",
+            ctx.format(&roles_file.display().to_string(), &content)
         )
     })?;
 

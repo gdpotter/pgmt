@@ -4,6 +4,7 @@ use std::path::Path;
 use tracing::error;
 
 use super::connection::initialize_database_session;
+use super::error_context::SqlErrorContext;
 
 /// Configuration for SQL file execution
 #[derive(Debug, Clone)]
@@ -101,7 +102,7 @@ pub async fn execute_sql_content(
             }
             Ok(())
         }
-        Err(e) => handle_sql_execution_error(e, source, config).await,
+        Err(e) => handle_sql_execution_error(e, source, content, config).await,
     }
 }
 
@@ -109,8 +110,11 @@ pub async fn execute_sql_content(
 async fn handle_sql_execution_error(
     e: sqlx::Error,
     source: &Path,
+    content: &str,
     config: &SqlExecutorConfig,
 ) -> Result<()> {
+    // Extract rich error context from PostgreSQL
+    let ctx = SqlErrorContext::from_sqlx_error(&e, content);
     let error_str = e.to_string();
 
     if error_str.contains("CREATE INDEX CONCURRENTLY cannot run inside a transaction block") {
@@ -129,10 +133,10 @@ async fn handle_sql_execution_error(
             ))
         }
     } else if error_str.contains("does not exist") && error_str.contains("relation") {
+        // Use enhanced error with line number context
         Err(anyhow::anyhow!(
-            "Schema error in {}: {}\n\n💡 This might be caused by:\n   • Missing schema context - tables may be in different schema\n   • Search path not including the target schema\n   • Dependencies between migration files not properly ordered\n   • Previous migration failed to create the referenced table",
-            source.display(),
-            e
+            "{}\n\n💡 This might be caused by:\n   • Missing schema context - tables may be in different schema\n   • Search path not including the target schema\n   • Dependencies between migration files not properly ordered\n   • Previous migration failed to create the referenced table",
+            ctx.format(&source.display().to_string(), content)
         ))
     } else if error_str.contains("already exists") {
         if config.verbose {
@@ -147,16 +151,14 @@ async fn handle_sql_execution_error(
             Ok(())
         } else {
             Err(anyhow::anyhow!(
-                "Object already exists in {}: {}",
-                source.display(),
-                e
+                "{}",
+                ctx.format(&source.display().to_string(), content)
             ))
         }
     } else if error_str.contains("permission") || error_str.contains("access") {
         Err(anyhow::anyhow!(
-            "Permission error in {}: {}\n\n💡 Check database user permissions",
-            source.display(),
-            e
+            "{}\n\n💡 Check database user permissions",
+            ctx.format(&source.display().to_string(), content)
         ))
     } else if config.continue_on_error {
         eprintln!(
@@ -167,10 +169,10 @@ async fn handle_sql_execution_error(
         eprintln!("   Continuing with execution (best-effort mode)...");
         Ok(())
     } else {
+        // Use enhanced error formatting for all other errors
         Err(anyhow::anyhow!(
-            "SQL execution failed in {}: {}",
-            source.display(),
-            e
+            "{}",
+            ctx.format(&source.display().to_string(), content)
         ))
     }
 }

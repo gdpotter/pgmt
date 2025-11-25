@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use sqlx::{Executor, PgPool};
 use std::path::Path;
 
+use crate::db::error_context::SqlErrorContext;
 use crate::render::Safety;
 use crate::schema_loader::SchemaFile;
 
@@ -75,6 +76,9 @@ pub struct SqlExecutionError {
     pub sql_content: String,
     pub line_number: Option<usize>,
     pub postgres_error: String,
+    pub pg_detail: Option<String>,
+    pub pg_hint: Option<String>,
+    pub pg_context: Option<String>,
     pub suggestion: Option<String>,
     pub troubleshooting_tips: Vec<String>,
     pub dependencies_info: Option<String>,
@@ -115,6 +119,17 @@ impl SqlExecutionError {
             && let Some(line_num) = self.line_number
         {
             error_msg.push_str(&format!(" (Line {})", line_num));
+        }
+
+        // Add PostgreSQL detail/hint/context if available
+        if let Some(detail) = &self.pg_detail {
+            error_msg.push_str(&format!("\n\n  Detail: {}", detail));
+        }
+        if let Some(hint) = &self.pg_hint {
+            error_msg.push_str(&format!("\n  Hint: {}", hint));
+        }
+        if let Some(ctx) = &self.pg_context {
+            error_msg.push_str(&format!("\n  Context: {}", ctx));
         }
 
         // Show content preview - prioritize context around error line if available
@@ -250,15 +265,21 @@ impl SqlContentExecutor {
             return Ok(());
         }
 
-        // Execute the SQL content using sqlx Executor (supports multiple statements)
-        match self.pool.execute(content).await {
+        // Execute the SQL content using raw_sql (properly supports multiple statements)
+        match sqlx::raw_sql(content).execute(&self.pool).await {
             Ok(_) => Ok(()),
             Err(sqlx_error) => {
+                // Use shared utility to extract rich error context from PostgreSQL
+                let ctx = SqlErrorContext::from_sqlx_error(&sqlx_error, content);
+
                 let error_info = SqlExecutionError {
                     source_context: source.to_string(),
                     sql_content: content.to_string(),
-                    line_number: Self::extract_line_number_from_error(&sqlx_error),
-                    postgres_error: sqlx_error.to_string(),
+                    line_number: ctx.line_number,
+                    postgres_error: ctx.message,
+                    pg_detail: ctx.detail,
+                    pg_hint: ctx.hint,
+                    pg_context: ctx.context,
                     suggestion: Self::generate_suggestion(&sqlx_error),
                     troubleshooting_tips: Self::generate_troubleshooting_tips(&sqlx_error),
                     dependencies_info: deps_info,
@@ -348,11 +369,17 @@ impl SchemaExecutor {
         match executor.execute(sql_content).await {
             Ok(result) => Ok(result),
             Err(sqlx_error) => {
+                // Use shared utility to extract rich error context from PostgreSQL
+                let ctx = SqlErrorContext::from_sqlx_error(&sqlx_error, sql_content);
+
                 let error_info = SqlExecutionError {
                     source_context: relative_path.to_string(),
                     sql_content: sql_content.to_string(),
-                    line_number: SqlContentExecutor::extract_line_number_from_error(&sqlx_error),
-                    postgres_error: sqlx_error.to_string(),
+                    line_number: ctx.line_number,
+                    postgres_error: ctx.message,
+                    pg_detail: ctx.detail,
+                    pg_hint: ctx.hint,
+                    pg_context: ctx.context,
                     suggestion: SqlContentExecutor::generate_suggestion(&sqlx_error),
                     troubleshooting_tips: SqlContentExecutor::generate_troubleshooting_tips(
                         &sqlx_error,
@@ -370,22 +397,6 @@ impl SchemaExecutor {
 
 // Static helper methods for error analysis (used by both SqlContentExecutor and SchemaExecutor)
 impl SqlContentExecutor {
-    /// Extract line number from PostgreSQL error message if available
-    fn extract_line_number_from_error(error: &sqlx::Error) -> Option<usize> {
-        // PostgreSQL sometimes includes line numbers in error messages
-        // Look for patterns like "at line 5" or "LINE 5:"
-        let error_str = error.to_string();
-
-        if let Ok(re) = regex::Regex::new(r"(?i)(?:at line|line)\s+(\d+)")
-            && let Some(captures) = re.captures(&error_str)
-            && let Some(line_match) = captures.get(1)
-        {
-            return line_match.as_str().parse().ok();
-        }
-
-        None
-    }
-
     /// Generate helpful suggestions based on common error patterns
     fn generate_suggestion(error: &sqlx::Error) -> Option<String> {
         let error_str = error.to_string().to_lowercase();
@@ -599,6 +610,9 @@ mod tests {
             sql_content: "CREATE TABLE users (id SERIAL, email TEXTT)".to_string(),
             line_number: Some(1),
             postgres_error: "type \"textt\" does not exist".to_string(),
+            pg_detail: None,
+            pg_hint: Some("Check spelling of type name".to_string()),
+            pg_context: None,
             suggestion: Some("Check for typos in data type names".to_string()),
             troubleshooting_tips: vec![],
             dependencies_info: None,
@@ -608,5 +622,27 @@ mod tests {
         assert!(display.contains("tables/users.sql"));
         assert!(display.contains("Line 1"));
         assert!(display.contains("Check for typos"));
+        assert!(display.contains("Hint: Check spelling"));
+    }
+
+    #[test]
+    fn test_sql_execution_error_with_pg_context() {
+        let error = SqlExecutionError {
+            source_context: "functions/process.sql".to_string(),
+            sql_content: "CREATE FUNCTION test() RETURNS void AS $$ BEGIN SELECT * FROM missing_table; END; $$ LANGUAGE plpgsql;".to_string(),
+            line_number: Some(1),
+            postgres_error: "relation \"missing_table\" does not exist".to_string(),
+            pg_detail: Some("Table was dropped in migration V123".to_string()),
+            pg_hint: None,
+            pg_context: Some("PL/pgSQL function test() line 1 at SQL statement".to_string()),
+            suggestion: None,
+            troubleshooting_tips: vec![],
+            dependencies_info: None,
+        };
+
+        let display = format!("{}", error);
+        assert!(display.contains("functions/process.sql"));
+        assert!(display.contains("Detail: Table was dropped"));
+        assert!(display.contains("Context: PL/pgSQL function"));
     }
 }
