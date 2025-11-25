@@ -92,6 +92,18 @@ jobs:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Move files out of subdirectories (download-artifact creates dirs per artifact)
+          mkdir -p release-files
+          find artifacts -type f -exec mv {} release-files/ \;
+          ls -la release-files/
+
+          # Create release and upload all files
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            release-files/*
