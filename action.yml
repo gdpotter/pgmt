@@ -1,0 +1,77 @@
+name: 'pgmt'
+description: 'PostgreSQL Migration Tool - schema-based migrations for PostgreSQL'
+author: 'pgmt'
+branding:
+  icon: 'database'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of pgmt to use (e.g., "v0.0.1", "latest")'
+    required: false
+    default: 'latest'
+
+outputs:
+  pgmt-path:
+    description: 'Path to the installed pgmt binary'
+    value: ${{ steps.install.outputs.pgmt-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)   echo "asset=pgmt-linux-x86_64.tar.gz" >> $GITHUB_OUTPUT ;;
+          Linux-ARM64) echo "asset=pgmt-linux-aarch64.tar.gz" >> $GITHUB_OUTPUT ;;
+          macOS-X64)   echo "asset=pgmt-macos-x86_64.tar.gz" >> $GITHUB_OUTPUT ;;
+          macOS-ARM64) echo "asset=pgmt-macos-aarch64.tar.gz" >> $GITHUB_OUTPUT ;;
+          Windows-X64) echo "asset=pgmt-windows-x86_64.zip" >> $GITHUB_OUTPUT ;;
+          *)
+            echo "::error::Unsupported platform: ${{ runner.os }}-${{ runner.arch }}"
+            exit 1
+            ;;
+        esac
+
+    - name: Install pgmt
+      id: install
+      shell: bash
+      run: |
+        REPO="gdpotter/pgmt"
+        VERSION="${{ inputs.version }}"
+        ASSET="${{ steps.platform.outputs.asset }}"
+
+        # Determine download URL
+        if [ "$VERSION" = "latest" ]; then
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET}"
+        else
+          # Ensure version starts with 'v'
+          [[ "$VERSION" != v* ]] && VERSION="v${VERSION}"
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+        fi
+
+        echo "Downloading pgmt from: ${DOWNLOAD_URL}"
+
+        # Create install directory
+        INSTALL_DIR="${HOME}/.pgmt/bin"
+        mkdir -p "${INSTALL_DIR}"
+
+        # Download and extract
+        cd "${INSTALL_DIR}"
+        if [[ "$ASSET" == *.zip ]]; then
+          curl -sL "${DOWNLOAD_URL}" -o pgmt.zip
+          unzip -o pgmt.zip
+          rm pgmt.zip
+        else
+          curl -sL "${DOWNLOAD_URL}" | tar xz
+        fi
+
+        # Make executable and add to PATH
+        chmod +x pgmt*
+        echo "${INSTALL_DIR}" >> $GITHUB_PATH
+        echo "pgmt-path=${INSTALL_DIR}/pgmt" >> $GITHUB_OUTPUT
+
+        # Verify installation
+        "${INSTALL_DIR}/pgmt" --version || "${INSTALL_DIR}/pgmt.exe" --version
