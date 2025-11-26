@@ -50,11 +50,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install pgmt
-        run: cargo install --git https://github.com/gdpotter/pgmt.git
+        uses: gdpotter/pgmt@v0
 
       - name: Setup database
         run: createdb testdb
@@ -80,11 +77,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install pgmt
-        run: cargo install --git https://github.com/gdpotter/pgmt.git
+        uses: gdpotter/pgmt@v0
 
       - name: Apply migrations
         run: pgmt migrate apply
@@ -120,11 +114,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install pgmt
-        run: cargo install --git https://github.com/gdpotter/pgmt.git
+        uses: gdpotter/pgmt@v0
 
       - name: Setup shadow database
         run: createdb shadowdb
