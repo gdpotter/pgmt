@@ -20,7 +20,7 @@ async fn test_fetch_basic_view() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -69,7 +69,7 @@ async fn test_fetch_view_with_custom_types() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -116,7 +116,7 @@ async fn test_fetch_view_with_function_dependency() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -130,7 +130,8 @@ async fn test_fetch_view_with_function_dependency() {
         }));
         assert!(view.depends_on().contains(&DbObjectId::Function {
             schema: "public".to_string(),
-            name: "upper_name".to_string()
+            name: "upper_name".to_string(),
+            arguments: "input text".to_string(),
         }));
     })
     .await;
@@ -160,7 +161,7 @@ async fn test_fetch_nested_views() {
         )
         .await;
 
-        let mut views = fetch(db.pool()).await.unwrap();
+        let mut views = fetch(&mut *db.conn().await).await.unwrap();
         views.sort_by(|a, b| a.name.cmp(&b.name));
 
         assert_eq!(views.len(), 2);
@@ -217,7 +218,7 @@ async fn test_fetch_views_different_schemas() {
         )
         .await;
 
-        let mut views = fetch(db.pool()).await.unwrap();
+        let mut views = fetch(&mut *db.conn().await).await.unwrap();
         views.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
         assert_eq!(views.len(), 2);
@@ -261,7 +262,7 @@ async fn test_view_id_and_dependencies() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -301,7 +302,7 @@ async fn test_fetch_view_no_dependencies() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -338,7 +339,7 @@ async fn test_fetch_view_with_comment() {
         db.execute("COMMENT ON VIEW expensive_products IS 'View showing products over $100'")
             .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -378,7 +379,7 @@ async fn test_fetch_view_with_custom_type_array_dependency() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];
@@ -432,7 +433,7 @@ async fn test_fetch_view_with_array_type_cast_dependency() {
         )
         .await;
 
-        let views = fetch(db.pool()).await.unwrap();
+        let views = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(views.len(), 1);
         let view = &views[0];

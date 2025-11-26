@@ -16,7 +16,7 @@ async fn test_fetch_basic_table() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -68,7 +68,7 @@ async fn test_fetch_table_without_primary_key() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -94,7 +94,7 @@ async fn test_fetch_compound_primary_key() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -124,7 +124,7 @@ async fn test_fetch_table_with_custom_types() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -165,7 +165,7 @@ async fn test_fetch_table_with_generated_column() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -217,7 +217,7 @@ async fn test_fetch_multiple_tables_different_schemas() {
         )
         .await;
 
-        let mut tables = fetch(db.pool()).await.unwrap();
+        let mut tables = fetch(&mut *db.conn().await).await.unwrap();
         tables.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
         assert_eq!(tables.len(), 3);
@@ -284,7 +284,7 @@ async fn test_fetch_table_with_function_dependency() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -294,7 +294,8 @@ async fn test_fetch_table_with_function_dependency() {
 
         assert!(table.depends_on().contains(&DbObjectId::Function {
             schema: "public".to_string(),
-            name: "calculate_hash".to_string()
+            name: "calculate_hash".to_string(),
+            arguments: "input text".to_string(),
         }));
 
         let hash_col = table
@@ -304,7 +305,8 @@ async fn test_fetch_table_with_function_dependency() {
             .unwrap();
         assert!(hash_col.depends_on.contains(&DbObjectId::Function {
             schema: "public".to_string(),
-            name: "calculate_hash".to_string()
+            name: "calculate_hash".to_string(),
+            arguments: "input text".to_string(),
         }));
     })
     .await;
@@ -322,7 +324,7 @@ async fn test_table_id_and_dependencies() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -362,7 +364,7 @@ async fn test_fetch_table_with_serial_columns() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -416,26 +418,33 @@ async fn test_fetch_table_with_serial_columns() {
 #[tokio::test]
 async fn test_fetch_table_with_array_columns() {
     with_test_db(async |db| {
+        // Create a custom type for testing multi-dimensional array dependency tracking
+        db.execute("CREATE TYPE matrix_cell AS ENUM ('empty', 'filled')")
+            .await;
+
         db.execute(
             "CREATE TABLE documents (
                 id SERIAL PRIMARY KEY,
                 tags TEXT[] NOT NULL,
                 scores INTEGER[],
                 matrix INTEGER[][],
-                keywords VARCHAR(50)[]
+                keywords VARCHAR(50)[],
+                board_2d matrix_cell[][] NOT NULL,
+                board_3d matrix_cell[][][] NOT NULL
             )",
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
 
         assert_eq!(table.schema, "public");
         assert_eq!(table.name, "documents");
-        assert_eq!(table.columns.len(), 5);
+        assert_eq!(table.columns.len(), 7);
 
+        // System type arrays - verify data_type formatting
         let tags_col = table.columns.iter().find(|c| c.name == "tags").unwrap();
         assert_eq!(tags_col.data_type, "text[]");
         assert!(tags_col.not_null);
@@ -451,6 +460,30 @@ async fn test_fetch_table_with_array_columns() {
         let keywords_col = table.columns.iter().find(|c| c.name == "keywords").unwrap();
         assert_eq!(keywords_col.data_type, "character varying(50)[]");
         assert!(!keywords_col.not_null);
+
+        // Custom type multi-dimensional arrays - verify data_type rendering and dependency tracking
+        // Both 2D and 3D arrays should depend on the base type "matrix_cell"
+        let board_2d_col = table.columns.iter().find(|c| c.name == "board_2d").unwrap();
+        assert_eq!(board_2d_col.data_type, "\"public\".\"matrix_cell\"[][]");
+        assert!(board_2d_col.depends_on.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "matrix_cell".to_string()
+        }));
+
+        let board_3d_col = table.columns.iter().find(|c| c.name == "board_3d").unwrap();
+        assert_eq!(board_3d_col.data_type, "\"public\".\"matrix_cell\"[][][]");
+        assert!(board_3d_col.depends_on.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "matrix_cell".to_string()
+        }));
+
+        // Only one type dependency (not separate deps for each dimension)
+        let type_deps: Vec<_> = table
+            .depends_on()
+            .iter()
+            .filter(|d| matches!(d, DbObjectId::Type { .. }))
+            .collect();
+        assert_eq!(type_deps.len(), 1);
     })
     .await;
 }
@@ -461,7 +494,7 @@ async fn test_fetch_empty_table() {
         // PostgreSQL allows tables with no columns
         db.execute("CREATE TABLE empty_table ()").await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -495,7 +528,7 @@ async fn test_fetch_table_with_custom_array_types() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -541,7 +574,7 @@ async fn test_column_ordering() {
         )
         .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -583,7 +616,7 @@ async fn test_fetch_table_with_comment() {
         db.execute("COMMENT ON TABLE products IS 'Product catalog table'")
             .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -614,7 +647,7 @@ async fn test_fetch_table_with_column_comments() {
         db.execute("COMMENT ON COLUMN users.email IS 'Email address for notifications'")
             .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -665,7 +698,7 @@ async fn test_fetch_table_and_column_comments() {
         db.execute("COMMENT ON COLUMN orders.total IS 'Order total amount in USD'")
             .await;
 
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(tables.len(), 1);
         let table = &tables[0];
@@ -695,6 +728,54 @@ async fn test_fetch_table_and_column_comments() {
 
         let status_col = table.columns.iter().find(|c| c.name == "status").unwrap();
         assert_eq!(status_col.comment, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_table_with_underscore_prefixed_custom_type() {
+    // Tests that custom types legitimately starting with underscore are handled correctly.
+    // This ensures we don't incorrectly strip the underscore when resolving array element types.
+    with_test_db(async |db| {
+        // Create a type that legitimately starts with underscore
+        db.execute("CREATE TYPE _internal_status AS ENUM ('pending', 'processing', 'complete')")
+            .await;
+        db.execute(
+            "CREATE TABLE items (
+                id SERIAL PRIMARY KEY,
+                status _internal_status NOT NULL,
+                statuses _internal_status[] NOT NULL
+            )",
+        )
+        .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(tables.len(), 1);
+        let table = &tables[0];
+
+        assert_eq!(table.schema, "public");
+        assert_eq!(table.name, "items");
+
+        // Scalar column should depend on "_internal_status"
+        let status_col = table.columns.iter().find(|c| c.name == "status").unwrap();
+        assert!(status_col.depends_on.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "_internal_status".to_string() // Underscore preserved
+        }));
+
+        // Array column should also depend on "_internal_status" (the element type)
+        let statuses_col = table.columns.iter().find(|c| c.name == "statuses").unwrap();
+        assert!(statuses_col.depends_on.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "_internal_status".to_string() // Underscore preserved, not "internal_status"
+        }));
+
+        // Verify the overall table dependencies
+        assert!(table.depends_on().contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "_internal_status".to_string()
+        }));
     })
     .await;
 }

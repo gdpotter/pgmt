@@ -69,12 +69,6 @@ impl SqlRenderer for TypeOperation {
                         quote_ident(name),
                         definition
                     ),
-                    "DOMAIN" => format!(
-                        "CREATE DOMAIN {}.{} {};",
-                        quote_ident(schema),
-                        quote_ident(name),
-                        definition
-                    ),
                     "RANGE" => format!(
                         "CREATE TYPE {}.{} AS RANGE {}",
                         quote_ident(schema),

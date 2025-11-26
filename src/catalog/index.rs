@@ -1,6 +1,7 @@
 //! Fetch indexes via pg_catalog with support for all index types and features
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
@@ -116,7 +117,7 @@ struct IndexRow {
     comment: Option<String>,
 }
 
-async fn fetch_all_indexes(pool: &PgPool) -> Result<Vec<IndexRow>> {
+async fn fetch_all_indexes(conn: &mut PgConnection) -> Result<Vec<IndexRow>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -143,7 +144,9 @@ async fn fetch_all_indexes(pool: &PgPool) -> Result<Vec<IndexRow>> {
           AND tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND NOT idx.indisprimary  -- We handle primary keys separately
           AND NOT EXISTS (  -- Exclude indexes that back constraints (handled by constraint catalog)
-              SELECT 1 FROM pg_constraint c WHERE c.conindid = idx.indexrelid
+              SELECT 1 FROM pg_constraint c
+              WHERE c.conindid = idx.indexrelid
+              AND c.contype IN ('u', 'x')  -- Only unique/exclusion constraints own their backing index; FKs just reference
           )
           -- Exclude indexes that belong to extensions
           AND NOT EXISTS (
@@ -154,7 +157,7 @@ async fn fetch_all_indexes(pool: &PgPool) -> Result<Vec<IndexRow>> {
         ORDER BY n.nspname, i.relname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows
@@ -187,7 +190,7 @@ struct IndexColumnRow {
     is_included: bool,
 }
 
-async fn fetch_index_columns(pool: &PgPool) -> Result<Vec<IndexColumnRow>> {
+async fn fetch_index_columns(conn: &mut PgConnection) -> Result<Vec<IndexColumnRow>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -233,7 +236,7 @@ async fn fetch_index_columns(pool: &PgPool) -> Result<Vec<IndexColumnRow>> {
         ORDER BY n.nspname, i.relname, col_pos
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows
@@ -252,7 +255,7 @@ async fn fetch_index_columns(pool: &PgPool) -> Result<Vec<IndexColumnRow>> {
 }
 
 async fn fetch_index_storage_parameters(
-    pool: &PgPool,
+    conn: &mut PgConnection,
 ) -> Result<std::collections::BTreeMap<(String, String), Vec<(String, String)>>> {
     let rows = sqlx::query!(
         r#"
@@ -271,7 +274,7 @@ async fn fetch_index_storage_parameters(
           AND NOT idx.indisprimary
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut storage_params: std::collections::BTreeMap<(String, String), Vec<(String, String)>> =
@@ -292,7 +295,7 @@ async fn fetch_index_storage_parameters(
 }
 
 async fn fetch_index_dependencies(
-    pool: &PgPool,
+    conn: &mut PgConnection,
 ) -> Result<std::collections::BTreeMap<(String, String), Vec<DbObjectId>>> {
     // Fetch dependencies on custom types and functions used in index expressions
     let deps = sqlx::query!(
@@ -310,7 +313,8 @@ async fn fetch_index_dependencies(
                 WHEN 'pg_type' THEN t.typname
                 WHEN 'pg_proc' THEN p.proname
                 ELSE 'unknown'
-            END AS "dep_name!"
+            END AS "dep_name!",
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "dep_args?"
         FROM pg_depend d
         JOIN pg_class i ON d.objid = i.oid
         JOIN pg_namespace n ON i.relnamespace = n.oid
@@ -326,7 +330,7 @@ async fn fetch_index_dependencies(
           AND NOT idx.indisprimary
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut dep_map: std::collections::BTreeMap<(String, String), Vec<DbObjectId>> =
@@ -342,6 +346,7 @@ async fn fetch_index_dependencies(
             "function" => DbObjectId::Function {
                 schema: row.dep_schema,
                 name: row.dep_name,
+                arguments: row.dep_args.unwrap_or_default(),
             },
             _ => continue,
         };
@@ -351,11 +356,15 @@ async fn fetch_index_dependencies(
     Ok(dep_map)
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Index>> {
-    let index_rows = fetch_all_indexes(pool).await?;
-    let column_rows = fetch_index_columns(pool).await?;
-    let storage_params = fetch_index_storage_parameters(pool).await?;
-    let index_deps = fetch_index_dependencies(pool).await?;
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Index>> {
+    info!("Fetching indexes...");
+    let index_rows = fetch_all_indexes(&mut *conn).await?;
+    info!("Fetching index columns...");
+    let column_rows = fetch_index_columns(&mut *conn).await?;
+    info!("Fetching index storage parameters...");
+    let storage_params = fetch_index_storage_parameters(&mut *conn).await?;
+    info!("Fetching index dependencies...");
+    let index_deps = fetch_index_dependencies(&mut *conn).await?;
 
     // Group columns by index
     let mut column_map: std::collections::BTreeMap<(String, String), Vec<IndexColumnRow>> =

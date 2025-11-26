@@ -16,7 +16,7 @@ async fn test_fetch_basic_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -68,7 +68,7 @@ async fn test_fetch_function_with_custom_types() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -104,7 +104,7 @@ async fn test_fetch_procedure() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let proc = &functions[0];
@@ -139,7 +139,7 @@ async fn test_fetch_function_with_multiple_parameters() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -172,7 +172,7 @@ async fn test_fetch_immutable_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -196,7 +196,7 @@ async fn test_fetch_strict_security_definer_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -244,7 +244,7 @@ async fn test_fetch_functions_different_schemas() {
         )
         .await;
 
-        let mut functions = fetch(db.pool()).await.unwrap();
+        let mut functions = fetch(&mut *db.conn().await).await.unwrap();
         functions.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
         assert_eq!(functions.len(), 3);
@@ -296,7 +296,7 @@ async fn test_function_id_and_dependencies() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -305,7 +305,8 @@ async fn test_function_id_and_dependencies() {
             func.id(),
             DbObjectId::Function {
                 schema: "test_schema".to_string(),
-                name: "test_function".to_string()
+                name: "test_function".to_string(),
+                arguments: "".to_string(),
             }
         );
 
@@ -334,7 +335,7 @@ async fn test_fetch_function_no_parameters() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -359,7 +360,7 @@ async fn test_fetch_sql_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -407,7 +408,7 @@ async fn test_fetch_overloaded_functions() {
         )
         .await;
 
-        let mut functions = fetch(db.pool()).await.unwrap();
+        let mut functions = fetch(&mut *db.conn().await).await.unwrap();
         functions.sort_by(|a, b| {
             // Sort by parameter count first, then by parameter type for deterministic ordering
             let count_cmp = a.parameters.len().cmp(&b.parameters.len());
@@ -483,7 +484,7 @@ async fn test_fetch_function_with_custom_return_type() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -521,7 +522,7 @@ async fn test_fetch_stable_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -548,7 +549,7 @@ async fn test_fetch_security_invoker_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -577,7 +578,7 @@ async fn test_fetch_non_strict_function() {
         )
         .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -605,7 +606,7 @@ async fn test_fetch_function_with_comment() {
         db.execute("COMMENT ON FUNCTION calculate_discount(DECIMAL, DECIMAL) IS 'Calculates the discounted price given a price and discount rate'")
             .await;
 
-        let functions = fetch(db.pool()).await.unwrap();
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(functions.len(), 1);
         let func = &functions[0];
@@ -616,6 +617,135 @@ async fn test_fetch_function_with_comment() {
         assert_eq!(
             func.comment,
             Some("Calculates the discounted price given a price and discount rate".to_string())
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_function_with_domain_parameter() {
+    with_test_db(async |db| {
+        db.execute("CREATE DOMAIN positive_int AS INTEGER CHECK (VALUE > 0)")
+            .await;
+
+        db.execute(
+            "CREATE OR REPLACE FUNCTION check_positive(val public.positive_int)
+             RETURNS BOOLEAN AS $$
+             BEGIN
+                 RETURN val IS NOT NULL;
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "check_positive");
+        assert_eq!(func.parameters.len(), 1);
+        assert_eq!(func.parameters[0].data_type, "public.positive_int");
+
+        // Should contain DbObjectId::Domain, not DbObjectId::Type
+        assert_eq!(func.depends_on().len(), 2);
+        assert!(func.depends_on().contains(&DbObjectId::Schema {
+            name: "public".to_string()
+        }));
+        assert!(func.depends_on().contains(&DbObjectId::Domain {
+            schema: "public".to_string(),
+            name: "positive_int".to_string()
+        }));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_function_with_domain_return_type() {
+    with_test_db(async |db| {
+        db.execute("CREATE DOMAIN positive_int AS INTEGER CHECK (VALUE > 0)")
+            .await;
+
+        db.execute(
+            "CREATE OR REPLACE FUNCTION get_positive()
+             RETURNS public.positive_int AS $$
+             BEGIN
+                 RETURN 42;
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "get_positive");
+
+        // Should contain DbObjectId::Domain, not DbObjectId::Type
+        assert!(func.depends_on().contains(&DbObjectId::Domain {
+            schema: "public".to_string(),
+            name: "positive_int".to_string()
+        }));
+    })
+    .await;
+}
+
+/// Test that functions with array parameters of custom types have correct dependencies
+/// on the base type, not the internal array type name (e.g., "status" not "_status")
+#[tokio::test]
+async fn test_fetch_function_with_custom_type_array_parameter() {
+    with_test_db(async |db| {
+        db.execute("CREATE TYPE item_status AS ENUM ('pending', 'active', 'completed')")
+            .await;
+
+        db.execute(
+            "CREATE OR REPLACE FUNCTION process_items(statuses item_status[])
+             RETURNS INTEGER AS $$
+             BEGIN
+                 RETURN array_length(statuses, 1);
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "process_items");
+        assert_eq!(func.parameters.len(), 1);
+        // The parameter type should include the array brackets
+        assert!(
+            func.parameters[0].data_type.contains("item_status"),
+            "Parameter type should contain 'item_status', got: {}",
+            func.parameters[0].data_type
+        );
+
+        // Critical: Should depend on "item_status", NOT "_item_status"
+        // Before the fix, pg_depend returns the internal array type name (_typename)
+        assert!(
+            func.depends_on().contains(&DbObjectId::Type {
+                schema: "public".to_string(),
+                name: "item_status".to_string()
+            }),
+            "Function should depend on base type 'item_status', not '_item_status'. Got: {:?}",
+            func.depends_on()
+        );
+
+        // Should NOT depend on the internal array type name
+        assert!(
+            !func.depends_on().contains(&DbObjectId::Type {
+                schema: "public".to_string(),
+                name: "_item_status".to_string()
+            }),
+            "Function should NOT depend on internal array type '_item_status'. Got: {:?}",
+            func.depends_on()
         );
     })
     .await;

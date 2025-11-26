@@ -17,7 +17,7 @@ async fn test_create_enum_migration() -> Result<()> {
                 .await;
 
             // Get types from source database
-            let source_types = fetch(source_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
 
             // Generate diff
             let steps = diff(None, source_types.first());
@@ -46,7 +46,7 @@ async fn test_create_enum_migration() -> Result<()> {
             target_db.execute(&sql_statements[0].sql).await;
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 1);
 
             let created_type = &final_types[0];
@@ -81,7 +81,7 @@ async fn test_create_composite_migration() -> Result<()> {
                 .await;
 
             // Generate and apply migration
-            let source_types = fetch(source_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
             let steps = diff(None, source_types.first());
 
             assert_eq!(steps.len(), 1);
@@ -107,7 +107,7 @@ async fn test_create_composite_migration() -> Result<()> {
             target_db.execute(&sql_statements[0].sql).await;
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 1);
 
             let created_type = &final_types[0];
@@ -125,56 +125,6 @@ async fn test_create_composite_migration() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_create_domain_migration() -> Result<()> {
-    with_test_db(async |source_db| {
-        with_test_db(async |target_db| {
-            // Create domain type in source database
-            source_db
-                .execute(
-                    "CREATE DOMAIN email AS TEXT
-                     CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')",
-                )
-                .await;
-
-            // Generate and apply migration
-            let source_types = fetch(source_db.pool()).await?;
-            let steps = diff(None, source_types.first());
-
-            assert_eq!(steps.len(), 1);
-            match &steps[0] {
-                MigrationStep::Type(TypeOperation::Create {
-                    schema,
-                    name,
-                    kind,
-                    definition,
-                }) => {
-                    assert_eq!(schema, "public");
-                    assert_eq!(name, "email");
-                    assert_eq!(kind, "DOMAIN");
-                    assert_eq!(definition, "AS text");
-                }
-                _ => panic!("Expected CreateType step"),
-            }
-
-            let sql_statements = steps[0].to_sql();
-            target_db.execute(&sql_statements[0].sql).await;
-
-            // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
-            assert_eq!(final_types.len(), 1);
-
-            let created_type = &final_types[0];
-            assert_eq!(created_type.kind, TypeKind::Domain);
-            assert_eq!(created_type.base_type, Some("text".to_string()));
-
-            Ok(())
-        })
-        .await
-    })
-    .await
-}
-
-#[tokio::test]
 async fn test_drop_type_migration() -> Result<()> {
     with_test_db(async |target_db| {
         // Create type in target database that we'll drop
@@ -183,7 +133,7 @@ async fn test_drop_type_migration() -> Result<()> {
             .await;
 
         // Verify type exists
-        let target_types = fetch(target_db.pool()).await?;
+        let target_types = fetch(&mut *target_db.conn().await).await?;
         assert_eq!(target_types.len(), 1);
 
         // Generate drop migration (source has no types, target has one)
@@ -203,7 +153,7 @@ async fn test_drop_type_migration() -> Result<()> {
         target_db.execute(&sql_statements[0].sql).await;
 
         // Verify type was dropped
-        let final_types = fetch(target_db.pool()).await?;
+        let final_types = fetch(&mut *target_db.conn().await).await?;
         assert_eq!(final_types.len(), 0);
 
         Ok(())
@@ -229,8 +179,8 @@ async fn test_add_enum_values_migration() -> Result<()> {
                 .await;
 
             // Generate migration
-            let source_types = fetch(source_db.pool()).await?;
-            let target_types = fetch(target_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
+            let target_types = fetch(&mut *target_db.conn().await).await?;
 
             let steps = diff(target_types.first(), source_types.first());
             assert_eq!(steps.len(), 2); // Now generates separate steps for each value
@@ -276,7 +226,7 @@ async fn test_add_enum_values_migration() -> Result<()> {
             }
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 1);
 
             let updated_type = &final_types[0];
@@ -315,8 +265,8 @@ async fn test_enum_drop_and_recreate_when_values_removed() -> Result<()> {
                 .await;
 
             // Generate migration
-            let source_types = fetch(source_db.pool()).await?;
-            let target_types = fetch(target_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
+            let target_types = fetch(&mut *target_db.conn().await).await?;
 
             let steps = diff(target_types.first(), source_types.first());
 
@@ -355,79 +305,13 @@ async fn test_enum_drop_and_recreate_when_values_removed() -> Result<()> {
             }
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 1);
 
             let recreated_type = &final_types[0];
             assert_eq!(recreated_type.enum_values.len(), 2);
             assert_eq!(recreated_type.enum_values[0].name, "active");
             assert_eq!(recreated_type.enum_values[1].name, "inactive");
-
-            Ok(())
-        })
-        .await
-    })
-    .await
-}
-
-#[tokio::test]
-async fn test_domain_base_type_change_drop_recreate() -> Result<()> {
-    with_test_db(async |source_db| {
-        with_test_db(async |target_db| {
-            // Create domain with TEXT base in target
-            target_db.execute("CREATE DOMAIN user_id AS TEXT").await;
-
-            // Create domain with INTEGER base in source (different base type)
-            source_db.execute("CREATE DOMAIN user_id AS INTEGER").await;
-
-            // Generate migration
-            let source_types = fetch(source_db.pool()).await?;
-            let target_types = fetch(target_db.pool()).await?;
-
-            let steps = diff(target_types.first(), source_types.first());
-
-            // Should be drop + recreate since base type changed
-            assert_eq!(steps.len(), 2);
-
-            match &steps[0] {
-                MigrationStep::Type(TypeOperation::Drop { schema, name }) => {
-                    assert_eq!(schema, "public");
-                    assert_eq!(name, "user_id");
-                }
-                _ => panic!("Expected DropType step first"),
-            }
-
-            match &steps[1] {
-                MigrationStep::Type(TypeOperation::Create {
-                    schema,
-                    name,
-                    kind,
-                    definition,
-                }) => {
-                    assert_eq!(schema, "public");
-                    assert_eq!(name, "user_id");
-                    assert_eq!(kind, "DOMAIN");
-                    // PostgreSQL normalizes INTEGER to int4 in the catalog
-                    assert_eq!(definition, "AS int4");
-                }
-                _ => panic!("Expected CreateType step second"),
-            }
-
-            // Apply migration
-            for step in &steps {
-                let sql_statements = step.to_sql();
-                for stmt in sql_statements {
-                    target_db.execute(&stmt.sql).await;
-                }
-            }
-
-            // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
-            assert_eq!(final_types.len(), 1);
-
-            let recreated_type = &final_types[0];
-            // PostgreSQL returns "int4" for INTEGER type
-            assert_eq!(recreated_type.base_type, Some("int4".to_string()));
 
             Ok(())
         })
@@ -463,8 +347,8 @@ async fn test_composite_attributes_change_drop_recreate() -> Result<()> {
                 .await;
 
             // Generate migration
-            let source_types = fetch(source_db.pool()).await?;
-            let target_types = fetch(target_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
+            let target_types = fetch(&mut *target_db.conn().await).await?;
 
             let steps = diff(target_types.first(), source_types.first());
 
@@ -503,7 +387,7 @@ async fn test_composite_attributes_change_drop_recreate() -> Result<()> {
             }
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 1);
 
             let recreated_type = &final_types[0];
@@ -511,73 +395,6 @@ async fn test_composite_attributes_change_drop_recreate() -> Result<()> {
             assert_eq!(recreated_type.composite_attributes[0].name, "full_name");
             assert_eq!(recreated_type.composite_attributes[1].name, "birth_year");
             assert_eq!(recreated_type.composite_attributes[2].name, "email");
-
-            Ok(())
-        })
-        .await
-    })
-    .await
-}
-
-#[tokio::test]
-async fn test_type_kind_change_drop_recreate() -> Result<()> {
-    with_test_db(async |source_db| {
-        with_test_db(async |target_db| {
-            // Create enum in target
-            target_db
-                .execute("CREATE TYPE status AS ENUM ('active', 'inactive')")
-                .await;
-
-            // Create domain with same name in source (different kind)
-            source_db.execute("CREATE DOMAIN status AS TEXT").await;
-
-            // Generate migration
-            let source_types = fetch(source_db.pool()).await?;
-            let target_types = fetch(target_db.pool()).await?;
-
-            let steps = diff(target_types.first(), source_types.first());
-
-            // Should be drop + recreate since type kind changed
-            assert_eq!(steps.len(), 2);
-
-            match &steps[0] {
-                MigrationStep::Type(TypeOperation::Drop { schema, name }) => {
-                    assert_eq!(schema, "public");
-                    assert_eq!(name, "status");
-                }
-                _ => panic!("Expected DropType step first"),
-            }
-
-            match &steps[1] {
-                MigrationStep::Type(TypeOperation::Create {
-                    schema,
-                    name,
-                    kind,
-                    definition,
-                }) => {
-                    assert_eq!(schema, "public");
-                    assert_eq!(name, "status");
-                    assert_eq!(kind, "DOMAIN");
-                    assert_eq!(definition, "AS text");
-                }
-                _ => panic!("Expected CreateType step second"),
-            }
-
-            // Apply migration
-            for step in &steps {
-                let sql_statements = step.to_sql();
-                for stmt in sql_statements {
-                    target_db.execute(&stmt.sql).await;
-                }
-            }
-
-            // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
-            assert_eq!(final_types.len(), 1);
-
-            let recreated_type = &final_types[0];
-            assert_eq!(recreated_type.kind, TypeKind::Domain);
-            assert_eq!(recreated_type.base_type, Some("text".to_string()));
 
             Ok(())
         })
@@ -608,7 +425,7 @@ async fn test_multiple_schema_type_migrations() -> Result<()> {
                 .await;
 
             // Target has no types, so this should create all three
-            let source_types = fetch(source_db.pool()).await?;
+            let source_types = fetch(&mut *source_db.conn().await).await?;
 
             // Generate migrations for each type
             let mut all_steps = Vec::new();
@@ -628,7 +445,7 @@ async fn test_multiple_schema_type_migrations() -> Result<()> {
             }
 
             // Verify final state
-            let final_types = fetch(target_db.pool()).await?;
+            let final_types = fetch(&mut *target_db.conn().await).await?;
             assert_eq!(final_types.len(), 3);
 
             // Check that we have types in all schemas

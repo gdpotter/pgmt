@@ -52,14 +52,14 @@ impl CommentTarget for TriggerIdentifier {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerOperation {
     Create {
-        trigger: Trigger,
+        trigger: Box<Trigger>,
     },
     Drop {
         identifier: TriggerIdentifier,
     },
     Replace {
-        old_trigger: Trigger,
-        new_trigger: Trigger,
+        old_trigger: Box<Trigger>,
+        new_trigger: Box<Trigger>,
     },
     Comment(CommentOperation<TriggerIdentifier>),
 }
@@ -147,6 +147,7 @@ mod tests {
             name: "update_timestamp".to_string(),
             function_schema: "public".to_string(),
             function_name: "set_updated_at".to_string(),
+            function_args: "".to_string(),
             comment: None,
             depends_on: vec![
                 DbObjectId::Table {
@@ -156,6 +157,7 @@ mod tests {
                 DbObjectId::Function {
                     schema: "public".to_string(),
                     name: "set_updated_at".to_string(),
+                    arguments: "".to_string(),
                 },
             ],
             definition: "CREATE TRIGGER update_timestamp BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()".to_string(),
@@ -234,7 +236,7 @@ mod tests {
     fn test_render_create_operation() {
         let trigger = create_test_trigger();
         let operation = TriggerOperation::Create {
-            trigger: trigger.clone(),
+            trigger: Box::new(trigger.clone()),
         };
 
         let rendered_list = operation.to_sql();
@@ -267,8 +269,8 @@ mod tests {
         new_trigger.definition = "CREATE TRIGGER update_timestamp AFTER UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()".to_string();
 
         let operation = TriggerOperation::Replace {
-            old_trigger,
-            new_trigger,
+            old_trigger: Box::new(old_trigger),
+            new_trigger: Box::new(new_trigger),
         };
 
         let rendered_list = operation.to_sql();

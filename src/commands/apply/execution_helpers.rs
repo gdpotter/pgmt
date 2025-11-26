@@ -1,6 +1,7 @@
 use anyhow::Result;
 use console::style;
 use sqlx::PgPool;
+use tracing::info;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
@@ -18,8 +19,11 @@ pub async fn apply_all_rendered_steps(
     verbose: bool,
 ) -> Result<()> {
     let executor = ApplyStepExecutor::new(dev_pool.clone(), verbose, true, false); // show_safety=true, dry_run=false
+    let total = rendered.len();
+    info!("Executing {} migration steps...", total);
 
     for (i, step) in rendered.iter().enumerate() {
+        info!("Applying step {}/{}...", i + 1, total);
         if verbose {
             println!("{}", style(&step.sql).dim());
         }
@@ -101,9 +105,13 @@ pub async fn apply_safe_rendered_steps(
         }
 
         let executor = ApplyStepExecutor::new(dev_pool.clone(), verbose, true, false); // show_safety=true, dry_run=false
+        info!("Executing {} safe migration steps...", safe_count);
 
+        let mut applied = 0;
         for (i, step) in rendered.iter().enumerate() {
             if step.safety == Safety::Safe {
+                applied += 1;
+                info!("Applying safe step {}/{}...", applied, safe_count);
                 if verbose {
                     println!("{}", style(&step.sql).dim());
                 }

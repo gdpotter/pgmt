@@ -1,6 +1,7 @@
 use super::comments::Commentable;
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct Schema {
@@ -16,7 +17,8 @@ impl Commentable for Schema {
     }
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Schema>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Schema>> {
+    info!("Fetching schemas...");
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -30,7 +32,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Schema>> {
         ORDER BY n.nspname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let schemas: Vec<Schema> = rows

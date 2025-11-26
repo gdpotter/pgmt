@@ -4,9 +4,10 @@ use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::is_system_schema;
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewColumn {
@@ -76,8 +77,9 @@ fn normalize_type(data_type: &str, udt_name: &str) -> String {
 }
 
 /// Fetch all non-system views, then populate `depends_on` via pg_depend.
-pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
     // 1. Fetch view OIDs + definitions
+    info!("Fetching views...");
     let raw: Vec<RawView> = sqlx::query_as!(
         RawView,
         r#"
@@ -102,9 +104,10 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
         ORDER BY n.nspname, c.relname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
+    info!("Fetching view columns...");
     let column_rows = sqlx::query!(
         r#"
         SELECT
@@ -124,7 +127,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
         ORDER BY ordinal_position
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut columns_by_view: HashMap<(String, String), Vec<ViewColumn>> = HashMap::new();
@@ -164,6 +167,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
         })
         .collect();
 
+    info!("Fetching view dependencies...");
     let deps = sqlx::query!(
         r#"
         SELECT
@@ -177,29 +181,22 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
           cls_n.nspname                 AS "cls_schema",
           cls.relname                   AS "cls_name",
 
-          -- Type reference
-          typ.typname                   AS "typ_name",
-          typ_n.nspname                 AS "typ_schema",
-          (
-            SELECT e.extname
-            FROM pg_depend typ_dep
-            JOIN pg_extension e ON typ_dep.refobjid = e.oid
-            WHERE typ_dep.objid = typ.oid
-            AND typ_dep.deptype = 'e'
-            LIMIT 1
-          ) AS "typ_extension_name?",
+          -- Type reference (resolve array element type)
+          CASE
+            WHEN typ.typelem != 0 THEN elem_typ.typname
+            ELSE typ.typname
+          END AS "typ_name",
+          CASE
+            WHEN typ.typelem != 0 THEN elem_typ_n.nspname
+            ELSE typ_n.nspname
+          END AS "typ_schema",
+          ext_types.extname AS "typ_extension_name?",
 
           -- Function reference
           proc.proname                  AS "proc_name",
           proc_n.nspname                AS "proc_schema",
-          (
-            SELECT e.extname
-            FROM pg_depend proc_dep
-            JOIN pg_extension e ON proc_dep.refobjid = e.oid
-            WHERE proc_dep.objid = proc.oid
-            AND proc_dep.deptype = 'e'
-            LIMIT 1
-          ) AS "proc_extension_name?"
+          pg_catalog.pg_get_function_identity_arguments(proc.oid) AS "proc_args?",
+          ext_procs.extname AS "proc_extension_name?"
 
         FROM pg_rewrite r
         JOIN pg_depend d
@@ -222,6 +219,21 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
         LEFT JOIN pg_namespace typ_n
           ON typ.typnamespace = typ_n.oid
 
+        -- Element type for array types
+        LEFT JOIN pg_type elem_typ
+          ON typ.typelem = elem_typ.oid AND typ.typelem != 0
+
+        LEFT JOIN pg_namespace elem_typ_n
+          ON elem_typ.typnamespace = elem_typ_n.oid
+
+        -- Extension type lookup: compute once as derived table, then hash join
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS type_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(typ.typelem, 0::oid), typ.oid)
+
         -- Function reference
         LEFT JOIN pg_proc proc
           ON d.refclassid = 'pg_proc'::regclass::oid
@@ -230,11 +242,19 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
         LEFT JOIN pg_namespace proc_n
           ON proc.pronamespace = proc_n.oid
 
+        -- Extension function lookup: compute once as derived table, then hash join
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS proc_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_procs ON ext_procs.proc_oid = proc.oid
+
         WHERE r.ev_class = ANY($1)
         "#,
         &view_oids,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // 3. Map each dependency row into the corresponding View.depends_on
@@ -263,20 +283,18 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
             }
 
             // Custom type or extension type?
-            if let (Some(name), Some(ns)) = (d.typ_name, d.typ_schema) {
-                if !is_system_schema(&ns) {
+            // Type name is already resolved to element type for arrays via SQL
+            if let (Some(name), Some(ns)) = (&d.typ_name, &d.typ_schema) {
+                if !is_system_schema(ns) {
                     // If type is from an extension, depend on the extension instead
-                    if let Some(ext_name) = d.typ_extension_name {
-                        v.push(DbObjectId::Extension { name: ext_name });
+                    if let Some(ext_name) = &d.typ_extension_name {
+                        v.push(DbObjectId::Extension {
+                            name: ext_name.clone(),
+                        });
                     } else {
-                        let base_type_name = if name.starts_with('_') {
-                            name.trim_start_matches('_').to_string()
-                        } else {
-                            name
-                        };
                         v.push(DbObjectId::Type {
-                            schema: ns,
-                            name: base_type_name,
+                            schema: ns.to_string(),
+                            name: name.to_string(),
                         });
                     }
                 }
@@ -284,16 +302,19 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<View>> {
             }
 
             // Function or extension function?
-            if let (Some(name), Some(ns)) = (d.proc_name, d.proc_schema)
-                && !is_system_schema(&ns)
+            if let (Some(name), Some(ns), Some(args)) = (&d.proc_name, &d.proc_schema, &d.proc_args)
+                && !is_system_schema(ns)
             {
                 // If function is from an extension, depend on the extension instead
-                if let Some(ext_name) = d.proc_extension_name {
-                    v.push(DbObjectId::Extension { name: ext_name });
+                if let Some(ext_name) = &d.proc_extension_name {
+                    v.push(DbObjectId::Extension {
+                        name: ext_name.clone(),
+                    });
                 } else {
                     v.push(DbObjectId::Function {
                         schema: ns.to_string(),
                         name: name.to_string(),
+                        arguments: args.to_string(),
                     });
                 }
             }

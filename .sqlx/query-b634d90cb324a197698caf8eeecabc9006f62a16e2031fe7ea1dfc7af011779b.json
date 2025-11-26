@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            -- Schemas (excluding system schemas)\n            SELECT 'schema' AS \"type!\", NULL AS \"schema?\", nspname AS \"name!\", NULL AS \"tbl?\", NULL AS \"args?\"\n            FROM pg_namespace\n            WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')\n\n            UNION ALL\n\n            -- Tables\n            SELECT 'table', n.nspname, c.relname, NULL, NULL\n            FROM pg_class c\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE c.relkind = 'r'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Views\n            SELECT 'view', n.nspname, c.relname, NULL, NULL\n            FROM pg_class c\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE c.relkind = 'v'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Materialized views (tracked as views)\n            SELECT 'view', n.nspname, c.relname, NULL, NULL\n            FROM pg_class c\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE c.relkind = 'm'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Sequences\n            SELECT 'sequence', n.nspname, c.relname, NULL, NULL\n            FROM pg_class c\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE c.relkind = 'S'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Indexes (excluding constraint-backing indexes, which are tracked via constraints)\n            SELECT 'index', n.nspname, c.relname, NULL, NULL\n            FROM pg_class c\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE c.relkind = 'i'\n              AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = c.oid)\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Functions and procedures\n            SELECT 'function', n.nspname, p.proname, NULL, NULL\n            FROM pg_proc p\n            JOIN pg_namespace n ON p.pronamespace = n.oid\n            WHERE p.prokind IN ('f', 'p')\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema')\n\n            UNION ALL\n\n            -- Aggregates (need argument signature for identity)\n            SELECT 'aggregate', n.nspname, p.proname, NULL, pg_get_function_identity_arguments(p.oid)\n            FROM pg_proc p\n            JOIN pg_namespace n ON p.pronamespace = n.oid\n            WHERE p.prokind = 'a'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema')\n\n            UNION ALL\n\n            -- Custom types (enum and composite)\n            SELECT 'type', n.nspname, t.typname, NULL, NULL\n            FROM pg_type t\n            JOIN pg_namespace n ON t.typnamespace = n.oid\n            WHERE t.typtype IN ('e', 'c')\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema')\n\n            UNION ALL\n\n            -- Domains\n            SELECT 'domain', n.nspname, t.typname, NULL, NULL\n            FROM pg_type t\n            JOIN pg_namespace n ON t.typnamespace = n.oid\n            WHERE t.typtype = 'd'\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema')\n\n            UNION ALL\n\n            -- Constraints (unique, foreign key, check, exclusion - primary keys handled by table)\n            SELECT 'constraint', n.nspname, co.conname, cl.relname, NULL\n            FROM pg_constraint co\n            JOIN pg_class cl ON co.conrelid = cl.oid\n            JOIN pg_namespace n ON cl.relnamespace = n.oid\n            WHERE co.contype IN ('u', 'f', 'c', 'x')\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Triggers\n            SELECT 'trigger', n.nspname, t.tgname, c.relname, NULL\n            FROM pg_trigger t\n            JOIN pg_class c ON t.tgrelid = c.oid\n            JOIN pg_namespace n ON c.relnamespace = n.oid\n            WHERE NOT t.tgisinternal\n              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n\n            UNION ALL\n\n            -- Extensions\n            SELECT 'extension', NULL, extname, NULL, NULL\n            FROM pg_extension\n            WHERE extname NOT IN ('plpgsql')\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "tbl?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "args?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b634d90cb324a197698caf8eeecabc9006f62a16e2031fe7ea1dfc7af011779b"
+}

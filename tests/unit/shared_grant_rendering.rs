@@ -217,6 +217,7 @@ fn test_shared_grant_rendering_function_with_keyword() -> Result<()> {
         object: ObjectType::Function {
             schema: "public".to_string(),
             name: "calculate_total".to_string(),
+            arguments: "integer".to_string(),
         },
         grantee: GranteeType::Role("app_user".to_string()),
         privileges: vec!["EXECUTE".to_string()],
@@ -240,7 +241,7 @@ fn test_shared_grant_rendering_function_with_keyword() -> Result<()> {
     assert!(schema_generator_sql.contains("FUNCTION"));
     assert_eq!(
         schema_generator_sql,
-        "GRANT EXECUTE ON FUNCTION \"public\".\"calculate_total\" TO \"app_user\";"
+        "GRANT EXECUTE ON FUNCTION \"public\".\"calculate_total\"(integer) TO \"app_user\";"
     );
 
     Ok(())

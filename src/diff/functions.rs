@@ -98,6 +98,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             let mut steps = vec![MigrationStep::Function(FunctionOperation::Create {
                 schema: n.schema.clone(),
                 name: n.name.clone(),
+                arguments: n.arguments.clone(),
                 kind: kind_str.to_string(),
                 parameters: params,
                 returns,
@@ -111,6 +112,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 FunctionIdentifier {
                     schema: n.schema.clone(),
                     name: n.name.clone(),
+                    arguments: n.arguments.clone(),
                 },
             ) {
                 steps.push(MigrationStep::Function(FunctionOperation::Comment(
@@ -135,6 +137,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             vec![MigrationStep::Function(FunctionOperation::Drop {
                 schema: o.schema.clone(),
                 name: o.name.clone(),
+                arguments: o.arguments.clone(),
                 kind: kind_str.to_string(),
                 parameter_types: param_types.join(", "),
             })]
@@ -170,6 +173,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 let mut steps = vec![MigrationStep::Function(FunctionOperation::Replace {
                     schema: n.schema.clone(),
                     name: n.name.clone(),
+                    arguments: n.arguments.clone(),
                     kind: kind_str.to_string(),
                     parameters: params,
                     returns,
@@ -182,6 +186,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                     comment_utils::handle_comment_diff(Some(o), Some(n), || FunctionIdentifier {
                         schema: n.schema.clone(),
                         name: n.name.clone(),
+                        arguments: n.arguments.clone(),
                     });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Function(FunctionOperation::Comment(
@@ -196,6 +201,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                     comment_utils::handle_comment_diff(Some(o), Some(n), || FunctionIdentifier {
                         schema: n.schema.clone(),
                         name: n.name.clone(),
+                        arguments: n.arguments.clone(),
                     });
                 let mut steps = Vec::new();
                 for comment_op in comment_ops {

@@ -10,7 +10,7 @@ async fn test_fetch_enum_type() {
         db.execute("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending')")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -20,7 +20,6 @@ async fn test_fetch_enum_type() {
         assert_eq!(type_.kind, TypeKind::Enum);
         assert_eq!(type_.enum_values.len(), 3);
         assert!(type_.composite_attributes.is_empty());
-        assert!(type_.base_type.is_none());
 
         // Check enum values in order
         assert_eq!(type_.enum_values[0].name, "active");
@@ -52,7 +51,7 @@ async fn test_fetch_composite_type() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -62,7 +61,6 @@ async fn test_fetch_composite_type() {
         assert_eq!(type_.kind, TypeKind::Composite);
         assert!(type_.enum_values.is_empty());
         assert_eq!(type_.composite_attributes.len(), 4);
-        assert!(type_.base_type.is_none());
 
         // Check composite attributes in order
         assert_eq!(type_.composite_attributes[0].name, "street");
@@ -91,81 +89,7 @@ async fn test_fetch_composite_type() {
     .await;
 }
 
-#[tokio::test]
-async fn test_fetch_domain_type() {
-    with_test_db(async |db| {
-        // Create a domain type
-        db.execute(
-            "CREATE DOMAIN email AS TEXT
-             CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')",
-        )
-        .await;
-
-        let types = fetch(db.pool()).await.unwrap();
-
-        assert_eq!(types.len(), 1);
-        let type_ = &types[0];
-
-        assert_eq!(type_.schema, "public");
-        assert_eq!(type_.name, "email");
-        assert_eq!(type_.kind, TypeKind::Domain);
-        assert!(type_.enum_values.is_empty());
-        assert!(type_.composite_attributes.is_empty());
-        assert_eq!(type_.base_type, Some("text".to_string()));
-
-        // Check dependencies - should depend only on schema (not built-in types)
-        assert_eq!(
-            type_.depends_on,
-            vec![DbObjectId::Schema {
-                name: "public".to_string()
-            }]
-        );
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn test_fetch_domain_with_custom_base_type() {
-    with_test_db(async |db| {
-        // Create base enum first
-        db.execute("CREATE TYPE status AS ENUM ('active', 'inactive')")
-            .await;
-
-        // Create domain based on custom type
-        db.execute(
-            "CREATE DOMAIN active_status AS status
-             CHECK (VALUE = 'active')",
-        )
-        .await;
-
-        let mut types = fetch(db.pool()).await.unwrap();
-        types.sort_by(|a, b| a.name.cmp(&b.name));
-
-        assert_eq!(types.len(), 2);
-
-        // Check the enum
-        let enum_type = &types[1]; // "status"
-        assert_eq!(enum_type.name, "status");
-        assert_eq!(enum_type.kind, TypeKind::Enum);
-
-        // Check the domain
-        let domain_type = &types[0]; // "active_status"
-        assert_eq!(domain_type.name, "active_status");
-        assert_eq!(domain_type.kind, TypeKind::Domain);
-        assert_eq!(domain_type.base_type, Some("public.status".to_string()));
-
-        // Check dependencies - domain should depend on the enum type
-        assert_eq!(domain_type.depends_on().len(), 2);
-        assert!(domain_type.depends_on().contains(&DbObjectId::Schema {
-            name: "public".to_string()
-        }));
-        assert!(domain_type.depends_on().contains(&DbObjectId::Type {
-            schema: "public".to_string(),
-            name: "status".to_string()
-        }));
-    })
-    .await;
-}
+// Domain tests have been moved to tests/catalog/domains.rs
 
 #[tokio::test]
 async fn test_fetch_multiple_types_different_schemas() {
@@ -189,7 +113,7 @@ async fn test_fetch_multiple_types_different_schemas() {
         )
         .await;
 
-        let mut types = fetch(db.pool()).await.unwrap();
+        let mut types = fetch(&mut *db.conn().await).await.unwrap();
         types.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
         assert_eq!(types.len(), 3);
@@ -234,7 +158,7 @@ async fn test_type_id_and_dependencies() {
         db.execute("CREATE TYPE test_schema.test_type AS ENUM ('value1', 'value2')")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -268,7 +192,7 @@ async fn test_enum_values_ordering() {
         db.execute("CREATE TYPE priority AS ENUM ('low', 'medium', 'high', 'critical')")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -303,7 +227,7 @@ async fn test_composite_attributes_ordering() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -338,7 +262,7 @@ async fn test_exclude_table_row_types() {
         db.execute("CREATE TYPE status AS ENUM ('active', 'inactive')")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         // Should only find the standalone enum, not the table row type
         assert_eq!(types.len(), 1);
@@ -360,7 +284,7 @@ async fn test_fetch_range_type() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -370,7 +294,6 @@ async fn test_fetch_range_type() {
         assert_eq!(type_.kind, TypeKind::Range);
         assert!(type_.enum_values.is_empty());
         assert!(type_.composite_attributes.is_empty());
-        assert!(type_.base_type.is_none()); // Range types don't have base_type like domains
 
         // Check dependencies
         assert_eq!(
@@ -392,7 +315,7 @@ async fn test_fetch_enum_type_with_comment() {
         db.execute("COMMENT ON TYPE priority IS 'Task priority levels'")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -405,30 +328,7 @@ async fn test_fetch_enum_type_with_comment() {
     .await;
 }
 
-#[tokio::test]
-async fn test_fetch_domain_type_with_comment() {
-    with_test_db(async |db| {
-        // Create domain type with comment
-        db.execute("CREATE DOMAIN email_address AS TEXT CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')")
-            .await;
-        db.execute("COMMENT ON TYPE email_address IS 'Valid email address domain'")
-            .await;
-
-        let types = fetch(db.pool()).await.unwrap();
-
-        assert_eq!(types.len(), 1);
-        let type_ = &types[0];
-
-        assert_eq!(type_.schema, "public");
-        assert_eq!(type_.name, "email_address");
-        assert_eq!(type_.kind, TypeKind::Domain);
-        assert_eq!(
-            type_.comment,
-            Some("Valid email address domain".to_string())
-        );
-    })
-    .await;
-}
+// test_fetch_domain_type_with_comment has been moved to tests/catalog/domains.rs
 
 #[tokio::test]
 async fn test_fetch_composite_type_with_comment() {
@@ -446,7 +346,7 @@ async fn test_fetch_composite_type_with_comment() {
         db.execute("COMMENT ON TYPE address IS 'Postal address structure'")
             .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(types.len(), 1);
         let type_ = &types[0];
@@ -475,7 +375,7 @@ async fn test_composite_type_custom_dependency() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         // Sort by name for predictable order
         let mut types = types;
@@ -519,7 +419,7 @@ async fn test_composite_type_custom_array_dependency() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         // Sort by name for predictable order
         let mut types = types;
@@ -576,7 +476,7 @@ async fn test_composite_type_cross_schema_dependency() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         // Sort by schema and name for predictable order
         let mut types = types;
@@ -637,7 +537,7 @@ async fn test_composite_type_multilevel_dependency() {
         )
         .await;
 
-        let types = fetch(db.pool()).await.unwrap();
+        let types = fetch(&mut *db.conn().await).await.unwrap();
 
         // Sort by name for predictable order
         let mut types = types;

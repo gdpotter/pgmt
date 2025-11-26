@@ -13,7 +13,7 @@ async fn test_fetch_basic_sequence() -> Result<()> {
         )
         .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -44,7 +44,7 @@ async fn test_fetch_sequence_defaults() -> Result<()> {
     with_test_db(async |db| {
         db.execute("CREATE SEQUENCE simple_seq").await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -70,7 +70,7 @@ async fn test_fetch_cycling_sequence() -> Result<()> {
         db.execute("CREATE SEQUENCE cycling_seq MINVALUE 1 MAXVALUE 10 CYCLE")
             .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -93,7 +93,7 @@ async fn test_fetch_serial_sequence() -> Result<()> {
         db.execute("CREATE TABLE app.users (id SERIAL PRIMARY KEY, name TEXT)")
             .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -119,7 +119,7 @@ async fn test_fetch_bigserial_sequence() -> Result<()> {
         db.execute("CREATE TABLE products (id BIGSERIAL PRIMARY KEY, name TEXT)")
             .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -143,7 +143,7 @@ async fn test_fetch_multiple_sequences_different_schemas() -> Result<()> {
         db.execute("CREATE SEQUENCE schema_b.seq_2").await;
         db.execute("CREATE SEQUENCE public.seq_3").await;
 
-        let mut sequences = fetch(db.pool()).await.unwrap();
+        let mut sequences = fetch(&mut *db.conn().await).await.unwrap();
         sequences.sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
         assert_eq!(sequences.len(), 3);
@@ -169,7 +169,7 @@ async fn test_sequence_id_and_dependencies() -> Result<()> {
         db.execute("CREATE SEQUENCE test_schema.test_sequence")
             .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let seq = &sequences[0];
@@ -206,7 +206,7 @@ async fn test_fetch_sequence_ordering() -> Result<()> {
         db.execute("CREATE SEQUENCE alpha_seq").await;
         db.execute("CREATE SEQUENCE beta_seq").await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 3);
 
@@ -226,7 +226,7 @@ async fn test_exclude_system_sequences() -> Result<()> {
         // Create user sequence
         db.execute("CREATE SEQUENCE user_sequence").await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         // Should only have our user sequence, no system sequences
         assert_eq!(sequences.len(), 1);
@@ -248,7 +248,7 @@ async fn test_exclude_system_sequences() -> Result<()> {
 async fn test_fetch_empty_sequences() -> Result<()> {
     with_test_db(async |db| {
         // Don't create any sequences
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         // Should return empty vector, not an error
         assert_eq!(sequences.len(), 0);
@@ -267,7 +267,7 @@ async fn test_fetch_sequence_with_comment() -> Result<()> {
         db.execute("COMMENT ON SEQUENCE user_id_seq IS 'User ID sequence starting at 1000'")
             .await;
 
-        let sequences = fetch(db.pool()).await.unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
 
         assert_eq!(sequences.len(), 1);
         let sequence = &sequences[0];

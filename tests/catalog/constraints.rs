@@ -10,7 +10,7 @@ async fn test_fetch_unique_constraint() -> Result<()> {
         db.execute("CREATE TABLE users (id SERIAL, email VARCHAR(100) UNIQUE)")
             .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(constraints.len(), 1); // Only the unique constraint, SERIAL creates no constraint
 
         let constraint = &constraints[0];
@@ -37,7 +37,7 @@ async fn test_fetch_foreign_key_constraint() -> Result<()> {
             .await;
         db.execute("CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE)").await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
 
         let fk_constraint = constraints
             .iter()
@@ -81,7 +81,7 @@ async fn test_fetch_check_constraint() -> Result<()> {
         db.execute("CREATE TABLE products (id SERIAL, price DECIMAL CHECK (price > 0))")
             .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(constraints.len(), 1);
 
         let constraint = &constraints[0];
@@ -120,7 +120,7 @@ async fn test_fetch_exclusion_constraint() -> Result<()> {
         )
         .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(constraints.len(), 1);
 
         let constraint = &constraints[0];
@@ -165,7 +165,7 @@ async fn test_fetch_constraint_with_comment() -> Result<()> {
         )
         .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(constraints.len(), 1);
 
         let constraint = &constraints[0];
@@ -196,7 +196,7 @@ async fn test_fetch_multiple_column_constraints() -> Result<()> {
         )
         .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(constraints.len(), 1); // Only UNIQUE (PRIMARY KEY handled by table catalog)
 
         // Find the unique constraint
@@ -227,7 +227,7 @@ async fn test_fetch_constraint_dependencies() -> Result<()> {
         db.execute("CREATE TABLE orders (id SERIAL, user_id INTEGER REFERENCES users(id))")
             .await;
 
-        let constraints = fetch(db.pool()).await.unwrap();
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
 
         let fk_constraint = constraints
             .iter()

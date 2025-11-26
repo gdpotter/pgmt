@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            tn.nspname AS table_schema,\n            c.relname AS table_name,\n            t.tgname AS trigger_name,\n\n            -- Function details\n            p.proname AS function_name,\n            fn.nspname AS function_schema,\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"function_args!\",\n\n            -- Comments\n            d.description AS \"comment?\",\n\n            -- Complete trigger definition (authoritative source)\n            pg_get_triggerdef(t.oid) AS \"definition!\"\n\n        FROM pg_trigger t\n        JOIN pg_class c ON t.tgrelid = c.oid\n        JOIN pg_namespace tn ON c.relnamespace = tn.oid\n        JOIN pg_proc p ON t.tgfoid = p.oid\n        JOIN pg_namespace fn ON p.pronamespace = fn.oid\n        LEFT JOIN pg_description d ON d.objoid = t.oid AND d.objsubid = 0\n\n        WHERE tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND NOT t.tgisinternal  -- Exclude system-generated triggers\n          AND c.relkind IN ('r', 'v', 'm')  -- Regular tables, views, materialized views\n\n        ORDER BY tn.nspname, c.relname, t.tgname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "table_schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "function_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 4,
+        "name": "function_schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "function_args!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "comment?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "definition!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "78f77d4141fd538abcc50726f29386c584004bbf9e80507427a35baf9f88eeec"
+}

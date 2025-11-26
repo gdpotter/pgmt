@@ -1,5 +1,6 @@
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use crate::catalog::{DependsOn, comments::Commentable, id::DbObjectId};
 
@@ -11,6 +12,7 @@ pub struct Trigger {
     pub name: String,
     pub function_schema: String,
     pub function_name: String,
+    pub function_args: String,
     pub comment: Option<String>,
     pub depends_on: Vec<DbObjectId>,
 
@@ -40,7 +42,8 @@ impl Commentable for Trigger {
 }
 
 /// Fetch all triggers from the database
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Trigger>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Trigger>> {
+    info!("Fetching triggers...");
     let triggers = sqlx::query!(
         r#"
         SELECT
@@ -51,6 +54,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Trigger>> {
             -- Function details
             p.proname AS function_name,
             fn.nspname AS function_schema,
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "function_args!",
 
             -- Comments
             d.description AS "comment?",
@@ -72,7 +76,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Trigger>> {
         ORDER BY tn.nspname, c.relname, t.tgname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -89,6 +93,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Trigger>> {
             DbObjectId::Function {
                 schema: row.function_schema.clone(),
                 name: row.function_name.clone(),
+                arguments: row.function_args.clone(),
             },
         ];
 
@@ -98,6 +103,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Trigger>> {
             name: row.trigger_name,
             function_schema: row.function_schema,
             function_name: row.function_name,
+            function_args: row.function_args,
             comment: row.comment,
             depends_on,
             definition: row.definition,

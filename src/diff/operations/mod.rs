@@ -6,8 +6,10 @@
 use crate::catalog::id::DbObjectId;
 use crate::render::RenderedSql;
 
+pub use aggregate::*;
 pub use comments::*;
 pub use constraint::*;
+pub use domain::*;
 pub use extension::*;
 pub use function::*;
 pub use grant::*;
@@ -19,8 +21,10 @@ pub use trigger::*;
 pub use types::*;
 pub use view::*;
 
+pub mod aggregate;
 pub mod comments;
 pub mod constraint;
+pub mod domain;
 pub mod extension;
 pub mod function;
 pub mod grant;
@@ -39,8 +43,10 @@ pub enum MigrationStep {
     Table(TableOperation),
     View(ViewOperation),
     Type(TypeOperation),
+    Domain(DomainOperation),
     Sequence(SequenceOperation),
     Function(FunctionOperation),
+    Aggregate(AggregateOperation),
     Index(IndexOperation),
     Constraint(ConstraintOperation),
     Trigger(TriggerOperation),
@@ -64,8 +70,10 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Table(op) => op.to_sql(),
             MigrationStep::View(op) => op.to_sql(),
             MigrationStep::Type(op) => op.to_sql(),
+            MigrationStep::Domain(op) => op.to_sql(),
             MigrationStep::Sequence(op) => op.to_sql(),
             MigrationStep::Function(op) => op.to_sql(),
+            MigrationStep::Aggregate(op) => op.to_sql(),
             MigrationStep::Index(op) => op.to_sql(),
             MigrationStep::Constraint(op) => op.to_sql(),
             MigrationStep::Trigger(op) => op.to_sql(),
@@ -80,8 +88,10 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Table(op) => op.db_object_id(),
             MigrationStep::View(op) => op.db_object_id(),
             MigrationStep::Type(op) => op.db_object_id(),
+            MigrationStep::Domain(op) => op.db_object_id(),
             MigrationStep::Sequence(op) => op.db_object_id(),
             MigrationStep::Function(op) => op.db_object_id(),
+            MigrationStep::Aggregate(op) => op.db_object_id(),
             MigrationStep::Index(op) => op.db_object_id(),
             MigrationStep::Constraint(op) => op.db_object_id(),
             MigrationStep::Trigger(op) => op.db_object_id(),
@@ -96,8 +106,10 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Table(op) => op.is_destructive(),
             MigrationStep::View(op) => op.is_destructive(),
             MigrationStep::Type(op) => op.is_destructive(),
+            MigrationStep::Domain(op) => op.is_destructive(),
             MigrationStep::Sequence(op) => op.is_destructive(),
             MigrationStep::Function(op) => op.is_destructive(),
+            MigrationStep::Aggregate(op) => op.is_destructive(),
             MigrationStep::Index(op) => op.is_destructive(),
             MigrationStep::Constraint(op) => op.is_destructive(),
             MigrationStep::Trigger(op) => op.is_destructive(),
@@ -127,8 +139,10 @@ impl MigrationStep {
                 | MigrationStep::Table(TableOperation::Create { .. })
                 | MigrationStep::View(ViewOperation::Create { .. })
                 | MigrationStep::Type(TypeOperation::Create { .. })
+                | MigrationStep::Domain(DomainOperation::Create { .. })
                 | MigrationStep::Sequence(SequenceOperation::Create { .. })
                 | MigrationStep::Function(FunctionOperation::Create { .. })
+                | MigrationStep::Aggregate(AggregateOperation::Create { .. })
                 | MigrationStep::Index(IndexOperation::Create { .. })
                 | MigrationStep::Constraint(ConstraintOperation::Create(_))
                 | MigrationStep::Trigger(TriggerOperation::Create { .. })

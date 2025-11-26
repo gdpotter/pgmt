@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sqlx::PgPool;
 use std::path::Path;
@@ -43,7 +43,7 @@ pub async fn cmd_apply_watch_impl(
     println!("📊 Connecting to development database...");
     let dev_pool = PgPool::connect(&config.databases.dev)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to development database: {}", e))?;
+        .context("Failed to connect to development database")?;
 
     println!("🛡️  Setting up shadow database...");
     let shadow_url = config.databases.shadow.get_connection_string().await?;
@@ -187,13 +187,10 @@ async fn perform_single_apply(
         clean_before_apply: false, // Already cleaned above
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
-    let processed_schema = processor.process_schema_directory(&schema_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to process schema to shadow database: {}\n\nThis usually indicates a syntax error in your schema files.", e))?;
+    let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     // Analyze differences
-    let old_catalog = Catalog::load(dev_pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to load catalog from development database: {}", e))?;
+    let old_catalog = Catalog::load(dev_pool).await?;
     let new_catalog = processed_schema.with_file_dependencies_applied();
 
     // Apply object filtering

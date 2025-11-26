@@ -2,7 +2,9 @@ use crate::catalog::comments::Commentable;
 use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::catalog::utils::DependencyBuilder;
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct Sequence {
@@ -44,7 +46,8 @@ impl Commentable for Sequence {
     }
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Sequence>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Sequence>> {
+    info!("Fetching sequences...");
     let rows = sqlx::query(
         r#"
         SELECT
@@ -86,7 +89,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Sequence>> {
         ORDER BY n.nspname, c.relname
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut sequences = Vec::new();

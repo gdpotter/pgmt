@@ -31,9 +31,10 @@ use crate::config::{Config, ObjectFilter};
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use crate::diff::operations::SqlRenderer;
 use crate::diff::{cascade, diff_all, diff_order};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::path::Path;
+use tracing::info;
 
 /// Main apply command entry point
 pub async fn cmd_apply(
@@ -53,12 +54,14 @@ pub async fn cmd_apply(
     println!("📊 Connecting to development database...");
     let dev_pool = PgPool::connect(&config.databases.dev)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to development database: {}", e))?;
+        .context("Failed to connect to development database")?;
+    info!("Connected to development database");
 
     println!("🛡️  Setting up shadow database...");
     let shadow_url = config.databases.shadow.get_connection_string().await?;
 
     let shadow_pool = connect_with_retry(&shadow_url).await?;
+    info!("Shadow database ready");
 
     println!("🔄 Processing schema to shadow database...");
     let schema_dir = root_dir.join(&config.directories.schema);
@@ -75,23 +78,28 @@ pub async fn cmd_apply(
         clean_before_apply: false, // Already cleaned above
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
-    let processed_schema = processor.process_schema_directory(&schema_dir).await
-        .map_err(|e| anyhow::anyhow!("Failed to process schema to shadow database: {}\n\nThis usually indicates a syntax error in your schema files.", e))?;
+    info!("Processing schema files...");
+    let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     println!("📊 Analyzing database catalogs...");
+    info!("Loading development catalog...");
     let old_catalog = Catalog::load(&dev_pool)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to load catalog from development database: {}", e))?;
+        .context("Failed to load catalog from development database")?;
+    info!("Loaded development catalog");
     let new_catalog = processed_schema.with_file_dependencies_applied();
+    info!("Loaded target catalog");
 
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
     let old = filter.filter_catalog(old_catalog);
     let new = filter.filter_catalog(new_catalog);
 
     println!("🔍 Computing schema differences...");
+    info!("Computing schema differences...");
     let raw_steps = diff_all(&old, &new);
     let full_steps = cascade::expand(raw_steps, &old, &new);
     let ordered = diff_order(full_steps, &old, &new)?;
+    info!("Schema differences computed");
 
     if ordered.is_empty() {
         println!("✅ No schema changes detected - database is up to date");
@@ -125,12 +133,7 @@ pub async fn cmd_apply(
 
                 let reprocessor =
                     SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
-                let reprocessed_schema = reprocessor
-                    .process_schema_directory(&schema_dir)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to re-process schema to shadow database: {}", e)
-                    })?;
+                let reprocessed_schema = reprocessor.process_schema_directory(&schema_dir).await?;
 
                 println!("📊 Re-analyzing database catalogs...");
                 let new_old_catalog = Catalog::load(&dev_pool).await?;

@@ -36,13 +36,11 @@ pub async fn import_from_directory(
     let executor_config = SqlExecutorConfig {
         initialize_session: true,
         verbose: true,
-        continue_on_error: true, // Best effort for imports
     };
 
-    // Execute each file
-    for file in sql_files {
-        println!("   📄 Executing: {}", file.display());
-        execute_sql_file(&pool, &file, &executor_config).await?;
+    // Execute each file - errors bubble up with line numbers already formatted
+    for file in &sql_files {
+        execute_sql_file(&pool, file, &executor_config).await?;
     }
 
     // Extract catalog

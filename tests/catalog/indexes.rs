@@ -21,7 +21,7 @@ async fn test_fetch_basic_indexes() {
             .await;
         db.execute("CREATE INDEX idx_users_created_partial ON users (created_at) WHERE created_at > '2020-01-01'").await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await).await.unwrap();
 
         // 3 created indexes (excluding primary key which is filtered out)
         assert_eq!(indexes.len(), 3);
@@ -66,7 +66,9 @@ async fn test_fetch_index_with_comment() {
         db.execute("COMMENT ON INDEX idx_products_sku IS 'Index for fast SKU lookups'")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let sku_index = indexes
             .iter()
@@ -103,7 +105,9 @@ async fn test_fetch_index_with_include_columns() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let covering_index = indexes
             .iter()
@@ -137,7 +141,9 @@ async fn test_fetch_expression_index() {
         db.execute("CREATE INDEX idx_users_email_lower ON users (lower(email))")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let expr_index = indexes
             .iter()
@@ -172,7 +178,9 @@ async fn test_fetch_multicolumn_index() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let multi_index = indexes
             .iter()
@@ -205,7 +213,9 @@ async fn test_fetch_gin_index() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let gin_index = indexes
             .iter()
@@ -241,7 +251,9 @@ async fn test_fetch_index_dependencies() {
         db.execute("CREATE INDEX idx_tasks_priority ON tasks (priority_level)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let priority_index = indexes
             .iter()
@@ -278,7 +290,9 @@ async fn test_fetch_index_with_storage_parameters() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         let param_index = indexes
             .iter()
@@ -315,7 +329,9 @@ async fn test_fetch_indexes_across_schemas() {
         db.execute("CREATE INDEX idx_schema ON test_schema.schema_table (name)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         // Should have indexes from both schemas
         let public_index = indexes
@@ -352,7 +368,9 @@ async fn test_primary_key_indexes_excluded() {
         db.execute("CREATE INDEX idx_users_name ON users (name)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(db.pool()).await.unwrap();
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
 
         // Should only have 1 index: the explicit idx_users_name index.
         // The primary key index is excluded (managed as part of PRIMARY KEY constraint).
@@ -371,6 +389,49 @@ async fn test_primary_key_indexes_excluded() {
         assert!(
             name_index.is_some(),
             "Explicit index should be present in catalog"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_unique_index_with_fk_reference_not_excluded() {
+    with_test_db(async |db| {
+        // Create referenced table with compound unique index
+        db.execute(
+            "CREATE TABLE parent (
+                id SERIAL PRIMARY KEY,
+                tenant_id INT NOT NULL,
+                code VARCHAR(50) NOT NULL
+            )",
+        )
+        .await;
+        db.execute("CREATE UNIQUE INDEX idx_parent_tenant_code ON parent (tenant_id, code)")
+            .await;
+
+        // Create child table with FK referencing the unique index columns
+        db.execute(
+            "CREATE TABLE child (
+                id SERIAL PRIMARY KEY,
+                parent_tenant_id INT NOT NULL,
+                parent_code VARCHAR(50) NOT NULL,
+                CONSTRAINT fk_child_parent
+                    FOREIGN KEY (parent_tenant_id, parent_code)
+                    REFERENCES parent (tenant_id, code)
+            )",
+        )
+        .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        // The standalone unique index should NOT be excluded just because a FK references it.
+        // FKs reference indexes but don't own them - only unique/exclusion constraints own their backing index.
+        let idx = indexes.iter().find(|i| i.name == "idx_parent_tenant_code");
+        assert!(
+            idx.is_some(),
+            "Unique index should not be excluded when FK references it"
         );
     })
     .await;

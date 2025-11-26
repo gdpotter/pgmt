@@ -6,7 +6,7 @@ use pgmt::catalog::{custom_type, function, grant, index, sequence, table, view};
 async fn test_extension_functions_are_filtered() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline function count before creating extension
-        let functions_before = function::fetch(db.pool()).await?;
+        let functions_before = function::fetch(&mut *db.conn().await).await?;
         let baseline_count = functions_before.len();
 
         // Create the uuid-ossp extension which adds many functions
@@ -14,7 +14,7 @@ async fn test_extension_functions_are_filtered() -> Result<()> {
             .await;
 
         // Fetch functions after creating extension
-        let functions_after = function::fetch(db.pool()).await?;
+        let functions_after = function::fetch(&mut *db.conn().await).await?;
         let after_count = functions_after.len();
 
         // The function count should be the same - extension functions should be filtered out
@@ -45,7 +45,7 @@ async fn test_extension_functions_are_filtered() -> Result<()> {
 async fn test_extension_types_are_filtered() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline type count
-        let types_before = custom_type::fetch(db.pool()).await?;
+        let types_before = custom_type::fetch(&mut *db.conn().await).await?;
         let baseline_count = types_before.len();
 
         // Create an extension that might add types (not all extensions do)
@@ -53,7 +53,7 @@ async fn test_extension_types_are_filtered() -> Result<()> {
             .await;
 
         // Fetch types after creating extension
-        let types_after = custom_type::fetch(db.pool()).await?;
+        let types_after = custom_type::fetch(&mut *db.conn().await).await?;
         let after_count = types_after.len();
 
         // The type count should be the same - extension types should be filtered out
@@ -76,7 +76,7 @@ async fn test_user_functions_still_tracked() -> Result<()> {
             .await;
 
         // Get function count after extension
-        let functions_before_user = function::fetch(db.pool()).await?;
+        let functions_before_user = function::fetch(&mut *db.conn().await).await?;
         let before_count = functions_before_user.len();
 
         // Create a user-defined function
@@ -92,7 +92,7 @@ async fn test_user_functions_still_tracked() -> Result<()> {
         .await;
 
         // Fetch functions after creating user function
-        let functions_after_user = function::fetch(db.pool()).await?;
+        let functions_after_user = function::fetch(&mut *db.conn().await).await?;
         let after_count = functions_after_user.len();
 
         // Should have one more function now
@@ -121,26 +121,26 @@ async fn test_user_functions_still_tracked() -> Result<()> {
 async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline counts for all object types before creating extension
-        let functions_before = function::fetch(db.pool()).await?;
-        let types_before = custom_type::fetch(db.pool()).await?;
-        let tables_before = table::fetch(db.pool()).await?;
-        let views_before = view::fetch(db.pool()).await?;
-        let sequences_before = sequence::fetch(db.pool()).await?;
-        let indexes_before = index::fetch(db.pool()).await?;
-        let grants_before = grant::fetch(db.pool()).await?;
+        let functions_before = function::fetch(&mut *db.conn().await).await?;
+        let types_before = custom_type::fetch(&mut *db.conn().await).await?;
+        let tables_before = table::fetch(&mut *db.conn().await).await?;
+        let views_before = view::fetch(&mut *db.conn().await).await?;
+        let sequences_before = sequence::fetch(&mut *db.conn().await).await?;
+        let indexes_before = index::fetch(&mut *db.conn().await).await?;
+        let grants_before = grant::fetch(&mut *db.conn().await).await?;
 
         // Create the uuid-ossp extension which may create various objects
         db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
             .await;
 
         // Fetch objects after creating extension
-        let functions_after = function::fetch(db.pool()).await?;
-        let types_after = custom_type::fetch(db.pool()).await?;
-        let tables_after = table::fetch(db.pool()).await?;
-        let views_after = view::fetch(db.pool()).await?;
-        let sequences_after = sequence::fetch(db.pool()).await?;
-        let indexes_after = index::fetch(db.pool()).await?;
-        let grants_after = grant::fetch(db.pool()).await?;
+        let functions_after = function::fetch(&mut *db.conn().await).await?;
+        let types_after = custom_type::fetch(&mut *db.conn().await).await?;
+        let tables_after = table::fetch(&mut *db.conn().await).await?;
+        let views_after = view::fetch(&mut *db.conn().await).await?;
+        let sequences_after = sequence::fetch(&mut *db.conn().await).await?;
+        let indexes_after = index::fetch(&mut *db.conn().await).await?;
+        let grants_after = grant::fetch(&mut *db.conn().await).await?;
 
         // All counts should remain the same - extension objects should be filtered out
         assert_eq!(

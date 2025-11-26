@@ -1,5 +1,6 @@
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use crate::catalog::{DependsOn, comments::Commentable, id::DbObjectId};
 
@@ -33,7 +34,8 @@ impl Commentable for Extension {
 }
 
 /// Fetch all extensions from the database
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Extension>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Extension>> {
+    info!("Fetching extensions...");
     let extensions = sqlx::query!(
         r#"
         SELECT
@@ -55,7 +57,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Extension>> {
         ORDER BY e.extname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();

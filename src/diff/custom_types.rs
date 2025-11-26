@@ -35,29 +35,6 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
 
                     steps
                 }
-                TypeKind::Domain => {
-                    let base_type = n.base_type.clone().unwrap_or_else(|| "text".to_string());
-
-                    let mut steps = vec![MigrationStep::Type(TypeOperation::Create {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        kind: "DOMAIN".to_string(),
-                        definition: format!("AS {}", base_type),
-                    })];
-
-                    // Add type comment if present
-                    if let Some(comment_op) = comment_utils::handle_comment_creation(
-                        &n.comment,
-                        TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        },
-                    ) {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-
-                    steps
-                }
                 TypeKind::Composite => {
                     let attributes: Vec<String> = n
                         .composite_attributes
@@ -254,33 +231,6 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                             diff(None, Some(n))[0].clone(),
                         ]
                     }
-                }
-                TypeKind::Domain => {
-                    let old_base = o.base_type.clone().unwrap_or_else(|| "text".to_string());
-                    let new_base = n.base_type.clone().unwrap_or_else(|| "text".to_string());
-
-                    if old_base != new_base {
-                        // Base type changed - requires drop and recreate
-                        return vec![
-                            MigrationStep::Type(TypeOperation::Drop {
-                                schema: o.schema.clone(),
-                                name: o.name.clone(),
-                            }),
-                            diff(None, Some(n))[0].clone(),
-                        ];
-                    }
-
-                    // No domain base type changes, check for comment changes
-                    let comment_ops =
-                        comment_utils::handle_comment_diff(Some(o), Some(n), || TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        });
-                    let mut steps = Vec::new();
-                    for comment_op in comment_ops {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-                    steps
                 }
                 TypeKind::Composite => {
                     // For composite types, we'll check if attributes changed

@@ -8,6 +8,7 @@ pub enum FunctionOperation {
     Create {
         schema: String,
         name: String,
+        arguments: String,
         #[allow(dead_code)]
         kind: String,
         #[allow(dead_code)]
@@ -21,6 +22,7 @@ pub enum FunctionOperation {
     Replace {
         schema: String,
         name: String,
+        arguments: String,
         #[allow(dead_code)]
         kind: String,
         #[allow(dead_code)]
@@ -34,6 +36,7 @@ pub enum FunctionOperation {
     Drop {
         schema: String,
         name: String,
+        arguments: String,
         kind: String,
         parameter_types: String,
     },
@@ -44,19 +47,26 @@ pub enum FunctionOperation {
 pub struct FunctionIdentifier {
     pub schema: String,
     pub name: String,
+    pub arguments: String,
 }
 
 impl CommentTarget for FunctionIdentifier {
     const OBJECT_TYPE: &'static str = "FUNCTION";
 
     fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.name))
+        format!(
+            "{}.{}({})",
+            quote_ident(&self.schema),
+            quote_ident(&self.name),
+            self.arguments
+        )
     }
 
     fn db_object_id(&self) -> DbObjectId {
         DbObjectId::Function {
             schema: self.schema.clone(),
             name: self.name.clone(),
+            arguments: self.arguments.clone(),
         }
     }
 }
@@ -89,6 +99,7 @@ impl SqlRenderer for FunctionOperation {
             FunctionOperation::Drop {
                 schema,
                 name,
+                arguments: _,
                 kind,
                 parameter_types,
             } => vec![RenderedSql {
@@ -107,11 +118,27 @@ impl SqlRenderer for FunctionOperation {
 
     fn db_object_id(&self) -> DbObjectId {
         match self {
-            FunctionOperation::Create { schema, name, .. }
-            | FunctionOperation::Replace { schema, name, .. }
-            | FunctionOperation::Drop { schema, name, .. } => DbObjectId::Function {
+            FunctionOperation::Create {
+                schema,
+                name,
+                arguments,
+                ..
+            }
+            | FunctionOperation::Replace {
+                schema,
+                name,
+                arguments,
+                ..
+            }
+            | FunctionOperation::Drop {
+                schema,
+                name,
+                arguments,
+                ..
+            } => DbObjectId::Function {
                 schema: schema.clone(),
                 name: name.clone(),
+                arguments: arguments.clone(),
             },
             FunctionOperation::Comment(op) => op.db_object_id(),
         }

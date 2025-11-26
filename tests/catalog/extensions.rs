@@ -10,7 +10,7 @@ async fn test_fetch_basic_extensions() -> Result<()> {
         db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
             .await;
 
-        let extensions = fetch(db.pool()).await?;
+        let extensions = fetch(&mut *db.conn().await).await?;
 
         // Should have at least our test extension
         assert!(!extensions.is_empty());
@@ -37,7 +37,7 @@ async fn test_fetch_extension_with_comment() -> Result<()> {
         db.execute("COMMENT ON EXTENSION \"uuid-ossp\" IS 'UUID generation functions'")
             .await;
 
-        let extensions = fetch(db.pool()).await?;
+        let extensions = fetch(&mut *db.conn().await).await?;
         let ext = extensions.iter().find(|e| e.name == "uuid-ossp").unwrap();
 
         assert_eq!(ext.comment, Some("UUID generation functions".to_string()));
@@ -55,7 +55,7 @@ async fn test_fetch_extension_in_custom_schema() -> Result<()> {
         db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA utils")
             .await;
 
-        let extensions = fetch(db.pool()).await?;
+        let extensions = fetch(&mut *db.conn().await).await?;
         let ext = extensions.iter().find(|e| e.name == "uuid-ossp").unwrap();
 
         assert_eq!(ext.schema, "utils");
@@ -74,7 +74,7 @@ async fn test_fetch_multiple_extensions() -> Result<()> {
 
         // Only test with commonly available extensions
         // Some extensions might not be available in all test environments
-        let extensions = fetch(db.pool()).await?;
+        let extensions = fetch(&mut *db.conn().await).await?;
 
         // Should have at least our uuid-ossp extension
         let uuid_ext = extensions.iter().find(|e| e.name == "uuid-ossp");
@@ -98,7 +98,7 @@ async fn test_fetch_extensions_dependencies() -> Result<()> {
         db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
             .await;
 
-        let extensions = fetch(db.pool()).await?;
+        let extensions = fetch(&mut *db.conn().await).await?;
         let ext = extensions.iter().find(|e| e.name == "uuid-ossp").unwrap();
 
         // Extensions typically depend on their schema if not in public

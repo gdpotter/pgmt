@@ -1,6 +1,7 @@
 //! Constraint catalog - fetch table constraints from PostgreSQL system catalogs
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
@@ -95,7 +96,7 @@ struct ConstraintRow {
     constraint_comment: Option<String>,
 }
 
-async fn fetch_all_constraints(pool: &PgPool) -> Result<Vec<ConstraintRow>> {
+async fn fetch_all_constraints(conn: &mut PgConnection) -> Result<Vec<ConstraintRow>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -226,7 +227,7 @@ async fn fetch_all_constraints(pool: &PgPool) -> Result<Vec<ConstraintRow>> {
         ORDER BY n.nspname, cl.relname, c.conname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows
@@ -314,8 +315,9 @@ fn build_constraint_from_row(row: ConstraintRow) -> Result<Constraint> {
     })
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Constraint>> {
-    let constraint_rows = fetch_all_constraints(pool).await?;
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Constraint>> {
+    info!("Fetching constraints...");
+    let constraint_rows = fetch_all_constraints(&mut *conn).await?;
 
     let mut constraints = Vec::new();
     for row in constraint_rows {

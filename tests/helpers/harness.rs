@@ -19,6 +19,11 @@ impl TestDatabase {
         &self.pool
     }
 
+    /// Acquire a connection from the pool for direct fetch function calls
+    pub async fn conn(&self) -> sqlx::pool::PoolConnection<sqlx::Postgres> {
+        self.pool.acquire().await.unwrap()
+    }
+
     /// Execute arbitrary SQL - perfect for test setup
     pub async fn execute(&self, sql: &str) {
         use sqlx::Executor;

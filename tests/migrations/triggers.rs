@@ -723,6 +723,7 @@ async fn test_trigger_dependency_ordering() -> Result<()> {
                 assert!(trigger.depends_on.contains(&DbObjectId::Function {
                     schema: "test_schema".to_string(),
                     name: "generic_audit".to_string(),
+                    arguments: "".to_string(),
                 }));
 
                 Ok(())

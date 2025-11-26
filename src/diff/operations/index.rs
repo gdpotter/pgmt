@@ -211,6 +211,7 @@ mod tests {
 
     #[test]
     fn test_render_partial_index_with_include() {
+        // PostgreSQL's pg_get_indexdef() returns already-quoted identifiers for INCLUDE columns
         let index = Index {
             schema: "public".to_string(),
             name: "idx_orders_active".to_string(),
@@ -227,7 +228,8 @@ mod tests {
                 ordering: Some("ASC".to_string()),
                 nulls_ordering: Some("NULLS LAST".to_string()),
             }],
-            include_columns: vec!["total_amount".to_string(), "created_at".to_string()],
+            // These come from pg_get_indexdef() which returns quoted identifiers
+            include_columns: vec!["\"total_amount\"".to_string(), "\"created_at\"".to_string()],
             predicate: Some("status = 'active'".to_string()),
             tablespace: None,
             storage_parameters: vec![],

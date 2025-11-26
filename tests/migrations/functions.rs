@@ -527,3 +527,292 @@ async fn test_drop_function_comment_migration() -> Result<()> {
 
     Ok(())
 }
+
+// Tests for overloaded functions (same name, different signatures)
+
+#[tokio::test]
+async fn test_overloaded_functions_all_preserved() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: nothing
+        &[],
+        // Initial DB only: nothing
+        &[],
+        // Target DB only: multiple overloaded functions
+        &[
+            "CREATE SCHEMA test_schema",
+            // Overloaded function with no arguments
+            "CREATE OR REPLACE FUNCTION test_schema.format_value() RETURNS TEXT AS $$ BEGIN RETURN 'default'; END; $$ LANGUAGE plpgsql",
+            // Overloaded function with integer argument
+            "CREATE OR REPLACE FUNCTION test_schema.format_value(val INTEGER) RETURNS TEXT AS $$ BEGIN RETURN val::text; END; $$ LANGUAGE plpgsql",
+            // Overloaded function with text argument
+            "CREATE OR REPLACE FUNCTION test_schema.format_value(val TEXT) RETURNS TEXT AS $$ BEGIN RETURN val; END; $$ LANGUAGE plpgsql",
+            // Overloaded function with two arguments
+            "CREATE OR REPLACE FUNCTION test_schema.format_value(val INTEGER, prefix TEXT) RETURNS TEXT AS $$ BEGIN RETURN prefix || val::text; END; $$ LANGUAGE plpgsql",
+        ],
+        |steps, final_catalog| {
+            // Should have 4 CREATE FUNCTION steps for the overloaded functions
+            let create_steps: Vec<_> = steps
+                .iter()
+                .filter(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                        if schema == "test_schema" && name == "format_value")
+                })
+                .collect();
+
+            assert_eq!(create_steps.len(), 4, "Should have 4 CreateFunction steps for overloaded functions");
+
+            // Verify final state - all 4 overloaded functions should exist
+            let format_value_functions: Vec<_> = final_catalog
+                .functions
+                .iter()
+                .filter(|f| f.schema == "test_schema" && f.name == "format_value")
+                .collect();
+
+            assert_eq!(
+                format_value_functions.len(),
+                4,
+                "All 4 overloaded functions should be preserved in catalog"
+            );
+
+            // Verify each overload has unique arguments
+            let mut arguments: Vec<_> = format_value_functions.iter().map(|f| &f.arguments).collect();
+            arguments.sort();
+            assert_eq!(
+                arguments.len(),
+                4,
+                "Should have 4 unique argument signatures"
+            );
+
+            // Verify the different argument patterns exist (order may vary)
+            let has_no_args = format_value_functions.iter().any(|f| f.arguments.is_empty());
+            let has_int_arg = format_value_functions.iter().any(|f| f.arguments == "val integer");
+            let has_text_arg = format_value_functions.iter().any(|f| f.arguments == "val text");
+            let has_two_args = format_value_functions.iter().any(|f| f.arguments == "val integer, prefix text");
+
+            assert!(has_no_args, "Should have function with no arguments");
+            assert!(has_int_arg, "Should have function with integer argument");
+            assert!(has_text_arg, "Should have function with text argument");
+            assert!(has_two_args, "Should have function with two arguments");
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_single_overload() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: schema and three overloads
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE OR REPLACE FUNCTION test_schema.convert(val INTEGER) RETURNS TEXT AS $$ BEGIN RETURN val::text; END; $$ LANGUAGE plpgsql",
+            "CREATE OR REPLACE FUNCTION test_schema.convert(val DECIMAL) RETURNS TEXT AS $$ BEGIN RETURN val::text; END; $$ LANGUAGE plpgsql",
+            "CREATE OR REPLACE FUNCTION test_schema.convert(val BOOLEAN) RETURNS TEXT AS $$ BEGIN RETURN val::text; END; $$ LANGUAGE plpgsql",
+        ],
+        // Initial DB only: nothing extra
+        &[],
+        // Target DB only: drop one overload (the BOOLEAN one)
+        &["DROP FUNCTION test_schema.convert(BOOLEAN)"],
+        |steps, final_catalog| {
+            // Should have exactly 1 DROP FUNCTION step for the BOOLEAN overload
+            let drop_steps: Vec<_> = steps
+                .iter()
+                .filter(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                        if schema == "test_schema" && name == "convert")
+                })
+                .collect();
+
+            assert_eq!(drop_steps.len(), 1, "Should have exactly 1 DropFunction step");
+
+            // Verify the dropped function is the BOOLEAN overload
+            match drop_steps[0] {
+                MigrationStep::Function(FunctionOperation::Drop { parameter_types, .. }) => {
+                    assert!(
+                        parameter_types.contains("boolean"),
+                        "Should drop the BOOLEAN overload, got: {}",
+                        parameter_types
+                    );
+                }
+                _ => panic!("Expected DropFunction step"),
+            }
+
+            // Verify final state - 2 overloads should remain
+            let convert_functions: Vec<_> = final_catalog
+                .functions
+                .iter()
+                .filter(|f| f.schema == "test_schema" && f.name == "convert")
+                .collect();
+
+            assert_eq!(
+                convert_functions.len(),
+                2,
+                "Should have 2 remaining overloads"
+            );
+
+            // Verify BOOLEAN overload is gone
+            let has_boolean = convert_functions.iter().any(|f| f.arguments.contains("boolean"));
+            assert!(!has_boolean, "BOOLEAN overload should be dropped");
+
+            // Verify other overloads still exist
+            let has_integer = convert_functions.iter().any(|f| f.arguments.contains("integer"));
+            let has_numeric = convert_functions.iter().any(|f| f.arguments.contains("numeric"));
+            assert!(has_integer, "INTEGER overload should remain");
+            assert!(has_numeric, "DECIMAL (numeric) overload should remain");
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_replace_single_overload() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: schema and two overloads
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE OR REPLACE FUNCTION test_schema.multiply(a INTEGER) RETURNS INTEGER AS $$ BEGIN RETURN a * 2; END; $$ LANGUAGE plpgsql",
+            "CREATE OR REPLACE FUNCTION test_schema.multiply(a INTEGER, b INTEGER) RETURNS INTEGER AS $$ BEGIN RETURN a * b; END; $$ LANGUAGE plpgsql",
+        ],
+        // Initial DB only: nothing extra
+        &[],
+        // Target DB only: modify only the single-argument overload
+        &[
+            "CREATE OR REPLACE FUNCTION test_schema.multiply(a INTEGER) RETURNS INTEGER AS $$ BEGIN RETURN a * 10; END; $$ LANGUAGE plpgsql",
+        ],
+        |steps, final_catalog| {
+            // Should have exactly 1 REPLACE FUNCTION step for the single-argument overload
+            let replace_steps: Vec<_> = steps
+                .iter()
+                .filter(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Replace { schema, name, .. })
+                        if schema == "test_schema" && name == "multiply")
+                })
+                .collect();
+
+            assert_eq!(replace_steps.len(), 1, "Should have exactly 1 ReplaceFunction step");
+
+            // Verify the replaced function contains the new implementation
+            match replace_steps[0] {
+                MigrationStep::Function(FunctionOperation::Replace { definition, arguments, .. }) => {
+                    assert!(
+                        definition.contains("a * 10"),
+                        "Should have new implementation (a * 10)"
+                    );
+                    assert_eq!(arguments, "a integer", "Should be the single-argument overload");
+                }
+                _ => panic!("Expected ReplaceFunction step"),
+            }
+
+            // Verify final state - both overloads should exist
+            let multiply_functions: Vec<_> = final_catalog
+                .functions
+                .iter()
+                .filter(|f| f.schema == "test_schema" && f.name == "multiply")
+                .collect();
+
+            assert_eq!(
+                multiply_functions.len(),
+                2,
+                "Both overloads should exist"
+            );
+
+            // Verify the single-argument overload was updated
+            let single_arg = multiply_functions
+                .iter()
+                .find(|f| f.arguments == "a integer")
+                .expect("Should have single-argument overload");
+            assert!(
+                single_arg.definition.contains("a * 10"),
+                "Single-argument overload should have new implementation"
+            );
+
+            // Verify the two-argument overload is unchanged
+            let two_args = multiply_functions
+                .iter()
+                .find(|f| f.arguments == "a integer, b integer")
+                .expect("Should have two-argument overload");
+            assert!(
+                two_args.definition.contains("a * b"),
+                "Two-argument overload should be unchanged"
+            );
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_add_new_overload() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: schema and one function
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE OR REPLACE FUNCTION test_schema.parse_value(val TEXT) RETURNS TEXT AS $$ BEGIN RETURN val; END; $$ LANGUAGE plpgsql",
+        ],
+        // Initial DB only: nothing extra
+        &[],
+        // Target DB only: add a new overload
+        &[
+            "CREATE OR REPLACE FUNCTION test_schema.parse_value(val TEXT, default_val TEXT) RETURNS TEXT AS $$ BEGIN RETURN COALESCE(val, default_val); END; $$ LANGUAGE plpgsql",
+        ],
+        |steps, final_catalog| {
+            // Should have exactly 1 CREATE FUNCTION step for the new overload
+            let create_steps: Vec<_> = steps
+                .iter()
+                .filter(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                        if schema == "test_schema" && name == "parse_value")
+                })
+                .collect();
+
+            assert_eq!(create_steps.len(), 1, "Should have exactly 1 CreateFunction step for new overload");
+
+            // Verify the created function has two arguments
+            match create_steps[0] {
+                MigrationStep::Function(FunctionOperation::Create { arguments, .. }) => {
+                    assert!(
+                        arguments.contains("default_val"),
+                        "Should create the two-argument overload"
+                    );
+                }
+                _ => panic!("Expected CreateFunction step"),
+            }
+
+            // Verify final state - both overloads should exist
+            let parse_value_functions: Vec<_> = final_catalog
+                .functions
+                .iter()
+                .filter(|f| f.schema == "test_schema" && f.name == "parse_value")
+                .collect();
+
+            assert_eq!(
+                parse_value_functions.len(),
+                2,
+                "Both overloads should exist"
+            );
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
+}

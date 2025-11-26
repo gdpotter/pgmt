@@ -68,14 +68,51 @@ pub fn render_grant_object_clause(object: &ObjectType) -> String {
         ObjectType::Schema { name } => {
             format!("SCHEMA {}", quote_ident(name))
         }
-        ObjectType::Function { schema, name } => {
-            format!("FUNCTION {}.{}", quote_ident(schema), quote_ident(name))
+        ObjectType::Function {
+            schema,
+            name,
+            arguments,
+        } => {
+            format!(
+                "FUNCTION {}.{}({})",
+                quote_ident(schema),
+                quote_ident(name),
+                arguments
+            )
+        }
+        ObjectType::Procedure {
+            schema,
+            name,
+            arguments,
+        } => {
+            format!(
+                "PROCEDURE {}.{}({})",
+                quote_ident(schema),
+                quote_ident(name),
+                arguments
+            )
+        }
+        ObjectType::Aggregate {
+            schema,
+            name,
+            arguments,
+        } => {
+            // PostgreSQL grants on aggregates use FUNCTION keyword, not AGGREGATE
+            format!(
+                "FUNCTION {}.{}({})",
+                quote_ident(schema),
+                quote_ident(name),
+                arguments
+            )
         }
         ObjectType::Sequence { schema, name } => {
             format!("SEQUENCE {}.{}", quote_ident(schema), quote_ident(name))
         }
         ObjectType::Type { schema, name } => {
             format!("TYPE {}.{}", quote_ident(schema), quote_ident(name))
+        }
+        ObjectType::Domain { schema, name } => {
+            format!("DOMAIN {}.{}", quote_ident(schema), quote_ident(name))
         }
     }
 }
@@ -185,6 +222,7 @@ mod tests {
             object: ObjectType::Function {
                 schema: "public".to_string(),
                 name: "calculate_total".to_string(),
+                arguments: "integer, numeric".to_string(),
             },
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["EXECUTE".to_string()],
@@ -196,7 +234,52 @@ mod tests {
         let sql = render_grant_statement(&grant);
         assert_eq!(
             sql,
-            "GRANT EXECUTE ON FUNCTION \"public\".\"calculate_total\" TO \"app_user\";"
+            "GRANT EXECUTE ON FUNCTION \"public\".\"calculate_total\"(integer, numeric) TO \"app_user\";"
+        );
+    }
+
+    #[test]
+    fn test_render_grant_on_procedure() {
+        let grant = Grant {
+            object: ObjectType::Procedure {
+                schema: "public".to_string(),
+                name: "analyze_database".to_string(),
+                arguments: "".to_string(),
+            },
+            grantee: GranteeType::Role("app_user".to_string()),
+            privileges: vec!["EXECUTE".to_string()],
+            with_grant_option: false,
+            depends_on: vec![],
+            object_owner: "postgres".to_string(),
+        };
+
+        let sql = render_grant_statement(&grant);
+        assert_eq!(
+            sql,
+            "GRANT EXECUTE ON PROCEDURE \"public\".\"analyze_database\"() TO \"app_user\";"
+        );
+    }
+
+    #[test]
+    fn test_render_grant_on_aggregate() {
+        let grant = Grant {
+            object: ObjectType::Aggregate {
+                schema: "public".to_string(),
+                name: "array_agg_custom".to_string(),
+                arguments: "integer".to_string(),
+            },
+            grantee: GranteeType::Role("app_user".to_string()),
+            privileges: vec!["EXECUTE".to_string()],
+            with_grant_option: false,
+            depends_on: vec![],
+            object_owner: "postgres".to_string(),
+        };
+
+        let sql = render_grant_statement(&grant);
+        // PostgreSQL grants on aggregates use FUNCTION keyword, not AGGREGATE
+        assert_eq!(
+            sql,
+            "GRANT EXECUTE ON FUNCTION \"public\".\"array_agg_custom\"(integer) TO \"app_user\";"
         );
     }
 

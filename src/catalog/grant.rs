@@ -1,6 +1,7 @@
 //! Fetch grants/privileges from PostgreSQL system catalogs
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use super::id::{DbObjectId, DependsOn};
 
@@ -12,12 +13,44 @@ pub enum GranteeType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectType {
-    Table { schema: String, name: String },
-    View { schema: String, name: String },
-    Schema { name: String },
-    Function { schema: String, name: String },
-    Sequence { schema: String, name: String },
-    Type { schema: String, name: String },
+    Table {
+        schema: String,
+        name: String,
+    },
+    View {
+        schema: String,
+        name: String,
+    },
+    Schema {
+        name: String,
+    },
+    Function {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
+    Procedure {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
+    Aggregate {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
+    Sequence {
+        schema: String,
+        name: String,
+    },
+    Type {
+        schema: String,
+        name: String,
+    },
+    Domain {
+        schema: String,
+        name: String,
+    },
 }
 
 impl ObjectType {
@@ -32,15 +65,42 @@ impl ObjectType {
                 name: name.clone(),
             },
             ObjectType::Schema { name } => DbObjectId::Schema { name: name.clone() },
-            ObjectType::Function { schema, name } => DbObjectId::Function {
+            ObjectType::Function {
+                schema,
+                name,
+                arguments,
+            } => DbObjectId::Function {
                 schema: schema.clone(),
                 name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            ObjectType::Procedure {
+                schema,
+                name,
+                arguments,
+            } => DbObjectId::Function {
+                schema: schema.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            ObjectType::Aggregate {
+                schema,
+                name,
+                arguments,
+            } => DbObjectId::Aggregate {
+                schema: schema.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
             },
             ObjectType::Sequence { schema, name } => DbObjectId::Sequence {
                 schema: schema.clone(),
                 name: name.clone(),
             },
             ObjectType::Type { schema, name } => DbObjectId::Type {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            ObjectType::Domain { schema, name } => DbObjectId::Domain {
                 schema: schema.clone(),
                 name: name.clone(),
             },
@@ -70,9 +130,24 @@ impl Grant {
             ObjectType::Table { schema, name } => format!("table:{}.{}", schema, name),
             ObjectType::View { schema, name } => format!("view:{}.{}", schema, name),
             ObjectType::Schema { name } => format!("schema:{}", name),
-            ObjectType::Function { schema, name } => format!("function:{}.{}", schema, name),
+            ObjectType::Function {
+                schema,
+                name,
+                arguments,
+            } => format!("function:{}.{}({})", schema, name, arguments),
+            ObjectType::Procedure {
+                schema,
+                name,
+                arguments,
+            } => format!("procedure:{}.{}({})", schema, name, arguments),
+            ObjectType::Aggregate {
+                schema,
+                name,
+                arguments,
+            } => format!("aggregate:{}.{}({})", schema, name, arguments),
             ObjectType::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
             ObjectType::Type { schema, name } => format!("type:{}.{}", schema, name),
+            ObjectType::Domain { schema, name } => format!("domain:{}.{}", schema, name),
         };
 
         format!("{}@{}", grantee_str, object_str)
@@ -89,31 +164,37 @@ impl DependsOn for Grant {
     }
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Grant>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let mut grants = Vec::new();
 
     // Fetch table privileges
-    grants.extend(fetch_table_privileges(pool).await?);
+    info!("Fetching table grants...");
+    grants.extend(fetch_table_privileges(&mut *conn).await?);
 
     // Fetch view privileges
-    grants.extend(fetch_view_privileges(pool).await?);
+    info!("Fetching view grants...");
+    grants.extend(fetch_view_privileges(&mut *conn).await?);
 
     // Fetch schema privileges
-    grants.extend(fetch_schema_privileges(pool).await?);
+    info!("Fetching schema grants...");
+    grants.extend(fetch_schema_privileges(&mut *conn).await?);
 
     // Fetch function privileges
-    grants.extend(fetch_function_privileges(pool).await?);
+    info!("Fetching function grants...");
+    grants.extend(fetch_function_privileges(&mut *conn).await?);
 
     // Fetch sequence privileges
-    grants.extend(fetch_sequence_privileges(pool).await?);
+    info!("Fetching sequence grants...");
+    grants.extend(fetch_sequence_privileges(&mut *conn).await?);
 
     // Fetch type privileges
-    grants.extend(fetch_type_privileges(pool).await?);
+    info!("Fetching type grants...");
+    grants.extend(fetch_type_privileges(&mut *conn).await?);
 
     Ok(grants)
 }
 
-async fn fetch_table_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -142,7 +223,7 @@ async fn fetch_table_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
         ORDER BY n.nspname, c.relname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -199,7 +280,7 @@ async fn fetch_table_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
     Ok(result)
 }
 
-async fn fetch_view_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -228,7 +309,7 @@ async fn fetch_view_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
         ORDER BY n.nspname, c.relname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -285,7 +366,7 @@ async fn fetch_view_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
     Ok(result)
 }
 
-async fn fetch_schema_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_schema_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -307,7 +388,7 @@ async fn fetch_schema_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
         ORDER BY n.nspname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -362,12 +443,14 @@ async fn fetch_schema_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
     Ok(result)
 }
 
-async fn fetch_function_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_function_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
             n.nspname as "schema_name!",
             p.proname as "function_name!",
+            p.prokind::text as "prokind!",
+            pg_get_function_identity_arguments(p.oid) as "arguments!",
             CASE
                 WHEN acl.grantee = 0 THEN 'PUBLIC'
                 ELSE r.rolname
@@ -387,10 +470,10 @@ async fn fetch_function_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
               WHERE dep.objid = p.oid
               AND dep.deptype = 'e'
           )
-        ORDER BY n.nspname, p.proname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
+        ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -403,9 +486,24 @@ async fn fetch_function_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Function {
-            schema: row.schema_name.clone(),
-            name: row.function_name.clone(),
+        // Use appropriate variant based on prokind:
+        // 'a' = aggregate, 'p' = procedure, others = function
+        let object = match row.prokind.as_str() {
+            "a" => ObjectType::Aggregate {
+                schema: row.schema_name.clone(),
+                name: row.function_name.clone(),
+                arguments: row.arguments.clone(),
+            },
+            "p" => ObjectType::Procedure {
+                schema: row.schema_name.clone(),
+                name: row.function_name.clone(),
+                arguments: row.arguments.clone(),
+            },
+            _ => ObjectType::Function {
+                schema: row.schema_name.clone(),
+                name: row.function_name.clone(),
+                arguments: row.arguments.clone(),
+            },
         };
 
         let with_grant_option = row.is_grantable == "YES";
@@ -446,7 +544,7 @@ async fn fetch_function_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
     Ok(result)
 }
 
-async fn fetch_sequence_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_sequence_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -476,7 +574,7 @@ async fn fetch_sequence_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
         ORDER BY n.nspname, c.relname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -532,12 +630,13 @@ async fn fetch_sequence_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
     Ok(result)
 }
 
-async fn fetch_type_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
+async fn fetch_type_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     let rows = sqlx::query!(
         r#"
         SELECT
             n.nspname as "schema_name!",
             t.typname as "type_name!",
+            t.typtype as "type_kind!",
             CASE
                 WHEN acl.grantee = 0 THEN 'PUBLIC'
                 ELSE r.rolname
@@ -569,7 +668,7 @@ async fn fetch_type_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
         ORDER BY n.nspname, t.typname, CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END, acl.privilege_type
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut result = Vec::new();
@@ -582,9 +681,17 @@ async fn fetch_type_privileges(pool: &PgPool) -> Result<Vec<Grant>> {
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Type {
-            schema: row.schema_name.clone(),
-            name: row.type_name.clone(),
+        // Distinguish between domains and other types (typtype: 'd' for domain)
+        let object = if row.type_kind == b'd' as i8 {
+            ObjectType::Domain {
+                schema: row.schema_name.clone(),
+                name: row.type_name.clone(),
+            }
+        } else {
+            ObjectType::Type {
+                schema: row.schema_name.clone(),
+                name: row.type_name.clone(),
+            }
         };
 
         let with_grant_option = row.is_grantable == "YES";

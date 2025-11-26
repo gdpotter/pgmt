@@ -5,7 +5,7 @@ use pgmt::catalog::schema::fetch;
 #[tokio::test]
 async fn test_fetch_default_schema() -> Result<()> {
     with_test_db(async |db| {
-        let schemas = fetch(db.pool()).await.unwrap();
+        let schemas = fetch(&mut *db.conn().await).await.unwrap();
 
         assert!(!schemas.is_empty());
         assert!(schemas.iter().any(|s| s.name == "public"));
@@ -27,7 +27,7 @@ async fn test_fetch_custom_schemas() -> Result<()> {
         db.execute("CREATE SCHEMA utilities").await;
         db.execute("CREATE SCHEMA reporting").await;
 
-        let mut schemas = fetch(db.pool()).await.unwrap();
+        let mut schemas = fetch(&mut *db.conn().await).await.unwrap();
         schemas.sort_by(|a, b| a.name.cmp(&b.name));
 
         assert_eq!(schemas.len(), 4);
@@ -46,7 +46,7 @@ async fn test_fetch_custom_schemas() -> Result<()> {
 #[tokio::test]
 async fn test_exclude_system_schemas() -> Result<()> {
     with_test_db(async |db| {
-        let schemas = fetch(db.pool()).await.unwrap();
+        let schemas = fetch(&mut *db.conn().await).await.unwrap();
 
         for schema in &schemas {
             assert_ne!(schema.name, "pg_catalog");
@@ -68,7 +68,7 @@ async fn test_schema_case_sensitivity() -> Result<()> {
         db.execute("CREATE SCHEMA lowercase").await;
         db.execute("CREATE SCHEMA \"UPPERCASE\"").await;
 
-        let schemas = fetch(db.pool()).await.unwrap();
+        let schemas = fetch(&mut *db.conn().await).await.unwrap();
 
         let schema_names: Vec<&str> = schemas.iter().map(|s| s.name.as_str()).collect();
 
@@ -90,7 +90,7 @@ async fn test_fetch_schema_with_comment() -> Result<()> {
         db.execute("COMMENT ON SCHEMA app_data IS 'Main application data schema'")
             .await;
 
-        let schemas = fetch(db.pool()).await.unwrap();
+        let schemas = fetch(&mut *db.conn().await).await.unwrap();
 
         let app_schema = schemas.iter().find(|s| s.name == "app_data").unwrap();
         assert_eq!(

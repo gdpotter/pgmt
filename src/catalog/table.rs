@@ -1,6 +1,7 @@
 //! Fetch tables + columns (no constraints yet) via pg_catalog for BASE TABLEs
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
@@ -107,7 +108,9 @@ impl Commentable for Table {
     }
 }
 
-async fn fetch_all_tables(pool: &PgPool) -> Result<Vec<(String, String, Option<String>)>> {
+async fn fetch_all_tables(
+    conn: &mut PgConnection,
+) -> Result<Vec<(String, String, Option<String>)>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -127,7 +130,7 @@ async fn fetch_all_tables(pool: &PgPool) -> Result<Vec<(String, String, Option<S
         ORDER BY n.nspname, c.relname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows
@@ -153,7 +156,7 @@ struct ColumnRow {
     extension_name: Option<String>,
 }
 
-async fn fetch_table_columns(pool: &PgPool) -> Result<Vec<ColumnRow>> {
+async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -161,34 +164,40 @@ async fn fetch_table_columns(pool: &PgPool) -> Result<Vec<ColumnRow>> {
           c.relname    AS table_name,
           a.attname    AS column_name,
           pg_catalog.format_type(a.atttypid, a.atttypmod) AS "data_type!",
-          tn.nspname   AS "type_schema?",
-          t.typname    AS "type_name?",
+          -- Resolve array element type schema/name correctly
+          CASE
+            WHEN t.typelem != 0 THEN elem_tn.nspname
+            ELSE tn.nspname
+          END AS "type_schema?",
+          CASE
+            WHEN t.typelem != 0 THEN elem_t.typname
+            ELSE t.typname
+          END AS "type_name?",
           pg_catalog.pg_get_expr(ad.adbin, ad.adrelid)  AS column_expr,
           a.attgenerated::text AS attgenerated,
           a.attnotnull AS "not_null!",
           COALESCE(a.attndims, 0)::int AS "attndims!: i32",
           d.description AS "column_comment?",
-          -- Check if the type is from an extension and get the extension name
-          EXISTS (
-            SELECT 1 FROM pg_depend dep
-            WHERE dep.objid = t.oid
-            AND dep.deptype = 'e'
-          ) AS "is_extension_type!: bool",
-          (
-            SELECT e.extname
-            FROM pg_depend dep
-            JOIN pg_extension e ON dep.refobjid = e.oid
-            WHERE dep.objid = t.oid
-            AND dep.deptype = 'e'
-            LIMIT 1
-          ) AS "extension_name?"
+          -- Check if the type (or element type for arrays) is from an extension
+          ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
+          ext_types.extname AS "extension_name?"
         FROM pg_attribute a
         LEFT JOIN pg_attrdef ad
           ON a.attrelid = ad.adrelid
          AND a.attnum   = ad.adnum
         LEFT JOIN pg_type t ON a.atttypid = t.oid
         LEFT JOIN pg_namespace tn ON t.typnamespace = tn.oid
+        -- Element type for array types
+        LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0
+        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid
         LEFT JOIN pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum
+        -- Extension type lookup: compute once as derived table, then hash join
+        LEFT JOIN (
+          SELECT DISTINCT dep.objid AS type_oid, e.extname
+          FROM pg_depend dep
+          JOIN pg_extension e ON dep.refobjid = e.oid
+          WHERE dep.deptype = 'e'
+        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(t.typelem, 0::oid), t.oid)
         JOIN pg_class c
           ON a.attrelid = c.oid
         JOIN pg_namespace n
@@ -200,7 +209,7 @@ async fn fetch_table_columns(pool: &PgPool) -> Result<Vec<ColumnRow>> {
         ORDER BY n.nspname, c.relname, a.attnum
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows
@@ -224,7 +233,7 @@ async fn fetch_table_columns(pool: &PgPool) -> Result<Vec<ColumnRow>> {
 }
 
 async fn fetch_sequence_dependencies(
-    pool: &PgPool,
+    conn: &mut PgConnection,
 ) -> Result<std::collections::BTreeMap<(String, String, String), Vec<DbObjectId>>> {
     let sequence_deps = sqlx::query!(
         r#"
@@ -246,7 +255,7 @@ async fn fetch_sequence_dependencies(
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut sequence_dep_map: std::collections::BTreeMap<
@@ -267,7 +276,7 @@ async fn fetch_sequence_dependencies(
 }
 
 async fn fetch_function_dependencies(
-    pool: &PgPool,
+    conn: &mut PgConnection,
 ) -> Result<std::collections::BTreeMap<(String, String, String), Vec<DbObjectId>>> {
     // Query for function dependencies in both generated columns AND default expressions
     // PostgreSQL changed how it tracks these dependencies between versions:
@@ -283,6 +292,7 @@ async fn fetch_function_dependencies(
             a.attname AS "column_name!",
             pf.proname AS "function_name!",
             nf.nspname AS "function_schema!",
+            pg_catalog.pg_get_function_identity_arguments(pf.oid) AS "function_args!",
             (
                 SELECT e.extname
                 FROM pg_depend ext_dep
@@ -312,6 +322,7 @@ async fn fetch_function_dependencies(
             a.attname AS "column_name!",
             pf.proname AS "function_name!",
             nf.nspname AS "function_schema!",
+            pg_catalog.pg_get_function_identity_arguments(pf.oid) AS "function_args!",
             (
                 SELECT e.extname
                 FROM pg_depend ext_dep
@@ -334,7 +345,7 @@ async fn fetch_function_dependencies(
           AND nf.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut function_dep_map: std::collections::BTreeMap<
@@ -353,6 +364,7 @@ async fn fetch_function_dependencies(
                     DbObjectId::Function {
                         schema: row.function_schema,
                         name: row.function_name,
+                        arguments: row.function_args,
                     }
                 },
             );
@@ -409,13 +421,8 @@ fn populate_columns(
             .map(|r| {
                 let mut column_depends_on = Vec::new();
 
-                let base_type_name = if r.attndims > 0 {
-                    r.type_name
-                        .as_ref()
-                        .map(|s| s.trim_start_matches('_').to_string())
-                } else {
-                    r.type_name.clone()
-                };
+                // type_name is already resolved to the element type for arrays via SQL
+                let base_type_name = r.type_name.clone();
 
                 // Track dependencies based on type source
                 if r.is_extension_type {
@@ -489,7 +496,7 @@ fn populate_columns(
 async fn populate_primary_keys(
     tables: &mut [Table],
     table_index_map: &std::collections::BTreeMap<(String, String), usize>,
-    pool: &PgPool,
+    conn: &mut PgConnection,
 ) -> Result<()> {
     let pk_constraints = sqlx::query!(
         r#"
@@ -510,7 +517,7 @@ async fn populate_primary_keys(
         GROUP BY c.conname, n.nspname, cl.relname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     for pk in pk_constraints {
@@ -534,11 +541,15 @@ async fn populate_primary_keys(
     Ok(())
 }
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<Table>> {
-    let all_tables = fetch_all_tables(pool).await?;
-    let function_dep_map = fetch_function_dependencies(pool).await?;
-    let sequence_dep_map = fetch_sequence_dependencies(pool).await?;
-    let column_rows = fetch_table_columns(pool).await?;
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Table>> {
+    info!("Fetching tables...");
+    let all_tables = fetch_all_tables(&mut *conn).await?;
+    info!("Fetching table function dependencies...");
+    let function_dep_map = fetch_function_dependencies(&mut *conn).await?;
+    info!("Fetching table sequence dependencies...");
+    let sequence_dep_map = fetch_sequence_dependencies(&mut *conn).await?;
+    info!("Fetching table columns...");
+    let column_rows = fetch_table_columns(&mut *conn).await?;
 
     let (mut tables, table_index_map) = initialize_tables(all_tables);
     populate_columns(
@@ -548,7 +559,8 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<Table>> {
         function_dep_map,
         sequence_dep_map,
     );
-    populate_primary_keys(&mut tables, &table_index_map, pool).await?;
+    info!("Fetching primary keys...");
+    populate_primary_keys(&mut tables, &table_index_map, &mut *conn).await?;
 
     Ok(tables)
 }

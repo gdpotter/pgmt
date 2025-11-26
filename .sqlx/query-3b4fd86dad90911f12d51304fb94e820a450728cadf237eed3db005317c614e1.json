@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            t.typname AS \"type_name!\",\n            a.attname AS \"attr_name!\",\n            format_type(a.atttypid, a.atttypmod) AS \"attr_type!\",\n            a.attnum AS \"ordinal_position!\",\n            -- Resolve array element type schema/name correctly\n            CASE\n                WHEN attr_t.typelem != 0 THEN elem_tn.nspname\n                ELSE tn.nspname\n            END AS \"attr_type_schema?\",\n            CASE\n                WHEN attr_t.typelem != 0 THEN elem_t.typname\n                ELSE attr_t.typname\n            END AS \"attr_type_name?\",\n            COALESCE(a.attndims, 0)::int AS \"attr_attndims!: i32\",\n            -- Check if attribute type (or element type for arrays) is from an extension\n            ext_types.extname IS NOT NULL AS \"is_extension_type!: bool\",\n            ext_types.extname AS \"extension_name?\"\n        FROM pg_type t\n        JOIN pg_namespace n ON t.typnamespace = n.oid\n        JOIN pg_class c ON t.typrelid = c.oid\n        JOIN pg_attribute a ON c.oid = a.attrelid\n        LEFT JOIN pg_type attr_t ON a.atttypid = attr_t.oid\n        LEFT JOIN pg_namespace tn ON attr_t.typnamespace = tn.oid\n        -- Element type for array attributes\n        LEFT JOIN pg_type elem_t ON attr_t.typelem = elem_t.oid AND attr_t.typelem != 0\n        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid\n        -- Extension type lookup: compute once as derived table, then hash join\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(attr_t.typelem, 0::oid), attr_t.oid)\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND t.typtype = 'c'  -- composite\n          AND a.attnum > 0\n          AND NOT a.attisdropped\n        ORDER BY n.nspname, t.typname, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "type_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "attr_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "attr_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "ordinal_position!",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "attr_type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "attr_type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 7,
+        "name": "attr_attndims!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_extension_type!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "extension_name?",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "3b4fd86dad90911f12d51304fb94e820a450728cadf237eed3db005317c614e1"
+}

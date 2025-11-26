@@ -4,11 +4,10 @@
 //! tracking with file-level `-- require:` dependencies. When a schema file A requires file B,
 //! all database objects created in file A are considered to depend on all objects in file B.
 
-use crate::catalog::Catalog;
 use crate::catalog::id::DbObjectId;
 use crate::schema_loader::SchemaFile;
 use anyhow::Result;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use tracing::info;
 
 /// Maps file paths to the database objects they create
@@ -91,68 +90,6 @@ impl FileDependencyAugmentation {
             .cloned()
             .unwrap_or_default()
     }
-}
-
-/// Find objects that exist in new_catalog but not in old_catalog
-pub fn find_new_objects(old_catalog: &Catalog, new_catalog: &Catalog) -> Vec<DbObjectId> {
-    let mut new_objects = Vec::new();
-
-    // Helper to collect object IDs from a list
-    fn collect_ids<T: crate::catalog::id::DependsOn>(items: &[T]) -> BTreeSet<DbObjectId> {
-        items.iter().map(|item| item.id()).collect()
-    }
-
-    // Collect all object IDs from both catalogs
-    let old_ids = {
-        let mut ids = BTreeSet::new();
-        // Handle schemas separately since they don't implement DependsOn
-        for schema in &old_catalog.schemas {
-            ids.insert(DbObjectId::Schema {
-                name: schema.name.clone(),
-            });
-        }
-        ids.extend(collect_ids(&old_catalog.tables));
-        ids.extend(collect_ids(&old_catalog.views));
-        ids.extend(collect_ids(&old_catalog.types));
-        ids.extend(collect_ids(&old_catalog.functions));
-        ids.extend(collect_ids(&old_catalog.sequences));
-        ids.extend(collect_ids(&old_catalog.indexes));
-        ids.extend(collect_ids(&old_catalog.constraints));
-        ids.extend(collect_ids(&old_catalog.triggers));
-        ids.extend(collect_ids(&old_catalog.extensions));
-        ids.extend(collect_ids(&old_catalog.grants));
-        ids
-    };
-
-    let new_ids = {
-        let mut ids = BTreeSet::new();
-        // Handle schemas separately since they don't implement DependsOn
-        for schema in &new_catalog.schemas {
-            ids.insert(DbObjectId::Schema {
-                name: schema.name.clone(),
-            });
-        }
-        ids.extend(collect_ids(&new_catalog.tables));
-        ids.extend(collect_ids(&new_catalog.views));
-        ids.extend(collect_ids(&new_catalog.types));
-        ids.extend(collect_ids(&new_catalog.functions));
-        ids.extend(collect_ids(&new_catalog.sequences));
-        ids.extend(collect_ids(&new_catalog.indexes));
-        ids.extend(collect_ids(&new_catalog.constraints));
-        ids.extend(collect_ids(&new_catalog.triggers));
-        ids.extend(collect_ids(&new_catalog.extensions));
-        ids.extend(collect_ids(&new_catalog.grants));
-        ids
-    };
-
-    // Find objects that are in new but not in old
-    for object_id in new_ids {
-        if !old_ids.contains(&object_id) {
-            new_objects.push(object_id);
-        }
-    }
-
-    new_objects
 }
 
 /// Create file-based dependency augmentation from file mappings and schema file dependencies

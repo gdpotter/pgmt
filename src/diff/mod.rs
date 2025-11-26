@@ -1,8 +1,10 @@
+pub mod aggregates;
 pub mod cascade;
 pub mod columns;
 pub mod comment_utils;
 pub mod constraints;
 pub mod custom_types;
+pub mod domains;
 pub mod extensions;
 pub mod functions;
 pub mod grants;
@@ -15,16 +17,20 @@ pub mod triggers;
 pub mod views;
 
 use crate::catalog::id::{DbObjectId, DependsOn};
+use crate::catalog::utils::is_system_schema;
 use crate::catalog::{
-    Catalog, constraint::Constraint, custom_type::CustomType, extension::Extension,
-    function::Function, index::Index, sequence::Sequence, table::Table, view::View,
+    Catalog, aggregate::Aggregate, constraint::Constraint, custom_type::CustomType, domain::Domain,
+    extension::Extension, function::Function, index::Index, sequence::Sequence, table::Table,
+    view::View,
 };
 use crate::diff::operations::MigrationStep;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use std::collections::{BTreeMap, BTreeSet};
+use tracing::{info, warn};
 
 pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
+    info!("Diffing catalogs...");
     let mut out = Vec::new();
 
     out.extend(diff_list(
@@ -48,6 +54,13 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
         &new.types,
         CustomType::id,
         custom_types::diff,
+    ));
+
+    out.extend(diff_list(
+        &old.domains,
+        &new.domains,
+        Domain::id,
+        domains::diff,
     ));
 
     out.extend(diff_list(
@@ -89,8 +102,16 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
         functions::diff,
     ));
 
+    out.extend(diff_list(
+        &old.aggregates,
+        &new.aggregates,
+        Aggregate::id,
+        aggregates::diff,
+    ));
+
     out.extend(grants::diff_grants(&old.grants, &new.grants));
 
+    info!("Diff complete");
     out
 }
 
@@ -126,6 +147,7 @@ pub fn diff_order(
     old_catalog: &Catalog,
     new_catalog: &Catalog,
 ) -> anyhow::Result<Vec<MigrationStep>> {
+    info!("Ordering migration steps...");
     let mut primary_steps = Vec::new();
     let mut relationship_steps = Vec::new();
 
@@ -165,6 +187,9 @@ fn order_steps_by_dependencies(
         id_to_indices.entry(step.id()).or_default().push(i);
     }
 
+    // Track missing dependencies for warnings
+    let mut missing_deps: Vec<(DbObjectId, DbObjectId)> = Vec::new();
+
     for (i, step) in steps.iter().enumerate() {
         let is_drop = step.is_drop();
 
@@ -193,9 +218,32 @@ fn order_steps_by_dependencies(
                         let to = node_indices[if is_drop { dep_i } else { i }];
                         graph.add_edge(from, to, ());
                     }
+                } else {
+                    // Dependency not found in migration steps - check if it's truly missing
+                    // Only warn if the dependency isn't in the catalog (for creates, check new;
+                    // for drops, check old)
+                    let catalog = if is_drop { old_catalog } else { new_catalog };
+                    if !catalog.contains_id(dep) {
+                        missing_deps.push((step.id(), dep.clone()));
+                    }
                 }
             }
         }
+    }
+
+    // Warn about missing dependencies (excluding system schemas)
+    for (object_id, missing_dep) in &missing_deps {
+        // Skip system schema dependencies - these are expected to be missing
+        if let Some(schema) = missing_dep.schema()
+            && is_system_schema(schema)
+        {
+            continue;
+        }
+
+        warn!(
+            "{:?} depends on {:?} which is not in the catalog (may be filtered by config)",
+            object_id, missing_dep
+        );
     }
 
     let mut drop_indices = BTreeMap::new();
@@ -291,8 +339,10 @@ fn order_steps_by_dependencies(
                     MigrationStep::Table(_) => "Table",
                     MigrationStep::View(_) => "View",
                     MigrationStep::Type(_) => "Type",
+                    MigrationStep::Domain(_) => "Domain",
                     MigrationStep::Sequence(_) => "Sequence",
                     MigrationStep::Function(_) => "Function",
+                    MigrationStep::Aggregate(_) => "Aggregate",
                     MigrationStep::Index(_) => "Index",
                     MigrationStep::Constraint(_) => "Constraint",
                     MigrationStep::Trigger(_) => "Trigger",

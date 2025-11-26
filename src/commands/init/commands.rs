@@ -120,6 +120,28 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
+/// Convert prompts::ShadowDatabaseInput + version to config::types::ShadowDatabase
+fn resolve_shadow_database(
+    shadow_config: &ShadowDatabaseInput,
+    shadow_pg_version: Option<&String>,
+) -> crate::config::types::ShadowDatabase {
+    use crate::config::types::{ShadowDatabase, ShadowDockerConfig};
+
+    match shadow_config {
+        ShadowDatabaseInput::Auto => {
+            if let Some(version) = shadow_pg_version {
+                ShadowDatabase::Docker(ShadowDockerConfig {
+                    version: Some(version.clone()),
+                    ..Default::default()
+                })
+            } else {
+                ShadowDatabase::Auto
+            }
+        }
+        ShadowDatabaseInput::Manual(url) => ShadowDatabase::Url(url.clone()),
+    }
+}
+
 /// Import catalog from source without processing it yet
 /// Returns the catalog for later processing
 async fn import_catalog_from_source(
@@ -130,10 +152,8 @@ async fn import_catalog_from_source(
     println!("   Source: {}", import_source.description());
 
     // Convert ShadowDatabaseInput to ShadowDatabase for import
-    let shadow_database = match &options.shadow_config {
-        ShadowDatabaseInput::Auto => crate::config::types::ShadowDatabase::Auto,
-        ShadowDatabaseInput::Manual(url) => crate::config::types::ShadowDatabase::Url(url.clone()),
-    };
+    let shadow_database =
+        resolve_shadow_database(&options.shadow_config, options.shadow_pg_version.as_ref());
 
     // Resolve roles file path for import (roles must exist before schema GRANTs)
     let roles_path = options
@@ -153,17 +173,37 @@ async fn import_catalog_from_source(
             Ok(Some(catalog))
         }
         Err(e) => {
-            eprintln!("⚠️  Schema import failed: {}", e);
+            // Use {:#} to show the full error chain including the root cause
+            eprintln!("\n⚠️  Schema import failed:\n{:#}", e);
+            eprintln!("\n🔧 What would you like to do?");
 
-            // Offer recovery options based on import source type
-            if let Some(recovered_catalog) =
-                handle_import_failure(e, import_source, options).await?
-            {
-                println!("✅ Schema import completed");
-                Ok(Some(recovered_catalog))
-            } else {
-                eprintln!("   Continuing with empty project setup...");
-                Ok(None)
+            let recovery_options = vec![
+                "Skip import and continue with empty project",
+                "Exit setup (you can run 'pgmt init' again later)",
+            ];
+
+            let choice = dialoguer::Select::new()
+                .with_prompt("Choose an option")
+                .items(&recovery_options)
+                .default(0)
+                .interact()?;
+
+            match choice {
+                0 => {
+                    println!(
+                        "⚠️  Skipping schema import. You can add schema files manually later."
+                    );
+                    println!(
+                        "   💡 Tip: You can also try importing again with 'pgmt apply' after setup."
+                    );
+                    eprintln!("   Continuing with empty project setup...");
+                    Ok(None)
+                }
+                1 => {
+                    println!("❌ Setup cancelled. Run 'pgmt init' again when ready.");
+                    std::process::exit(1);
+                }
+                _ => Ok(None),
             }
         }
     }
@@ -212,7 +252,14 @@ async fn process_imported_catalog(
         .as_ref()
         .map(|f| options.project_dir.join(f));
 
-    match validate_schema_files(&schema_dir, roles_path.as_deref(), &options.shadow_config).await {
+    match validate_schema_files(
+        &schema_dir,
+        roles_path.as_deref(),
+        &options.shadow_config,
+        options.shadow_pg_version.as_ref(),
+    )
+    .await
+    {
         Ok(_) => {
             println!("✅ Schema validation passed");
         }
@@ -221,7 +268,8 @@ async fn process_imported_catalog(
             println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("⚠️  SCHEMA VALIDATION FAILED");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            println!("{}\n", e);
+            // Use {:#} to show the full error chain including the root cause
+            println!("{:#}\n", e);
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             println!("Next steps:");
             println!("  1. Fix dependencies in schema files (add '-- require:' statements)");
@@ -515,8 +563,9 @@ async fn validate_schema_files(
     schema_dir: &std::path::Path,
     roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
+    shadow_pg_version: Option<&String>,
 ) -> Result<()> {
-    validate_schema_files_impl(schema_dir, roles_file, shadow_config).await
+    validate_schema_files_impl(schema_dir, roles_file, shadow_config, shadow_pg_version).await
 }
 
 /// Implementation of schema validation
@@ -524,20 +573,15 @@ async fn validate_schema_files_impl(
     schema_dir: &std::path::Path,
     roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
+    shadow_pg_version: Option<&String>,
 ) -> Result<()> {
     use crate::db::cleaner;
     use crate::db::connection::connect_with_retry;
     use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 
     // Get shadow URL from in-memory config (no yaml file needed!)
-    let shadow_url = match shadow_config {
-        ShadowDatabaseInput::Auto => {
-            crate::config::types::ShadowDatabase::Auto
-                .get_connection_string()
-                .await?
-        }
-        ShadowDatabaseInput::Manual(url) => url.clone(),
-    };
+    let shadow_database = resolve_shadow_database(shadow_config, shadow_pg_version);
+    let shadow_url = shadow_database.get_connection_string().await?;
 
     // Connect to shadow database
     let pool = connect_with_retry(&shadow_url).await?;
@@ -609,40 +653,6 @@ fn count_generated_files(schema_dir: &std::path::PathBuf) -> Result<usize> {
     }
 
     Ok(count)
-}
-
-/// Handle import failure and offer simplified recovery options
-async fn handle_import_failure(
-    error: anyhow::Error,
-    _import_source: &ImportSource,
-    _options: &InitOptions,
-) -> Result<Option<Catalog>> {
-    println!("\n⚠️  Schema import failed: {}", error);
-    println!("\n🔧 What would you like to do?");
-
-    let recovery_options = vec![
-        "Skip import and continue with empty project",
-        "Exit setup (you can run 'pgmt init' again later)",
-    ];
-
-    let choice = dialoguer::Select::new()
-        .with_prompt("Choose an option")
-        .items(&recovery_options)
-        .default(0)
-        .interact()?;
-
-    match choice {
-        0 => {
-            println!("⚠️  Skipping schema import. You can add schema files manually later.");
-            println!("   💡 Tip: You can also try importing again with 'pgmt apply' after setup.");
-            Ok(None)
-        }
-        1 => {
-            println!("❌ Setup cancelled. Run 'pgmt init' again when ready.");
-            std::process::exit(1);
-        }
-        _ => Ok(None),
-    }
 }
 
 #[cfg(test)]

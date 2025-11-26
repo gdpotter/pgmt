@@ -1,11 +1,12 @@
 //! src/catalog/custom_type
 //! Fetch custom PostgreSQL types via pg_catalog
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
+use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::{DependencyBuilder, is_system_schema};
+use super::utils::DependencyBuilder;
 
 /* ---------- Data structures ---------- */
 
@@ -13,7 +14,6 @@ use super::utils::{DependencyBuilder, is_system_schema};
 pub enum TypeKind {
     Enum,
     Composite,
-    Domain,
     Range,
     Other(String),
 }
@@ -23,7 +23,6 @@ impl TypeKind {
         match typtype {
             "e" => TypeKind::Enum,
             "c" => TypeKind::Composite,
-            "d" => TypeKind::Domain,
             "r" => TypeKind::Range,
             other => TypeKind::Other(other.to_string()),
         }
@@ -42,6 +41,7 @@ pub struct CompositeAttribute {
     pub type_name: String,
     pub type_schema: Option<String>,
     pub raw_type_name: Option<String>,
+    #[allow(dead_code)] // Used in SQL query but not in rendering; kept for potential future use
     pub attndims: i32,
 }
 
@@ -52,8 +52,7 @@ pub struct CustomType {
     pub kind: TypeKind,
     pub enum_values: Vec<EnumValue>,
     pub composite_attributes: Vec<CompositeAttribute>,
-    pub base_type: Option<String>, // For domains, the underlying type
-    pub comment: Option<String>,   // comment on the type
+    pub comment: Option<String>,
     pub depends_on: Vec<DbObjectId>,
 }
 
@@ -87,25 +86,21 @@ impl Commentable for CustomType {
 
 /* ---------- Fetch query (catalog-based) ---------- */
 
-pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
-    // 1. Fetch basic type information from pg_type
+pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
+    // 1. Fetch basic type information from pg_type (excluding domains, which are handled separately)
+    info!("Fetching types...");
     let type_rows = sqlx::query!(
         r#"
         SELECT
             n.nspname AS "schema!",
             t.typname AS "name!",
             t.typtype::text AS "typtype!",
-            t.typbasetype AS "typbasetype",
-            bt.typname AS "base_type_name?",
-            btn.nspname AS "base_type_schema?",
             d.description AS "comment?"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
-        LEFT JOIN pg_type bt ON t.typbasetype = bt.oid
-        LEFT JOIN pg_namespace btn ON bt.typnamespace = btn.oid
         LEFT JOIN pg_description d ON d.objoid = t.oid AND d.objsubid = 0
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND t.typtype IN ('e', 'c', 'd', 'r')  -- enum, composite, domain, range
+          AND t.typtype IN ('e', 'c', 'r')  -- enum, composite, range (domains handled separately)
           AND NOT EXISTS (
             SELECT 1 FROM pg_class c
             WHERE c.reltype = t.oid
@@ -120,10 +115,11 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
         ORDER BY n.nspname, t.typname
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // 2. Fetch enum values for enum types
+    info!("Fetching enum values...");
     let enum_values = sqlx::query!(
         r#"
         SELECT
@@ -138,10 +134,11 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
         ORDER BY n.nspname, t.typname, e.enumsortorder
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // 3. Fetch composite type attributes with raw type information for dependency analysis
+    info!("Fetching composite type attributes...");
     let composite_attrs = sqlx::query!(
         r#"
         SELECT
@@ -150,15 +147,35 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
             a.attname AS "attr_name!",
             format_type(a.atttypid, a.atttypmod) AS "attr_type!",
             a.attnum AS "ordinal_position!",
-            tn.nspname AS "attr_type_schema?",
-            attr_t.typname AS "attr_type_name?",
-            COALESCE(a.attndims, 0)::int AS "attr_attndims!: i32"
+            -- Resolve array element type schema/name correctly
+            CASE
+                WHEN attr_t.typelem != 0 THEN elem_tn.nspname
+                ELSE tn.nspname
+            END AS "attr_type_schema?",
+            CASE
+                WHEN attr_t.typelem != 0 THEN elem_t.typname
+                ELSE attr_t.typname
+            END AS "attr_type_name?",
+            COALESCE(a.attndims, 0)::int AS "attr_attndims!: i32",
+            -- Check if attribute type (or element type for arrays) is from an extension
+            ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
+            ext_types.extname AS "extension_name?"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         JOIN pg_class c ON t.typrelid = c.oid
         JOIN pg_attribute a ON c.oid = a.attrelid
         LEFT JOIN pg_type attr_t ON a.atttypid = attr_t.oid
         LEFT JOIN pg_namespace tn ON attr_t.typnamespace = tn.oid
+        -- Element type for array attributes
+        LEFT JOIN pg_type elem_t ON attr_t.typelem = elem_t.oid AND attr_t.typelem != 0
+        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid
+        -- Extension type lookup: compute once as derived table, then hash join
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS type_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(attr_t.typelem, 0::oid), attr_t.oid)
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND t.typtype = 'c'  -- composite
           AND a.attnum > 0
@@ -166,7 +183,7 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
         ORDER BY n.nspname, t.typname, a.attnum
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // 4. Organize enum values by type
@@ -181,19 +198,28 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
             });
     }
 
-    // 5. Organize composite attributes by type
-    let mut composite_attrs_by_type = std::collections::HashMap::new();
+    // 5. Organize composite attributes by type (with extension info for dependency building)
+    // Tuple: (CompositeAttribute, is_extension_type, extension_name)
+    type AttrWithExtInfo = (CompositeAttribute, bool, Option<String>);
+    let mut composite_attrs_by_type: std::collections::HashMap<
+        (String, String),
+        Vec<AttrWithExtInfo>,
+    > = std::collections::HashMap::new();
     for attr in composite_attrs {
         composite_attrs_by_type
             .entry((attr.schema.clone(), attr.type_name.clone()))
-            .or_insert_with(Vec::new)
-            .push(CompositeAttribute {
-                name: attr.attr_name,
-                type_name: attr.attr_type,
-                type_schema: attr.attr_type_schema,
-                raw_type_name: attr.attr_type_name,
-                attndims: attr.attr_attndims,
-            });
+            .or_default()
+            .push((
+                CompositeAttribute {
+                    name: attr.attr_name,
+                    type_name: attr.attr_type,
+                    type_schema: attr.attr_type_schema,
+                    raw_type_name: attr.attr_type_name,
+                    attndims: attr.attr_attndims,
+                },
+                attr.is_extension_type,
+                attr.extension_name,
+            ));
     }
 
     // 6. Build CustomType objects
@@ -203,56 +229,32 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
             .remove(&(row.schema.clone(), row.name.clone()))
             .unwrap_or_default();
 
-        let composite_attributes = composite_attrs_by_type
+        let attrs_with_ext_info = composite_attrs_by_type
             .remove(&(row.schema.clone(), row.name.clone()))
             .unwrap_or_default();
+
+        // Separate attributes from extension info
+        let composite_attributes: Vec<CompositeAttribute> = attrs_with_ext_info
+            .iter()
+            .map(|(attr, _, _)| attr.clone())
+            .collect();
 
         // Build dependencies using DependencyBuilder
         let mut builder = DependencyBuilder::new(row.schema.clone());
 
-        // Add dependency for domain types (but exclude built-in types)
-        if row.typtype == "d"
-            && let (Some(base_schema), Some(base_name)) =
-                (&row.base_type_schema, &row.base_type_name)
-            && !is_system_schema(base_schema)
-        {
-            builder.add_custom_type(Some(base_schema.clone()), Some(base_name.clone()));
-        }
-
         // Add dependencies for composite types - analyze each attribute
         if row.typtype == "c" {
-            for attr in &composite_attributes {
-                if let (Some(type_schema), Some(raw_type_name)) =
-                    (&attr.type_schema, &attr.raw_type_name)
-                    && !is_system_schema(type_schema)
-                {
-                    // Handle array types: PostgreSQL array types have names prefixed with '_'
-                    // For example, 'custom_type[]' is stored as '_custom_type' in pg_type.typname
-                    let base_type_name = if attr.attndims > 0 {
-                        raw_type_name.trim_start_matches('_').to_string()
-                    } else {
-                        raw_type_name.clone()
-                    };
-                    builder.add_custom_type(Some(type_schema.clone()), Some(base_type_name));
-                }
+            for (attr, is_extension, extension_name) in &attrs_with_ext_info {
+                builder.add_type_or_extension(
+                    attr.type_schema.clone(),
+                    attr.raw_type_name.clone(),
+                    *is_extension,
+                    extension_name.clone(),
+                );
             }
         }
 
         let depends_on = builder.build();
-
-        // Create base_type string for domains
-        let base_type = if row.typtype == "d" && row.base_type_name.is_some() {
-            let schema_ref = row.base_type_schema.as_deref().unwrap_or("");
-            let name_ref = row.base_type_name.as_ref().unwrap();
-            if is_system_schema(schema_ref) {
-                // Standard types don't need schema qualification
-                Some(name_ref.clone())
-            } else {
-                Some(format!("{}.{}", schema_ref, name_ref))
-            }
-        } else {
-            None
-        };
 
         custom_types.push(CustomType {
             schema: row.schema,
@@ -260,7 +262,6 @@ pub async fn fetch(pool: &PgPool) -> Result<Vec<CustomType>> {
             kind: TypeKind::from_typtype(&row.typtype),
             enum_values,
             composite_attributes,
-            base_type,
             comment: row.comment,
             depends_on,
         });
@@ -291,20 +292,6 @@ mod tests {
             kind: TypeKind::Enum,
             enum_values,
             composite_attributes: vec![],
-            base_type: None,
-            comment: None,
-            depends_on: vec![],
-        }
-    }
-
-    fn make_domain_type(schema: &str, name: &str, base_type: &str) -> CustomType {
-        CustomType {
-            schema: schema.to_string(),
-            name: name.to_string(),
-            kind: TypeKind::Domain,
-            enum_values: vec![],
-            composite_attributes: vec![],
-            base_type: Some(base_type.to_string()),
             comment: None,
             depends_on: vec![],
         }
@@ -328,7 +315,6 @@ mod tests {
             kind: TypeKind::Composite,
             enum_values: vec![],
             composite_attributes,
-            base_type: None,
             comment: None,
             depends_on: vec![],
         }
@@ -443,29 +429,6 @@ mod tests {
                 assert!(definition.contains("AFTER 'inactive'"));
             }
             _ => panic!("Expected AlterType step"),
-        }
-    }
-
-    #[test]
-    fn test_create_domain_type() {
-        let new_type = make_domain_type("public", "email", "text");
-
-        let steps = diff(None, Some(&new_type));
-
-        assert_eq!(steps.len(), 1);
-        match &steps[0] {
-            MigrationStep::Type(TypeOperation::Create {
-                schema,
-                name,
-                kind,
-                definition,
-            }) => {
-                assert_eq!(schema, "public");
-                assert_eq!(name, "email");
-                assert_eq!(kind, "DOMAIN");
-                assert_eq!(definition, "AS text");
-            }
-            _ => panic!("Expected CreateType step"),
         }
     }
 

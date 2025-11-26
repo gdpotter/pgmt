@@ -13,8 +13,6 @@ pub struct SqlExecutorConfig {
     pub initialize_session: bool,
     /// Whether to provide verbose output during execution
     pub verbose: bool,
-    /// Whether to continue on non-critical errors
-    pub continue_on_error: bool,
 }
 
 impl Default for SqlExecutorConfig {
@@ -22,7 +20,6 @@ impl Default for SqlExecutorConfig {
         Self {
             initialize_session: true,
             verbose: true,
-            continue_on_error: false,
         }
     }
 }
@@ -102,79 +99,17 @@ pub async fn execute_sql_content(
             }
             Ok(())
         }
-        Err(e) => handle_sql_execution_error(e, source, content, config).await,
+        Err(e) => Err(format_sql_error(&e, source, content)),
     }
 }
 
-/// Handle SQL execution errors with appropriate error classification and recovery
-async fn handle_sql_execution_error(
-    e: sqlx::Error,
-    source: &Path,
-    content: &str,
-    config: &SqlExecutorConfig,
-) -> Result<()> {
-    // Extract rich error context from PostgreSQL
-    let ctx = SqlErrorContext::from_sqlx_error(&e, content);
-    let error_str = e.to_string();
-
-    if error_str.contains("CREATE INDEX CONCURRENTLY cannot run inside a transaction block") {
-        eprintln!(
-            "⚠️  Warning: Transaction block issue in {}: {}",
-            source.display(),
-            e
-        );
-        eprintln!("   This should be fixed by removing transactions. Please report this as a bug.");
-        if config.continue_on_error {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "Transaction block error in {}",
-                source.display()
-            ))
-        }
-    } else if error_str.contains("does not exist") && error_str.contains("relation") {
-        // Use enhanced error with line number context
-        Err(anyhow::anyhow!(
-            "{}\n\n💡 This might be caused by:\n   • Missing schema context - tables may be in different schema\n   • Search path not including the target schema\n   • Dependencies between migration files not properly ordered\n   • Previous migration failed to create the referenced table",
-            ctx.format(&source.display().to_string(), content)
-        ))
-    } else if error_str.contains("already exists") {
-        if config.verbose {
-            eprintln!(
-                "⚠️  Warning: Object already exists in {}: {}",
-                source.display(),
-                e
-            );
-            eprintln!("   Continuing with execution...");
-        }
-        if config.continue_on_error {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "{}",
-                ctx.format(&source.display().to_string(), content)
-            ))
-        }
-    } else if error_str.contains("permission") || error_str.contains("access") {
-        Err(anyhow::anyhow!(
-            "{}\n\n💡 Check database user permissions",
-            ctx.format(&source.display().to_string(), content)
-        ))
-    } else if config.continue_on_error {
-        eprintln!(
-            "⚠️  Warning: SQL execution failed in {}: {}",
-            source.display(),
-            e
-        );
-        eprintln!("   Continuing with execution (best-effort mode)...");
-        Ok(())
-    } else {
-        // Use enhanced error formatting for all other errors
-        Err(anyhow::anyhow!(
-            "{}",
-            ctx.format(&source.display().to_string(), content)
-        ))
-    }
+/// Format SQL error with rich context from PostgreSQL
+///
+/// Always returns a formatted error with line number context when available.
+/// The caller decides what to do with the error (fail or continue).
+fn format_sql_error(e: &sqlx::Error, source: &Path, content: &str) -> anyhow::Error {
+    let ctx = SqlErrorContext::from_sqlx_error(e, content);
+    anyhow::anyhow!("{}", ctx.format(&source.display().to_string(), content))
 }
 
 /// Discover SQL files in a directory recursively with enhanced migration directory support
@@ -353,7 +288,6 @@ mod tests {
         let config = SqlExecutorConfig::default();
         assert!(config.initialize_session);
         assert!(config.verbose);
-        assert!(!config.continue_on_error);
     }
 
     #[test]

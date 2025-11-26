@@ -1,11 +1,13 @@
 // Migration integration tests
 // Tests for diff generation, rendering, and end-to-end migration workflows
 
+pub mod aggregates;
 pub mod baseline_validation;
 pub mod comment_ordering;
 pub mod conflict_detection;
 pub mod constraints;
 pub mod custom_types;
+pub mod domains;
 pub mod extension_ordering;
 pub mod extensions;
 pub mod file_dependencies;

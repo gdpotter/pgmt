@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, anyhow};
-use std::collections::{HashMap, HashSet, VecDeque};
+use petgraph::algo::tarjan_scc;
+use petgraph::graph::DiGraph;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -254,19 +256,146 @@ impl SchemaLoader {
 
         // Check for circular dependencies
         if ordered.len() != files.len() {
-            let unprocessed: Vec<_> = files
+            let unprocessed: HashSet<_> = files
                 .iter()
                 .filter(|f| !processed.contains(&f.relative_path))
-                .map(|f| f.relative_path.as_str())
+                .map(|f| f.relative_path.clone())
                 .collect();
 
-            return Err(anyhow!(
-                "Circular dependency detected. Files involved: {}",
-                unprocessed.join(", ")
-            ));
+            // Build a map of file -> dependencies for cycle detection
+            let file_dependencies: HashMap<_, _> = files
+                .iter()
+                .map(|f| (f.relative_path.clone(), f.dependencies.clone()))
+                .collect();
+
+            let cycles = Self::find_cycles(&unprocessed, &file_dependencies);
+
+            if cycles.is_empty() {
+                // Fallback (shouldn't happen if our algorithm is correct)
+                let mut unprocessed_list: Vec<_> = unprocessed.into_iter().collect();
+                unprocessed_list.sort();
+                return Err(anyhow!(
+                    "Circular dependency detected. Files involved: {}",
+                    unprocessed_list.join(", ")
+                ));
+            }
+
+            // Format error message with actual cycles
+            let cycle_descriptions: Vec<String> = cycles
+                .iter()
+                .map(|c| Self::format_cycle(c, &file_dependencies))
+                .collect();
+
+            if cycles.len() == 1 {
+                return Err(anyhow!(
+                    "Circular dependency detected: {}",
+                    cycle_descriptions[0]
+                ));
+            } else {
+                return Err(anyhow!(
+                    "Multiple circular dependencies detected:\n  - {}",
+                    cycle_descriptions.join("\n  - ")
+                ));
+            }
         }
 
         Ok(ordered)
+    }
+
+    /// Find actual cycles in a dependency graph using Tarjan's SCC algorithm.
+    /// Returns a list of cycles, where each cycle is a vector of file paths.
+    fn find_cycles(
+        unprocessed: &HashSet<String>,
+        file_dependencies: &HashMap<String, Vec<String>>,
+    ) -> Vec<Vec<String>> {
+        // Build a petgraph from unprocessed nodes only
+        let mut pg: DiGraph<String, ()> = DiGraph::new();
+        let mut node_indices: BTreeMap<String, _> = BTreeMap::new();
+
+        // Add nodes (using BTreeMap for deterministic ordering)
+        let mut sorted_unprocessed: Vec<_> = unprocessed.iter().cloned().collect();
+        sorted_unprocessed.sort();
+
+        for path in &sorted_unprocessed {
+            let idx = pg.add_node(path.clone());
+            node_indices.insert(path.clone(), idx);
+        }
+
+        // Add edges: dependency -> file (dependency must come before file)
+        // This is the reverse of the "file depends on dependency" relationship
+        for path in &sorted_unprocessed {
+            if let Some(deps) = file_dependencies.get(path) {
+                for dep in deps {
+                    if unprocessed.contains(dep)
+                        && let (Some(&from), Some(&to)) =
+                            (node_indices.get(dep), node_indices.get(path))
+                    {
+                        pg.add_edge(from, to, ());
+                    }
+                }
+            }
+        }
+
+        // Find SCCs - components with >1 node are cycles
+        let sccs = tarjan_scc(&pg);
+
+        sccs.into_iter()
+            .filter(|scc| scc.len() > 1)
+            .map(|scc| {
+                let mut cycle: Vec<_> = scc.into_iter().map(|idx| pg[idx].clone()).collect();
+                cycle.sort(); // Deterministic ordering
+                cycle
+            })
+            .collect()
+    }
+
+    /// Format a cycle as a readable string showing the dependency chain.
+    fn format_cycle(
+        cycle_nodes: &[String],
+        file_dependencies: &HashMap<String, Vec<String>>,
+    ) -> String {
+        if cycle_nodes.is_empty() {
+            return String::new();
+        }
+
+        // Start from the first node alphabetically for determinism
+        let mut sorted_nodes = cycle_nodes.to_vec();
+        sorted_nodes.sort();
+
+        let start = &sorted_nodes[0];
+        let mut path = vec![start.clone()];
+        let mut current = start.clone();
+        let mut visited = HashSet::new();
+        visited.insert(current.clone());
+
+        // Follow dependencies to build the cycle path
+        // We need to find which node in the cycle depends on the current node
+        while path.len() < cycle_nodes.len() {
+            let mut found = false;
+            // Find a node in the cycle that depends on the current node
+            for node in &sorted_nodes {
+                if visited.contains(node) {
+                    continue;
+                }
+                if let Some(deps) = file_dependencies.get(node)
+                    && deps.contains(&current)
+                {
+                    path.push(node.clone());
+                    visited.insert(node.clone());
+                    current = node.clone();
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+
+        // Close the cycle by adding the start node again
+        path.push(start.clone());
+
+        path.join(" -> ")
     }
 }
 
@@ -445,5 +574,196 @@ mod tests {
                 .to_string()
                 .contains("Missing dependency")
         );
+    }
+
+    #[test]
+    fn test_circular_dependency_excludes_non_cycle_files() {
+        let temp_dir = create_test_schema_dir();
+        let schema_dir = temp_dir.path();
+
+        // A <-> B form a cycle
+        write_file(
+            schema_dir,
+            "a.sql",
+            "-- require: b.sql\nCREATE TABLE a (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "b.sql",
+            "-- require: a.sql\nCREATE TABLE b (id INT);",
+        );
+
+        // C depends on A but is NOT part of the cycle
+        write_file(
+            schema_dir,
+            "c.sql",
+            "-- require: a.sql\nCREATE TABLE c (id INT);",
+        );
+
+        let config = SchemaLoaderConfig::new(schema_dir.to_path_buf());
+        let loader = SchemaLoader::new(config);
+
+        let result = loader.load_ordered_schema_files();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("a.sql"));
+        assert!(error_msg.contains("b.sql"));
+        // c.sql should NOT be mentioned as it's not part of the cycle
+        assert!(!error_msg.contains("c.sql"));
+    }
+
+    #[test]
+    fn test_circular_dependency_shows_cycle_path() {
+        let temp_dir = create_test_schema_dir();
+        let schema_dir = temp_dir.path();
+
+        write_file(
+            schema_dir,
+            "a.sql",
+            "-- require: b.sql\nCREATE TABLE a (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "b.sql",
+            "-- require: a.sql\nCREATE TABLE b (id INT);",
+        );
+
+        let config = SchemaLoaderConfig::new(schema_dir.to_path_buf());
+        let loader = SchemaLoader::new(config);
+
+        let result = loader.load_ordered_schema_files();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        // Should show the cycle path with arrows
+        assert!(error_msg.contains("->"));
+    }
+
+    #[test]
+    fn test_three_node_circular_dependency() {
+        let temp_dir = create_test_schema_dir();
+        let schema_dir = temp_dir.path();
+
+        // A -> B -> C -> A
+        write_file(
+            schema_dir,
+            "a.sql",
+            "-- require: c.sql\nCREATE TABLE a (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "b.sql",
+            "-- require: a.sql\nCREATE TABLE b (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "c.sql",
+            "-- require: b.sql\nCREATE TABLE c (id INT);",
+        );
+
+        let config = SchemaLoaderConfig::new(schema_dir.to_path_buf());
+        let loader = SchemaLoader::new(config);
+
+        let result = loader.load_ordered_schema_files();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("a.sql"));
+        assert!(error_msg.contains("b.sql"));
+        assert!(error_msg.contains("c.sql"));
+        assert!(error_msg.contains("->"));
+    }
+
+    #[test]
+    fn test_multiple_independent_cycles() {
+        let temp_dir = create_test_schema_dir();
+        let schema_dir = temp_dir.path();
+
+        // First cycle: A <-> B
+        write_file(
+            schema_dir,
+            "a.sql",
+            "-- require: b.sql\nCREATE TABLE a (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "b.sql",
+            "-- require: a.sql\nCREATE TABLE b (id INT);",
+        );
+
+        // Second cycle: X <-> Y
+        write_file(
+            schema_dir,
+            "x.sql",
+            "-- require: y.sql\nCREATE TABLE x (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "y.sql",
+            "-- require: x.sql\nCREATE TABLE y (id INT);",
+        );
+
+        let config = SchemaLoaderConfig::new(schema_dir.to_path_buf());
+        let loader = SchemaLoader::new(config);
+
+        let result = loader.load_ordered_schema_files();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        // Should mention multiple cycles
+        assert!(error_msg.contains("Multiple circular dependencies"));
+    }
+
+    #[test]
+    fn test_dependent_on_cycle_not_reported() {
+        let temp_dir = create_test_schema_dir();
+        let schema_dir = temp_dir.path();
+
+        // Base file with no dependencies (will be processed)
+        write_file(schema_dir, "base.sql", "CREATE SCHEMA base;");
+
+        // Cycle: A <-> B (A also depends on base)
+        write_file(
+            schema_dir,
+            "a.sql",
+            "-- require: base.sql, b.sql\nCREATE TABLE a (id INT);",
+        );
+        write_file(
+            schema_dir,
+            "b.sql",
+            "-- require: a.sql\nCREATE TABLE b (id INT);",
+        );
+
+        // C depends on A (part of cycle) - C is blocked but not in cycle
+        write_file(
+            schema_dir,
+            "c.sql",
+            "-- require: a.sql\nCREATE TABLE c (id INT);",
+        );
+
+        // D depends on C (transitively depends on cycle) - also blocked
+        write_file(
+            schema_dir,
+            "d.sql",
+            "-- require: c.sql\nCREATE TABLE d (id INT);",
+        );
+
+        let config = SchemaLoaderConfig::new(schema_dir.to_path_buf());
+        let loader = SchemaLoader::new(config);
+
+        let result = loader.load_ordered_schema_files();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+
+        // Only a.sql and b.sql are in the cycle
+        assert!(error_msg.contains("a.sql"));
+        assert!(error_msg.contains("b.sql"));
+
+        // These should NOT be mentioned
+        assert!(!error_msg.contains("base.sql"));
+        assert!(!error_msg.contains("c.sql"));
+        assert!(!error_msg.contains("d.sql"));
     }
 }

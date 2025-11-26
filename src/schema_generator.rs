@@ -49,6 +49,21 @@ impl SchemaGenerator {
         }
     }
 
+    /// Check if the catalog has schemas other than "public"
+    /// When true, files will be organized into per-schema directories
+    fn has_multiple_schemas(&self) -> bool {
+        self.catalog.schemas.iter().any(|s| s.name != "public")
+    }
+
+    /// Get the file path prefix for a schema (empty string for flat structure, "schema/" for multi-schema)
+    fn schema_path_prefix(&self, schema: &str) -> String {
+        if self.has_multiple_schemas() {
+            format!("{}/", schema)
+        } else {
+            String::new()
+        }
+    }
+
     /// Generate all schema files using the diffing pipeline
     pub fn generate_files(&self) -> Result<()> {
         self.create_directory_structure()?;
@@ -66,9 +81,27 @@ impl SchemaGenerator {
     /// Create the directory structure
     fn create_directory_structure(&self) -> Result<()> {
         fs::create_dir_all(&self.output_dir)?;
-        fs::create_dir_all(self.output_dir.join("tables"))?;
-        fs::create_dir_all(self.output_dir.join("views"))?;
-        fs::create_dir_all(self.output_dir.join("functions"))?;
+
+        if self.has_multiple_schemas() {
+            // Create per-schema directories
+            for schema in &self.catalog.schemas {
+                let schema_dir = self.output_dir.join(&schema.name);
+                fs::create_dir_all(schema_dir.join("tables"))?;
+                fs::create_dir_all(schema_dir.join("views"))?;
+                fs::create_dir_all(schema_dir.join("functions"))?;
+                fs::create_dir_all(schema_dir.join("types"))?;
+                fs::create_dir_all(schema_dir.join("aggregates"))?;
+                fs::create_dir_all(schema_dir.join("sequences"))?;
+            }
+        } else {
+            // Flat structure for single schema
+            fs::create_dir_all(self.output_dir.join("tables"))?;
+            fs::create_dir_all(self.output_dir.join("views"))?;
+            fs::create_dir_all(self.output_dir.join("functions"))?;
+            fs::create_dir_all(self.output_dir.join("types"))?;
+            fs::create_dir_all(self.output_dir.join("aggregates"))?;
+            fs::create_dir_all(self.output_dir.join("sequences"))?;
+        }
         Ok(())
     }
 
@@ -96,17 +129,23 @@ impl SchemaGenerator {
         &self,
         steps: Vec<MigrationStep>,
     ) -> Result<BTreeMap<String, FileContent>> {
-        let mut files: BTreeMap<String, FileContent> = BTreeMap::new();
-
+        // Phase 1: Assign steps to files and build object-to-file mapping
         let mut steps_by_file: BTreeMap<String, Vec<MigrationStep>> = BTreeMap::new();
+        let mut object_to_file: BTreeMap<DbObjectId, String> = BTreeMap::new();
 
         for step in steps {
             let file_key = self.determine_file_for_step(&step);
+            let object_id = step.id();
+
+            // Track which file contains this object
+            object_to_file.insert(object_id, file_key.clone());
             steps_by_file.entry(file_key).or_default().push(step);
         }
 
+        // Phase 2: Create file content with dependencies resolved via mapping
+        let mut files: BTreeMap<String, FileContent> = BTreeMap::new();
         for (file_key, file_steps) in steps_by_file {
-            let file_content = self.create_file_content(file_key, file_steps)?;
+            let file_content = self.create_file_content(file_key, file_steps, &object_to_file)?;
             files.insert(
                 file_content.path.to_string_lossy().to_string(),
                 file_content,
@@ -121,59 +160,114 @@ impl SchemaGenerator {
         match step {
             MigrationStep::Schema(_) => "schemas.sql".to_string(),
             MigrationStep::Extension(_) => "extensions.sql".to_string(),
-            MigrationStep::Type(_) => "types.sql".to_string(),
+
+            MigrationStep::Type(op) => {
+                let (schema, name) = self.extract_type_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}types/{}.sql", prefix, name)
+            }
+
+            MigrationStep::Domain(op) => {
+                let (schema, name) = self.extract_domain_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}domains/{}.sql", prefix, name)
+            }
 
             MigrationStep::Table(op) => {
-                let table_name = self.extract_table_name_from_operation(op);
-                format!("tables/{}.sql", table_name)
+                let (schema, name) = self.extract_table_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}tables/{}.sql", prefix, name)
             }
 
             MigrationStep::View(op) => {
-                let view_name = self.extract_view_name_from_operation(op);
-                format!("views/{}.sql", view_name)
+                let (schema, name) = self.extract_view_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}views/{}.sql", prefix, name)
             }
 
             MigrationStep::Function(op) => {
-                let function_name = self.extract_function_name_from_operation(op);
-                format!("functions/{}.sql", function_name)
+                let (schema, name) = self.extract_function_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}functions/{}.sql", prefix, name)
+            }
+
+            MigrationStep::Aggregate(op) => {
+                let (schema, name) = self.extract_aggregate_info_from_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}aggregates/{}.sql", prefix, name)
             }
 
             MigrationStep::Sequence(op) => {
-                let sequence_name = self.extract_sequence_name_from_operation(op);
+                let (schema, name) = self.extract_sequence_info_from_operation(op);
 
-                if let Some(table_name) = self.find_owning_table_for_sequence(&sequence_name) {
-                    format!("tables/{}.sql", table_name)
+                if let Some((table_schema, table_name)) =
+                    self.find_owning_table_for_sequence(&schema, &name)
+                {
+                    let prefix = self.schema_path_prefix(&table_schema);
+                    format!("{}tables/{}.sql", prefix, table_name)
                 } else {
-                    "sequences.sql".to_string()
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}sequences/{}.sql", prefix, name)
                 }
             }
 
             MigrationStep::Index(op) => {
-                let table_name = self.extract_table_name_from_index_operation(op);
-                format!("tables/{}.sql", table_name)
+                let (schema, table_name) = self.extract_table_info_from_index_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}tables/{}.sql", prefix, table_name)
             }
 
             MigrationStep::Constraint(op) => {
-                let table_name = self.extract_table_name_from_constraint_operation(op);
-                format!("tables/{}.sql", table_name)
+                let (schema, table_name) = self.extract_table_info_from_constraint_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}tables/{}.sql", prefix, table_name)
             }
 
             MigrationStep::Trigger(op) => {
-                let table_name = self.extract_table_name_from_trigger_operation(op);
-                format!("tables/{}.sql", table_name)
+                let (schema, table_name) = self.extract_table_info_from_trigger_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}tables/{}.sql", prefix, table_name)
             }
 
             MigrationStep::Grant(op) => match self.extract_grant_target(op) {
-                GrantTarget::Table(table_name) => format!("tables/{}.sql", table_name),
-                GrantTarget::View(view_name) => format!("views/{}.sql", view_name),
-                GrantTarget::Function(function_name) => format!("functions/{}.sql", function_name),
+                GrantTarget::Table { schema, name } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}tables/{}.sql", prefix, name)
+                }
+                GrantTarget::View { schema, name } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}views/{}.sql", prefix, name)
+                }
+                GrantTarget::Function { schema, name } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}functions/{}.sql", prefix, name)
+                }
+                GrantTarget::Procedure { schema, name } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}functions/{}.sql", prefix, name)
+                }
+                GrantTarget::Aggregate { schema, name } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}aggregates/{}.sql", prefix, name)
+                }
                 GrantTarget::Schema => "schemas.sql".to_string(),
-                GrantTarget::Type => "types.sql".to_string(),
-                GrantTarget::Sequence(sequence_name) => {
-                    if let Some(table_name) = self.find_owning_table_for_sequence(&sequence_name) {
-                        format!("tables/{}.sql", table_name)
+                GrantTarget::Type { schema } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}types.sql", prefix)
+                }
+                GrantTarget::Domain { schema } => {
+                    let prefix = self.schema_path_prefix(&schema);
+                    format!("{}domains.sql", prefix)
+                }
+                GrantTarget::Sequence { schema, name } => {
+                    if let Some((table_schema, table_name)) =
+                        self.find_owning_table_for_sequence(&schema, &name)
+                    {
+                        let prefix = self.schema_path_prefix(&table_schema);
+                        format!("{}tables/{}.sql", prefix, table_name)
                     } else {
-                        "sequences.sql".to_string()
+                        let prefix = self.schema_path_prefix(&schema);
+                        format!("{}sequences/{}.sql", prefix, name)
                     }
                 }
             },
@@ -185,11 +279,12 @@ impl SchemaGenerator {
         &self,
         file_key: String,
         steps: Vec<MigrationStep>,
+        object_to_file: &BTreeMap<DbObjectId, String>,
     ) -> Result<FileContent> {
         let file_path = self.output_dir.join(&file_key);
 
         // Calculate dependencies for this file
-        let dependencies = self.calculate_file_dependencies(&steps);
+        let dependencies = self.calculate_file_dependencies(&steps, object_to_file);
 
         // Convert steps to SQL statements
         let mut sql_statements = Vec::new();
@@ -207,8 +302,12 @@ impl SchemaGenerator {
         })
     }
 
-    /// Calculate file dependencies from migration steps
-    fn calculate_file_dependencies(&self, steps: &[MigrationStep]) -> Vec<String> {
+    /// Calculate file dependencies from migration steps using the object-to-file mapping
+    fn calculate_file_dependencies(
+        &self,
+        steps: &[MigrationStep],
+        object_to_file: &BTreeMap<DbObjectId, String>,
+    ) -> Vec<String> {
         let mut dependencies = BTreeSet::new();
 
         let current_file_path = if let Some(first_step) = steps.first() {
@@ -220,10 +319,11 @@ impl SchemaGenerator {
         for step in steps {
             let step_deps = self.get_step_dependencies(step);
             for dep in step_deps {
-                if let Some(file_path) = self.object_id_to_file_path(&dep)
-                    && file_path != current_file_path
+                // Use the mapping to find where the dependency object is written
+                if let Some(file_path) = object_to_file.get(&dep)
+                    && *file_path != current_file_path
                 {
-                    dependencies.insert(file_path);
+                    dependencies.insert(file_path.clone());
                 }
             }
         }
@@ -242,42 +342,17 @@ impl SchemaGenerator {
             .unwrap_or_default()
     }
 
-    /// Convert a DbObjectId to a file path for dependencies
-    fn object_id_to_file_path(&self, object_id: &DbObjectId) -> Option<String> {
-        match object_id {
-            DbObjectId::Schema { name } => {
-                if name != "public" {
-                    Some("schemas.sql".to_string())
-                } else {
-                    None
-                }
-            }
-            DbObjectId::Table { name, .. } => Some(format!("tables/{}.sql", name)),
-            DbObjectId::View { name, .. } => Some(format!("views/{}.sql", name)),
-            DbObjectId::Function { name, .. } => Some(format!("functions/{}.sql", name)),
-            DbObjectId::Type { .. } => Some("types.sql".to_string()),
-            DbObjectId::Sequence { name, .. } => {
-                if let Some(table_name) = self.find_owning_table_for_sequence(name) {
-                    Some(format!("tables/{}.sql", table_name))
-                } else {
-                    Some("sequences.sql".to_string())
-                }
-            }
-            DbObjectId::Extension { .. } => Some("extensions.sql".to_string()),
-            _ => None,
-        }
-    }
-
     /// Write organized files to disk
     fn write_organized_files(&self, files: BTreeMap<String, FileContent>) -> Result<()> {
         for (_, file_content) in files {
             let mut content = String::new();
 
+            // Write each dependency on its own line for readability
             if !file_content.dependencies.is_empty() {
-                content.push_str(&format!(
-                    "-- require: {}\n\n",
-                    file_content.dependencies.join(", ")
-                ));
+                for dep in &file_content.dependencies {
+                    content.push_str(&format!("-- require: {}\n", dep));
+                }
+                content.push('\n');
             }
 
             for (i, sql) in file_content.sql_statements.iter().enumerate() {
@@ -304,143 +379,266 @@ impl SchemaGenerator {
         Ok(())
     }
 
-    // Helper methods for extracting names from operations
-    fn extract_table_name_from_operation(
+    // Helper methods for extracting schema and name from operations
+    fn extract_table_info_from_operation(
         &self,
         op: &crate::diff::operations::TableOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::TableOperation;
         match op {
-            TableOperation::Create { name, .. } => name.clone(),
-            TableOperation::Drop { name, .. } => name.clone(),
-            TableOperation::Alter { name, .. } => name.clone(),
+            TableOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
+            TableOperation::Drop { schema, name } => (schema.clone(), name.clone()),
+            TableOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
             TableOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.table.clone()
+                    (target.schema.clone(), target.table.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.table.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.table.clone())
+                }
             },
         }
     }
 
-    fn extract_view_name_from_operation(
+    fn extract_view_info_from_operation(
         &self,
         op: &crate::diff::operations::ViewOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::ViewOperation;
         match op {
-            ViewOperation::Create { name, .. } => name.clone(),
-            ViewOperation::Drop { name, .. } => name.clone(),
-            ViewOperation::Replace { name, .. } => name.clone(),
+            ViewOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
+            ViewOperation::Drop { schema, name } => (schema.clone(), name.clone()),
+            ViewOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
             ViewOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.name.clone()
+                    (target.schema.clone(), target.name.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.name.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
             },
         }
     }
 
-    fn extract_function_name_from_operation(
+    fn extract_function_info_from_operation(
         &self,
         op: &crate::diff::operations::FunctionOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::FunctionOperation;
         match op {
-            FunctionOperation::Create { name, .. } => name.clone(),
-            FunctionOperation::Drop { name, .. } => name.clone(),
-            FunctionOperation::Replace { name, .. } => name.clone(),
+            FunctionOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
+            FunctionOperation::Drop { schema, name, .. } => (schema.clone(), name.clone()),
+            FunctionOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
             FunctionOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.name.clone()
+                    (target.schema.clone(), target.name.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.name.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
             },
         }
     }
 
-    fn extract_sequence_name_from_operation(
+    fn extract_aggregate_info_from_operation(
+        &self,
+        op: &crate::diff::operations::AggregateOperation,
+    ) -> (String, String) {
+        use crate::diff::operations::AggregateOperation;
+        match op {
+            AggregateOperation::Create { aggregate, .. } => {
+                (aggregate.schema.clone(), aggregate.name.clone())
+            }
+            AggregateOperation::Drop { identifier, .. } => {
+                (identifier.schema.clone(), identifier.name.clone())
+            }
+            AggregateOperation::Replace { new_aggregate, .. } => {
+                (new_aggregate.schema.clone(), new_aggregate.name.clone())
+            }
+            AggregateOperation::Comment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+            },
+        }
+    }
+
+    fn extract_sequence_info_from_operation(
         &self,
         op: &crate::diff::operations::SequenceOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::SequenceOperation;
         match op {
-            SequenceOperation::Create { name, .. } => name.clone(),
-            SequenceOperation::Drop { name, .. } => name.clone(),
-            SequenceOperation::AlterOwnership { name, .. } => name.clone(),
+            SequenceOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
+            SequenceOperation::Drop { schema, name } => (schema.clone(), name.clone()),
+            SequenceOperation::AlterOwnership { schema, name, .. } => {
+                (schema.clone(), name.clone())
+            }
             SequenceOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.name.clone()
+                    (target.schema.clone(), target.name.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.name.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
             },
         }
     }
 
-    fn extract_table_name_from_index_operation(
+    fn extract_type_info_from_operation(
+        &self,
+        op: &crate::diff::operations::TypeOperation,
+    ) -> (String, String) {
+        use crate::diff::operations::TypeOperation;
+        match op {
+            TypeOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
+            TypeOperation::Drop { schema, name } => (schema.clone(), name.clone()),
+            TypeOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
+            TypeOperation::Comment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+            },
+        }
+    }
+
+    fn extract_domain_info_from_operation(
+        &self,
+        op: &crate::diff::operations::DomainOperation,
+    ) -> (String, String) {
+        use crate::diff::operations::DomainOperation;
+        match op {
+            DomainOperation::Create { schema, name, .. }
+            | DomainOperation::Drop { schema, name }
+            | DomainOperation::AlterSetNotNull { schema, name }
+            | DomainOperation::AlterDropNotNull { schema, name }
+            | DomainOperation::AlterSetDefault { schema, name, .. }
+            | DomainOperation::AlterDropDefault { schema, name }
+            | DomainOperation::AddConstraint { schema, name, .. }
+            | DomainOperation::DropConstraint { schema, name, .. } => {
+                (schema.clone(), name.clone())
+            }
+            DomainOperation::Comment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.name.clone())
+                }
+            },
+        }
+    }
+
+    fn extract_table_info_from_index_operation(
         &self,
         op: &crate::diff::operations::IndexOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::IndexOperation;
         match op {
-            IndexOperation::Create(index) => index.table_name.clone(),
-            IndexOperation::Drop { name, .. } => {
+            IndexOperation::Create(index) => (index.table_schema.clone(), index.table_name.clone()),
+            IndexOperation::Drop { schema, name, .. } => {
                 for index in &self.catalog.indexes {
-                    if index.name == *name {
-                        return index.table_name.clone();
+                    if index.schema == *schema && index.name == *name {
+                        return (index.table_schema.clone(), index.table_name.clone());
                     }
                 }
-                "unknown".to_string()
+                (schema.clone(), "unknown".to_string())
             }
-            IndexOperation::Comment(_comment_op) => {
-                // Similar issue with comment operations
-                "unknown".to_string()
-            }
-            IndexOperation::Cluster { table_name, .. } => table_name.clone(),
-            IndexOperation::SetWithoutCluster { name, .. } => name.clone(),
-            IndexOperation::Reindex { name, .. } => {
-                // Find the table name from the index in the catalog
+            IndexOperation::Comment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    // Look up the index to find its table
+                    for index in &self.catalog.indexes {
+                        if index.schema == target.schema && index.name == target.name {
+                            return (index.table_schema.clone(), index.table_name.clone());
+                        }
+                    }
+                    (target.schema.clone(), "unknown".to_string())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    for index in &self.catalog.indexes {
+                        if index.schema == target.schema && index.name == target.name {
+                            return (index.table_schema.clone(), index.table_name.clone());
+                        }
+                    }
+                    (target.schema.clone(), "unknown".to_string())
+                }
+            },
+            IndexOperation::Cluster {
+                table_schema,
+                table_name,
+                ..
+            } => (table_schema.clone(), table_name.clone()),
+            IndexOperation::SetWithoutCluster { schema, name, .. } => {
                 for index in &self.catalog.indexes {
-                    if index.name == *name {
-                        return index.table_name.clone();
+                    if index.schema == *schema && index.name == *name {
+                        return (index.table_schema.clone(), index.table_name.clone());
                     }
                 }
-                "unknown".to_string()
+                (schema.clone(), name.clone())
+            }
+            IndexOperation::Reindex { schema, name, .. } => {
+                for index in &self.catalog.indexes {
+                    if index.schema == *schema && index.name == *name {
+                        return (index.table_schema.clone(), index.table_name.clone());
+                    }
+                }
+                (schema.clone(), "unknown".to_string())
             }
         }
     }
 
-    fn extract_table_name_from_constraint_operation(
+    fn extract_table_info_from_constraint_operation(
         &self,
         op: &crate::diff::operations::ConstraintOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::ConstraintOperation;
         match op {
-            ConstraintOperation::Create(constraint) => constraint.table.clone(),
-            ConstraintOperation::Drop(constraint_id) => constraint_id.table.clone(),
+            ConstraintOperation::Create(constraint) => {
+                (constraint.schema.clone(), constraint.table.clone())
+            }
+            ConstraintOperation::Drop(constraint_id) => {
+                (constraint_id.schema.clone(), constraint_id.table.clone())
+            }
             ConstraintOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.table.clone()
+                    (target.schema.clone(), target.table.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.table.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.table.clone())
+                }
             },
         }
     }
 
-    fn extract_table_name_from_trigger_operation(
+    fn extract_table_info_from_trigger_operation(
         &self,
         op: &crate::diff::operations::TriggerOperation,
-    ) -> String {
+    ) -> (String, String) {
         use crate::diff::operations::TriggerOperation;
         match op {
-            TriggerOperation::Create { trigger } => trigger.table_name.clone(),
-            TriggerOperation::Drop { identifier } => identifier.table.clone(),
-            TriggerOperation::Replace { new_trigger, .. } => new_trigger.table_name.clone(),
+            TriggerOperation::Create { trigger } => {
+                // Trigger's schema field IS the table's schema
+                (trigger.schema.clone(), trigger.table_name.clone())
+            }
+            TriggerOperation::Drop { identifier } => {
+                (identifier.schema.clone(), identifier.table.clone())
+            }
+            TriggerOperation::Replace { new_trigger, .. } => {
+                (new_trigger.schema.clone(), new_trigger.table_name.clone())
+            }
             TriggerOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.table.clone()
+                    (target.schema.clone(), target.table.clone())
                 }
-                crate::diff::operations::CommentOperation::Drop { target } => target.table.clone(),
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.table.clone())
+                }
             },
         }
     }
@@ -455,24 +653,54 @@ impl SchemaGenerator {
         };
 
         match object_type {
-            ObjectType::Table { name, .. } => GrantTarget::Table(name.clone()),
-            ObjectType::View { name, .. } => GrantTarget::View(name.clone()),
-            ObjectType::Function { name, .. } => GrantTarget::Function(name.clone()),
+            ObjectType::Table { schema, name } => GrantTarget::Table {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            ObjectType::View { schema, name } => GrantTarget::View {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            ObjectType::Function { schema, name, .. } => GrantTarget::Function {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            ObjectType::Procedure { schema, name, .. } => GrantTarget::Procedure {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            ObjectType::Aggregate { schema, name, .. } => GrantTarget::Aggregate {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
             ObjectType::Schema { .. } => GrantTarget::Schema,
-            ObjectType::Type { .. } => GrantTarget::Type,
-            ObjectType::Sequence { name, .. } => GrantTarget::Sequence(name.clone()),
+            ObjectType::Type { schema, .. } => GrantTarget::Type {
+                schema: schema.clone(),
+            },
+            ObjectType::Domain { schema, .. } => GrantTarget::Domain {
+                schema: schema.clone(),
+            },
+            ObjectType::Sequence { schema, name } => GrantTarget::Sequence {
+                schema: schema.clone(),
+                name: name.clone(),
+            },
         }
     }
 
-    fn find_owning_table_for_sequence(&self, sequence_name: &str) -> Option<String> {
+    /// Find the owning table for a sequence, returns (schema, table_name) if found
+    fn find_owning_table_for_sequence(
+        &self,
+        seq_schema: &str,
+        seq_name: &str,
+    ) -> Option<(String, String)> {
         // Look through catalog sequences to find if this sequence is owned by a table
         for sequence in &self.catalog.sequences {
-            if sequence.name == sequence_name {
+            if sequence.schema == seq_schema && sequence.name == seq_name {
                 if let Some(ref owned_by) = sequence.owned_by {
                     // owned_by format is usually "schema.table.column"
                     let parts: Vec<&str> = owned_by.split('.').collect();
-                    if parts.len() >= 2 {
-                        return Some(parts[1].to_string()); // Return table name
+                    if parts.len() >= 3 {
+                        return Some((parts[0].to_string(), parts[1].to_string()));
                     }
                 }
                 break;
@@ -482,12 +710,16 @@ impl SchemaGenerator {
     }
 }
 
+/// Target of a grant operation with schema information
 #[derive(Debug, Clone)]
 enum GrantTarget {
-    Table(String),
-    View(String),
-    Function(String),
+    Table { schema: String, name: String },
+    View { schema: String, name: String },
+    Function { schema: String, name: String },
+    Procedure { schema: String, name: String },
+    Aggregate { schema: String, name: String },
     Schema,
-    Type,
-    Sequence(String),
+    Type { schema: String },
+    Domain { schema: String },
+    Sequence { schema: String, name: String },
 }

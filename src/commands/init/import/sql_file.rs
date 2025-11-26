@@ -30,7 +30,6 @@ pub async fn import_from_sql_file(
     let executor_config = SqlExecutorConfig {
         initialize_session: true,
         verbose: true,
-        continue_on_error: true, // Best effort for imports
     };
 
     // Execute the file
@@ -41,7 +40,6 @@ pub async fn import_from_sql_file(
 
     // Cleanup
     pool.close().await;
-    // Note: Docker containers are automatically cleaned up based on their auto_cleanup configuration
 
     Ok(catalog)
 }

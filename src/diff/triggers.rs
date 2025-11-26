@@ -8,7 +8,7 @@ pub fn diff(old: Option<&Trigger>, new: Option<&Trigger>) -> Vec<MigrationStep> 
         // CREATE new trigger
         (None, Some(new_trigger)) => {
             vec![MigrationStep::Trigger(TriggerOperation::Create {
-                trigger: new_trigger.clone(),
+                trigger: Box::new(new_trigger.clone()),
             })]
         }
 
@@ -31,8 +31,8 @@ pub fn diff(old: Option<&Trigger>, new: Option<&Trigger>) -> Vec<MigrationStep> 
             if triggers_differ_structurally(old_trigger, new_trigger) {
                 // Structural changes require replacement
                 steps.push(MigrationStep::Trigger(TriggerOperation::Replace {
-                    old_trigger: old_trigger.clone(),
-                    new_trigger: new_trigger.clone(),
+                    old_trigger: Box::new(old_trigger.clone()),
+                    new_trigger: Box::new(new_trigger.clone()),
                 }));
             } else {
                 // Only comments might have changed
@@ -76,6 +76,7 @@ mod tests {
             name: name.to_string(),
             function_schema: "public".to_string(),
             function_name: "set_updated_at".to_string(),
+            function_args: "".to_string(),
             comment: None,
             depends_on: vec![
                 DbObjectId::Table {
@@ -85,6 +86,7 @@ mod tests {
                 DbObjectId::Function {
                     schema: "public".to_string(),
                     name: "set_updated_at".to_string(),
+                    arguments: "".to_string(),
                 },
             ],
             definition: format!(

@@ -80,14 +80,10 @@ pub fn render_create_index(index: &Index) -> String {
     sql.push(')');
 
     // INCLUDE columns for covering indexes
+    // Note: include_columns come from pg_get_indexdef() which returns already-quoted identifiers
     if !index.include_columns.is_empty() {
         sql.push_str(" INCLUDE (");
-        let include_specs: Vec<String> = index
-            .include_columns
-            .iter()
-            .map(|col| quote_ident(col))
-            .collect();
-        sql.push_str(&include_specs.join(", "));
+        sql.push_str(&index.include_columns.join(", "));
         sql.push(')');
     }
 
@@ -257,6 +253,7 @@ mod tests {
 
     #[test]
     fn test_render_covering_index() {
+        // PostgreSQL's pg_get_indexdef() returns already-quoted identifiers for INCLUDE columns
         let index = Index {
             schema: "public".to_string(),
             name: "users_covering_idx".to_string(),
@@ -273,7 +270,8 @@ mod tests {
                 ordering: None,
                 nulls_ordering: None,
             }],
-            include_columns: vec!["first_name".to_string(), "last_name".to_string()],
+            // These come from pg_get_indexdef() which returns quoted identifiers
+            include_columns: vec!["\"first_name\"".to_string(), "\"last_name\"".to_string()],
             predicate: None,
             tablespace: None,
             storage_parameters: vec![],

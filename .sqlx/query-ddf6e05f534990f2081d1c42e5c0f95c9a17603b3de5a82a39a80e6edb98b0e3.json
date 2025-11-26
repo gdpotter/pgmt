@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"domain_oid!\",\n            con.conname AS \"constraint_name!\",\n            pg_get_constraintdef(con.oid, true) AS \"expression!\"\n        FROM pg_constraint con\n        JOIN pg_type t ON con.contypid = t.oid\n        JOIN pg_namespace n ON t.typnamespace = n.oid\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND t.typtype = 'd'\n          AND con.contype = 'c'\n        ORDER BY t.oid, con.conname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain_oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 1,
+        "name": "constraint_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "expression!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "ddf6e05f534990f2081d1c42e5c0f95c9a17603b3de5a82a39a80e6edb98b0e3"
+}

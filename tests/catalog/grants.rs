@@ -1,7 +1,8 @@
 use crate::helpers::harness::with_test_db;
 
+use pgmt::catalog::Catalog;
 use pgmt::catalog::grant::{GranteeType, ObjectType, fetch};
-use pgmt::catalog::id::DependsOn;
+use pgmt::catalog::id::{DbObjectId, DependsOn};
 
 #[tokio::test]
 async fn test_fetch_table_grants() {
@@ -16,7 +17,7 @@ async fn test_fetch_table_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grants for our test table
         let table_grants: Vec<_> = grants
@@ -59,7 +60,7 @@ async fn test_fetch_schema_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grants for our test schema
         let schema_grants: Vec<_> = grants
@@ -93,7 +94,7 @@ async fn test_fetch_public_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grants for our test table
         let public_grants: Vec<_> = grants
@@ -126,7 +127,7 @@ async fn test_fetch_grant_with_grant_option() {
         .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grants for our test table
         let admin_grants: Vec<_> = grants
@@ -160,13 +161,13 @@ async fn test_fetch_function_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grants for our test function
         let function_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Function { schema, name }
+                matches!(&g.object, ObjectType::Function { schema, name, .. }
                 if schema == "test_func_schema" && name == "test_func")
             })
             .collect();
@@ -189,7 +190,7 @@ async fn test_grant_dependencies() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(db.pool()).await.unwrap();
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
 
         // Find grant for our test table
         let table_grant = grants
@@ -213,6 +214,130 @@ async fn test_grant_dependencies() {
             matches!(table_dep, pgmt::catalog::id::DbObjectId::Table { schema, name }
             if schema == "test_dep_schema" && name == "dep_table")
         );
+    })
+    .await;
+}
+
+/// Test that function grants with custom types have consistent argument formatting
+/// with the function itself. This tests the search_path consistency fix.
+#[tokio::test]
+async fn test_function_grant_with_custom_type_arguments_match() {
+    with_test_db(async |db| {
+        // Create a custom enum type and a function using it
+        db.execute("CREATE SCHEMA test_custom_type_schema").await;
+        db.execute("CREATE TYPE test_custom_type_schema.status_enum AS ENUM ('active', 'inactive', 'pending')")
+            .await;
+        db.execute(
+            "CREATE FUNCTION test_custom_type_schema.process_status(s test_custom_type_schema.status_enum)
+             RETURNS TEXT AS $$ BEGIN RETURN s::text; END; $$ LANGUAGE plpgsql",
+        )
+        .await;
+        db.execute(
+            "GRANT EXECUTE ON FUNCTION test_custom_type_schema.process_status(test_custom_type_schema.status_enum) TO test_app_user",
+        )
+        .await;
+
+        // Load the full catalog (which sets consistent search_path)
+        let catalog = Catalog::load(db.pool()).await.unwrap();
+
+        // Find the function
+        let function = catalog
+            .functions
+            .iter()
+            .find(|f| f.schema == "test_custom_type_schema" && f.name == "process_status")
+            .expect("Should find process_status function");
+
+        // Find grants for this function
+        let function_grants: Vec<_> = catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                if schema == "test_custom_type_schema" && name == "process_status")
+            })
+            .collect();
+
+        assert!(
+            !function_grants.is_empty(),
+            "Should have at least one grant for the function"
+        );
+
+        // The key assertion: Grant's arguments should match function's arguments
+        // Before the fix, these could differ in schema qualification (e.g., "public.status_enum" vs "status_enum")
+        for grant in function_grants {
+            if let ObjectType::Function { arguments, .. } = &grant.object {
+                assert_eq!(
+                    arguments, &function.arguments,
+                    "Grant arguments '{}' should match function arguments '{}'",
+                    arguments, function.arguments
+                );
+
+                // The grant's dependency should match the function's ID exactly
+                let function_id = function.id();
+                assert!(
+                    grant.depends_on().contains(&function_id),
+                    "Grant should depend on function with matching ID. Grant depends on {:?}, function ID is {:?}",
+                    grant.depends_on(),
+                    function_id
+                );
+            }
+        }
+    })
+    .await;
+}
+
+/// Test that Catalog::contains_id works correctly for all object types
+#[tokio::test]
+async fn test_catalog_contains_id() {
+    with_test_db(async |db| {
+        // Create various objects
+        db.execute("CREATE SCHEMA test_contains_schema").await;
+        db.execute("CREATE TYPE test_contains_schema.my_enum AS ENUM ('a', 'b')").await;
+        db.execute("CREATE TABLE test_contains_schema.my_table (id SERIAL)").await;
+        db.execute("CREATE FUNCTION test_contains_schema.my_func() RETURNS INT AS $$ SELECT 1; $$ LANGUAGE SQL").await;
+
+        let catalog = Catalog::load(db.pool()).await.unwrap();
+
+        // Test contains_id for schema
+        assert!(catalog.contains_id(&DbObjectId::Schema {
+            name: "test_contains_schema".to_string()
+        }));
+        assert!(!catalog.contains_id(&DbObjectId::Schema {
+            name: "nonexistent_schema".to_string()
+        }));
+
+        // Test contains_id for type
+        assert!(catalog.contains_id(&DbObjectId::Type {
+            schema: "test_contains_schema".to_string(),
+            name: "my_enum".to_string()
+        }));
+        assert!(!catalog.contains_id(&DbObjectId::Type {
+            schema: "test_contains_schema".to_string(),
+            name: "nonexistent_type".to_string()
+        }));
+
+        // Test contains_id for table
+        assert!(catalog.contains_id(&DbObjectId::Table {
+            schema: "test_contains_schema".to_string(),
+            name: "my_table".to_string()
+        }));
+        assert!(!catalog.contains_id(&DbObjectId::Table {
+            schema: "test_contains_schema".to_string(),
+            name: "nonexistent_table".to_string()
+        }));
+
+        // Test contains_id for function (need to match arguments exactly)
+        // The function has no arguments, so arguments should be empty string
+        assert!(catalog.contains_id(&DbObjectId::Function {
+            schema: "test_contains_schema".to_string(),
+            name: "my_func".to_string(),
+            arguments: "".to_string()
+        }));
+        assert!(!catalog.contains_id(&DbObjectId::Function {
+            schema: "test_contains_schema".to_string(),
+            name: "my_func".to_string(),
+            arguments: "integer".to_string()  // Wrong arguments
+        }));
     })
     .await;
 }

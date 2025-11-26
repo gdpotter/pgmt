@@ -11,8 +11,8 @@ use tracing::{debug, info};
 use crate::catalog::Catalog;
 use crate::catalog::file_dependencies::{
     FileDependencyAugmentation, FileToObjectMapping, create_dependency_augmentation,
-    find_new_objects,
 };
+use crate::catalog::identity::{self, CatalogIdentity};
 use crate::db::cleaner;
 use crate::db::schema_executor::SchemaFileExecutor;
 use crate::schema_loader::{SchemaLoader, SchemaLoaderConfig};
@@ -106,10 +106,11 @@ impl SchemaProcessor {
         let executor = SchemaFileExecutor::new(self.pool.clone(), self.config.verbose);
 
         // Step 4: Process files incrementally, tracking what each file creates
+        // Use lightweight CatalogIdentity for fast per-file tracking (single query vs 50+)
         let mut file_mapping = FileToObjectMapping::new();
-        let mut previous_catalog = Catalog::load(&self.pool)
+        let mut previous_identity = CatalogIdentity::load(&self.pool)
             .await
-            .context("Failed to load initial catalog state")?;
+            .context("Failed to load initial catalog identity")?;
 
         debug!(
             "Creating file-to-object mappings by applying {} schema files incrementally",
@@ -127,24 +128,24 @@ impl SchemaProcessor {
             // Execute the schema file (SchemaFileExecutor provides detailed error messages)
             executor.execute_schema_file(file).await?;
 
-            // Load catalog after applying this file
-            let current_catalog = Catalog::load(&self.pool).await.with_context(|| {
+            // Load lightweight identity after applying this file (single UNION ALL query)
+            let current_identity = CatalogIdentity::load(&self.pool).await.with_context(|| {
                 format!(
-                    "Failed to load catalog after applying {}",
+                    "Failed to load catalog identity after applying {}",
                     file.relative_path
                 )
             })?;
 
             // Find objects created by this file
-            let new_objects = find_new_objects(&previous_catalog, &current_catalog);
+            let new_objects = identity::find_new_objects(&previous_identity, &current_identity);
 
             // Track the mapping
             for object_id in new_objects {
                 file_mapping.add_object(file.relative_path.clone(), object_id);
             }
 
-            // Update previous catalog for next iteration
-            previous_catalog = current_catalog;
+            // Update previous identity for next iteration
+            previous_identity = current_identity;
         }
 
         debug!(
@@ -153,19 +154,25 @@ impl SchemaProcessor {
             file_mapping.object_files.len()
         );
 
-        // Step 5: Create file-based dependency augmentation
+        // Step 5: Load full catalog once at the end for diff operations
+        debug!("Loading full catalog for diff operations");
+        let final_catalog = Catalog::load(&self.pool)
+            .await
+            .context("Failed to load final catalog")?;
+
+        // Step 6: Create file-based dependency augmentation
         debug!("Creating file-based dependency augmentation");
         let augmentation = create_dependency_augmentation(&file_mapping, &schema_files)
             .context("Failed to create dependency augmentation from file mappings")?;
 
-        // Step 6: Return catalog and augmentation separately
+        // Step 7: Return catalog and augmentation separately
         info!(
             "✅ Schema processing complete: {} files processed",
             schema_files.len()
         );
 
         Ok(ProcessedSchema {
-            catalog: previous_catalog,
+            catalog: final_catalog,
             augmentation,
         })
     }

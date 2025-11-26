@@ -1,8 +1,10 @@
 // Catalog integration tests
 // Tests for fetching database objects from PostgreSQL and converting to catalog structs
 
+pub mod aggregates;
 pub mod constraints;
 pub mod custom_types;
+pub mod domains;
 pub mod extension_filtering;
 pub mod extensions;
 pub mod file_dependencies;
