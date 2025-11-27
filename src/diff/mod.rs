@@ -204,14 +204,16 @@ fn order_steps_by_dependencies(
             continue;
         }
 
-        let deps = if is_drop {
+        // Get dependencies from catalog's forward_deps
+        let catalog_deps = if is_drop {
             old_catalog.forward_deps.get(&step.id())
         } else {
             new_catalog.forward_deps.get(&step.id())
         };
 
-        if let Some(dependencies) = deps {
-            for dep in dependencies {
+        // Process catalog dependencies (use reversed edges for drops)
+        if let Some(deps) = catalog_deps {
+            for dep in deps {
                 if let Some(indices) = id_to_indices.get(dep) {
                     for &dep_i in indices {
                         let from = node_indices[if is_drop { i } else { dep_i }];
@@ -219,11 +221,29 @@ fn order_steps_by_dependencies(
                         graph.add_edge(from, to, ());
                     }
                 } else {
-                    // Dependency not found in migration steps - check if it's truly missing
-                    // Only warn if the dependency isn't in the catalog (for creates, check new;
-                    // for drops, check old)
                     let catalog = if is_drop { old_catalog } else { new_catalog };
                     if !catalog.contains_id(dep) {
+                        missing_deps.push((step.id(), dep.clone()));
+                    }
+                }
+            }
+        } else {
+            // Only use step-level dependencies as a fallback when no catalog deps exist.
+            // This handles dynamically generated steps (like REVOKE for missing defaults)
+            // that aren't in the catalog but still need proper ordering.
+            // Step-level deps always use create-style edges: dep → step
+            let step_deps = step.dependencies();
+            for dep in &step_deps {
+                if let Some(indices) = id_to_indices.get(dep) {
+                    for &dep_i in indices {
+                        // Always: dependency comes before this step
+                        let from = node_indices[dep_i];
+                        let to = node_indices[i];
+                        graph.add_edge(from, to, ());
+                    }
+                } else {
+                    // For step-level deps, check new_catalog (these are for "create" scenarios)
+                    if !new_catalog.contains_id(dep) {
                         missing_deps.push((step.id(), dep.clone()));
                     }
                 }

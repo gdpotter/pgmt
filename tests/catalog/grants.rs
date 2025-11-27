@@ -286,6 +286,81 @@ async fn test_function_grant_with_custom_type_arguments_match() {
     .await;
 }
 
+/// Test that grants track whether they come from default ACL or explicit grants
+/// A function created without explicit grants should have is_default_acl = true
+/// A function with REVOKE PUBLIC should have is_default_acl = false
+#[tokio::test]
+async fn test_function_grant_is_default_acl() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA test_default_acl_schema").await;
+
+        // Create two functions:
+        // 1. func_with_defaults - no explicit grants, uses PostgreSQL defaults (PUBLIC has EXECUTE)
+        db.execute(
+            "CREATE FUNCTION test_default_acl_schema.func_with_defaults()
+             RETURNS INT AS $$ SELECT 1; $$ LANGUAGE SQL",
+        )
+        .await;
+
+        // 2. func_revoked - explicitly revoke PUBLIC EXECUTE
+        db.execute(
+            "CREATE FUNCTION test_default_acl_schema.func_revoked()
+             RETURNS INT AS $$ SELECT 2; $$ LANGUAGE SQL",
+        )
+        .await;
+        db.execute("REVOKE EXECUTE ON FUNCTION test_default_acl_schema.func_revoked() FROM PUBLIC")
+            .await;
+
+        // Fetch grants
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
+
+        // Find PUBLIC grant for func_with_defaults - should have is_default_acl = true
+        let default_grant = grants
+            .iter()
+            .find(|g| {
+                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                if schema == "test_default_acl_schema" && name == "func_with_defaults")
+                    && matches!(&g.grantee, GranteeType::Public)
+            })
+            .expect("func_with_defaults should have PUBLIC EXECUTE grant from defaults");
+
+        assert!(
+            default_grant.is_default_acl,
+            "Grant from default ACL should have is_default_acl = true"
+        );
+
+        // func_revoked should NOT have a PUBLIC grant (it was revoked)
+        let revoked_public_grant = grants.iter().find(|g| {
+            matches!(&g.object, ObjectType::Function { schema, name, .. }
+            if schema == "test_default_acl_schema" && name == "func_revoked")
+                && matches!(&g.grantee, GranteeType::Public)
+        });
+
+        assert!(
+            revoked_public_grant.is_none(),
+            "func_revoked should not have PUBLIC grant after REVOKE"
+        );
+
+        // Also verify that any grants on func_revoked have is_default_acl = false
+        // (because the ACL is no longer NULL - it's been explicitly modified)
+        let revoked_grants: Vec<_> = grants
+            .iter()
+            .filter(|g| {
+                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                if schema == "test_default_acl_schema" && name == "func_revoked")
+            })
+            .collect();
+
+        for grant in revoked_grants {
+            assert!(
+                !grant.is_default_acl,
+                "Grants on object with explicit ACL should have is_default_acl = false"
+            );
+        }
+    })
+    .await;
+}
+
 /// Test that Catalog::contains_id works correctly for all object types
 #[tokio::test]
 async fn test_catalog_contains_id() {

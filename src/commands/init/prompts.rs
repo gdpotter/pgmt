@@ -1,15 +1,24 @@
 use anyhow::Result;
-use dialoguer::{Confirm, Input, MultiSelect};
+use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::path::PathBuf;
 
+use super::commands::ExistingConfigDefaults;
 use super::import::ImportSource;
 use super::{BaselineCreationConfig, DatabaseState, InitOptions, ObjectManagementConfig};
+use crate::config::types::Directories;
 use crate::prompts::ShadowDatabaseInput;
 
 /// Gather initialization options using CLI arguments when available
-pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<InitOptions> {
+/// If `existing_defaults` is provided, those values will be used as defaults in prompts
+pub async fn gather_init_options_with_args(
+    args: &super::InitArgs,
+    existing_defaults: Option<&ExistingConfigDefaults>,
+) -> Result<InitOptions> {
     // Current directory as default project directory
     let project_dir = std::env::current_dir()?;
+
+    // Get directory defaults
+    let dir_defaults = Directories::default();
 
     // Database URL - use CLI arg or prompt
     let (dev_database_url, detected_pg_version) = if let Some(url) = &args.dev_url {
@@ -38,9 +47,16 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
             }
         }
     } else if args.defaults {
-        ("postgres://localhost/pgmt_dev".to_string(), None)
+        // In defaults mode, use existing value if available, otherwise use default
+        let url = existing_defaults
+            .and_then(|d| d.dev_url.clone())
+            .unwrap_or_else(|| "postgres://localhost/pgmt_dev".to_string());
+        (url, None)
     } else {
-        let result = crate::prompts::prompt_database_url_with_guidance().await?;
+        // Interactive prompt - pass existing value as default
+        let existing_url = existing_defaults.and_then(|d| d.dev_url.clone());
+        let result =
+            crate::prompts::prompt_database_url_with_guidance_and_default(existing_url).await?;
         (result.url, result.pg_version)
     };
 
@@ -55,8 +71,30 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         crate::prompts::prompt_shadow_mode_with_explanation().await?
     };
 
-    // Schema directory - use CLI arg
-    let schema_dir = PathBuf::from(&args.schema_dir);
+    // Schema directory - CLI arg > existing > default
+    let schema_dir = if args.schema_dir != "schema" {
+        // CLI arg was explicitly set (not default value)
+        PathBuf::from(&args.schema_dir)
+    } else {
+        // Use existing or default
+        existing_defaults
+            .and_then(|d| d.schema_dir.clone())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("schema"))
+    };
+
+    // Directory configuration - CLI args > existing > defaults
+    let migrations_dir = args
+        .migrations_dir
+        .clone()
+        .or_else(|| existing_defaults.and_then(|d| d.migrations_dir.clone()))
+        .unwrap_or_else(|| dir_defaults.migrations.clone());
+
+    let baselines_dir = args
+        .baselines_dir
+        .clone()
+        .or_else(|| existing_defaults.and_then(|d| d.baselines_dir.clone()))
+        .unwrap_or_else(|| dir_defaults.baselines.clone());
 
     // Import existing schema option - use CLI arg or prompt
     let import_source = if args.no_import || args.defaults {
@@ -107,6 +145,8 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         shadow_pg_version: args.shadow_pg_version.clone(),
         detected_pg_version,
         schema_dir,
+        migrations_dir,
+        baselines_dir,
         import_source,
         object_config,
         baseline_config,
@@ -372,6 +412,7 @@ pub fn prompt_baseline_creation(database_state: &DatabaseState) -> Result<bool> 
 }
 
 /// Prompt for project creation confirmation with summary
+/// Returns whether to proceed with initialization
 pub fn prompt_project_confirmation(options: &InitOptions) -> Result<bool> {
     // Build compact summary line
     let shadow_version = options
@@ -411,16 +452,55 @@ pub fn prompt_project_confirmation(options: &InitOptions) -> Result<bool> {
         mask_sensitive_url(&options.dev_database_url)
     );
     println!("   💡 Shadow: {}{}", shadow_desc, roles_info);
+    println!(
+        "   📁 Directories: {} | {} | {}",
+        options.schema_dir.display(),
+        options.migrations_dir,
+        options.baselines_dir
+    );
 
     if let Some(ref import_source) = options.import_source {
         println!("   📥 Import: {}", import_source.description());
     }
 
-    Confirm::new()
-        .with_prompt("\n🚀 Proceed?")
-        .default(true)
-        .interact()
-        .map_err(Into::into)
+    // Show confirmation prompt
+    let choices = vec!["Yes, proceed", "No, cancel"];
+
+    let selection = Select::new()
+        .with_prompt("🚀 Proceed with these settings?")
+        .items(&choices)
+        .default(0)
+        .interact()?;
+
+    Ok(selection == 0)
+}
+
+/// Prompt to customize directories
+/// Returns (schema_dir, migrations_dir, baselines_dir)
+#[allow(dead_code)]
+pub fn prompt_directory_customization(
+    current_schema: &str,
+    current_migrations: &str,
+    current_baselines: &str,
+) -> Result<(String, String, String)> {
+    println!("\n📁 Directory Configuration:");
+
+    let schema_dir: String = Input::new()
+        .with_prompt("Schema directory")
+        .default(current_schema.to_string())
+        .interact_text()?;
+
+    let migrations_dir: String = Input::new()
+        .with_prompt("Migrations directory")
+        .default(current_migrations.to_string())
+        .interact_text()?;
+
+    let baselines_dir: String = Input::new()
+        .with_prompt("Baselines directory")
+        .default(current_baselines.to_string())
+        .interact_text()?;
+
+    Ok((schema_dir, migrations_dir, baselines_dir))
 }
 
 /// Mask sensitive parts of database URL for display

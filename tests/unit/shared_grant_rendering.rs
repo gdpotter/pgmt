@@ -28,6 +28,7 @@ fn test_shared_grant_rendering_view_no_view_keyword() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from shared rendering function (used by schema generator)
@@ -80,6 +81,7 @@ fn test_shared_grant_rendering_table_consistency() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from both sources
@@ -116,6 +118,7 @@ fn test_shared_grant_rendering_with_grant_option() -> Result<()> {
         with_grant_option: true,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from both sources
@@ -152,6 +155,7 @@ fn test_shared_grant_rendering_public_grantee() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from both sources
@@ -187,6 +191,7 @@ fn test_shared_grant_rendering_schema_with_keyword() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from both sources
@@ -224,6 +229,7 @@ fn test_shared_grant_rendering_function_with_keyword() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Get SQL from both sources
@@ -260,6 +266,7 @@ fn test_shared_revoke_rendering_consistency() -> Result<()> {
         with_grant_option: false,
         depends_on: vec![],
         object_owner: "postgres".to_string(),
+        is_default_acl: false,
     };
 
     // Schema generator doesn't generate REVOKE, so just test diff operations produce correct SQL

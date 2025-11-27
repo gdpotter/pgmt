@@ -164,4 +164,16 @@ impl MigrationStep {
             _ => false,
         }
     }
+
+    /// Returns step-level dependencies that may not be in the catalog's forward_deps.
+    /// This is used for dynamically generated steps (like REVOKE for missing defaults)
+    /// that aren't part of the catalog but still need proper ordering.
+    pub fn dependencies(&self) -> Vec<DbObjectId> {
+        match self {
+            MigrationStep::Grant(GrantOperation::Grant { grant }) => grant.depends_on.clone(),
+            MigrationStep::Grant(GrantOperation::Revoke { grant }) => grant.depends_on.clone(),
+            // Other operations use catalog.forward_deps exclusively
+            _ => vec![],
+        }
+    }
 }

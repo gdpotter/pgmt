@@ -116,6 +116,10 @@ pub struct Grant {
     pub with_grant_option: bool,
     pub depends_on: Vec<DbObjectId>,
     pub object_owner: String, // Owner role name for this object
+    /// Whether this grant came from the default ACL (NULL ACL in pg_catalog).
+    /// true = object uses PostgreSQL defaults (e.g., PUBLIC has EXECUTE on functions)
+    /// false = object has explicit ACL (grants/revokes have been made)
+    pub is_default_acl: bool,
 }
 
 impl Grant {
@@ -206,7 +210,8 @@ async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
             END as "grantee!",
             acl.privilege_type as "privilege_type!",
             CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
-            owner_role.rolname as "object_owner!"
+            owner_role.rolname as "object_owner!",
+            CASE WHEN c.relacl IS NULL THEN true ELSE false END as "is_default_acl!"
         FROM pg_class c
         JOIN pg_namespace n ON c.relnamespace = n.oid
         JOIN pg_roles owner_role ON c.relowner = owner_role.oid,
@@ -268,6 +273,7 @@ async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }
@@ -292,7 +298,8 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
             END as "grantee!",
             acl.privilege_type as "privilege_type!",
             CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
-            owner_role.rolname as "object_owner!"
+            owner_role.rolname as "object_owner!",
+            CASE WHEN c.relacl IS NULL THEN true ELSE false END as "is_default_acl!"
         FROM pg_class c
         JOIN pg_namespace n ON c.relnamespace = n.oid
         JOIN pg_roles owner_role ON c.relowner = owner_role.oid,
@@ -354,6 +361,7 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }
@@ -377,7 +385,8 @@ async fn fetch_schema_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
             END as "grantee!",
             acl.privilege_type as "privilege_type!",
             CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
-            owner_role.rolname as "object_owner!"
+            owner_role.rolname as "object_owner!",
+            CASE WHEN n.nspacl IS NULL THEN true ELSE false END as "is_default_acl!"
         FROM pg_namespace n
         JOIN pg_roles owner_role ON n.nspowner = owner_role.oid,
         LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) AS acl
@@ -431,6 +440,7 @@ async fn fetch_schema_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }
@@ -457,7 +467,8 @@ async fn fetch_function_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
             END as "grantee!",
             acl.privilege_type as "privilege_type!",
             CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
-            owner_role.rolname as "object_owner!"
+            owner_role.rolname as "object_owner!",
+            CASE WHEN p.proacl IS NULL THEN true ELSE false END as "is_default_acl!"
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_roles owner_role ON p.proowner = owner_role.oid,
@@ -532,6 +543,7 @@ async fn fetch_function_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }
@@ -618,6 +630,7 @@ async fn fetch_sequence_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }
@@ -643,7 +656,8 @@ async fn fetch_type_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
             END as "grantee!",
             acl.privilege_type as "privilege_type!",
             CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
-            owner_role.rolname as "object_owner!"
+            owner_role.rolname as "object_owner!",
+            CASE WHEN t.typacl IS NULL THEN true ELSE false END as "is_default_acl!"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         JOIN pg_roles owner_role ON t.typowner = owner_role.oid,
@@ -720,6 +734,7 @@ async fn fetch_type_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
                     with_grant_option,
                     depends_on,
                     object_owner: row.object_owner.clone(),
+                    is_default_acl: row.is_default_acl,
                 });
             }
         }

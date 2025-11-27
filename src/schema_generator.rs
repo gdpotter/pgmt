@@ -70,6 +70,10 @@ impl SchemaGenerator {
 
         let empty_catalog = Catalog::empty();
         let steps = diff_all(&empty_catalog, &self.catalog);
+
+        // diff_all includes grant diffing which now handles REVOKE generation
+        // for missing default privileges. Step-level dependencies are used
+        // by diff_order for proper ordering.
         let ordered_steps = diff_order(steps, &empty_catalog, &self.catalog)?;
         let filtered_steps = self.filter_steps_by_config(ordered_steps);
         let organized_files = self.organize_steps_into_files(filtered_steps)?;

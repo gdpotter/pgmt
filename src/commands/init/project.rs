@@ -1,20 +1,18 @@
 use anyhow::Result;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::config::types::Directories;
 use crate::constants::{
     CONFIG_FILENAME, FUNCTIONS_SUBDIR, SCHEMAS_SUBDIR, TABLES_SUBDIR, TYPES_SUBDIR, VIEWS_SUBDIR,
 };
 
 /// Create the basic project structure for a pgmt project
-pub fn create_project_structure(project_dir: &PathBuf, schema_dir: &PathBuf) -> Result<()> {
-    fs::create_dir_all(project_dir)?;
+pub fn create_project_structure(options: &super::InitOptions) -> Result<()> {
+    fs::create_dir_all(&options.project_dir)?;
 
-    let dir_defaults = Directories::default();
-    let migrations_dir = project_dir.join(&dir_defaults.migrations);
-    let baselines_dir = project_dir.join(&dir_defaults.baselines);
-    let full_schema_dir = project_dir.join(schema_dir);
+    let migrations_dir = options.project_dir.join(&options.migrations_dir);
+    let baselines_dir = options.project_dir.join(&options.baselines_dir);
+    let full_schema_dir = options.project_dir.join(&options.schema_dir);
 
     fs::create_dir_all(&migrations_dir)?;
     fs::create_dir_all(&baselines_dir)?;
@@ -32,7 +30,14 @@ pub fn create_project_structure(project_dir: &PathBuf, schema_dir: &PathBuf) -> 
 
 /// Generate pgmt.yaml configuration file
 pub fn generate_config_file(options: &super::InitOptions, project_dir: &Path) -> Result<()> {
-    let shadow_config = match (&options.shadow_config, &options.shadow_pg_version) {
+    // For shadow config, prefer explicit CLI version, then detected version from dev DB
+    let effective_version = options
+        .shadow_pg_version
+        .as_ref()
+        .or(options.detected_pg_version.as_ref())
+        .map(|v| crate::prompts::extract_major_version(v));
+
+    let shadow_config = match (&options.shadow_config, effective_version) {
         (crate::prompts::ShadowDatabaseInput::Auto, Some(version)) => {
             format!("  shadow:\n    docker:\n      version: \"{}\"", version)
         }
@@ -43,8 +48,6 @@ pub fn generate_config_file(options: &super::InitOptions, project_dir: &Path) ->
             format!("  shadow:\n    auto: false\n    url: {}", url)
         }
     };
-
-    let dir_defaults = Directories::default();
 
     // Only include roles_file in config if it was specified/detected
     let roles_file_config = options
@@ -68,23 +71,20 @@ directories:
   migrations_dir: {}
   baselines_dir: {}{}
 
-# Object Management
-objects:
-  comments: {}
-  grants: {}
-  triggers: {}
-  extensions: {}
+# Object Filtering (optional)
+# Use include/exclude patterns to control which schemas and tables are managed.
+# By default, pg_* and information_schema are excluded.
+# objects:
+#   exclude:
+#     exclude_schemas: ["pg_*", "information_schema", "temp_*"]
+#     exclude_tables: ["*_backup"]
 "#,
         options.dev_database_url,
         shadow_config,
         options.schema_dir.display(),
-        dir_defaults.migrations,
-        dir_defaults.baselines,
+        options.migrations_dir,
+        options.baselines_dir,
         roles_file_config,
-        options.object_config.comments,
-        options.object_config.grants,
-        options.object_config.triggers,
-        options.object_config.extensions
     );
 
     let config_path = project_dir.join(CONFIG_FILENAME);
@@ -97,15 +97,36 @@ objects:
 mod tests {
     use super::*;
     use crate::commands::init::{BaselineCreationConfig, InitOptions, ObjectManagementConfig};
+    use crate::config::types::Directories;
     use std::env;
+    use std::path::{Path, PathBuf};
+
+    fn test_options(temp_dir: &Path) -> InitOptions {
+        let dir_defaults = Directories::default();
+        InitOptions {
+            project_dir: temp_dir.to_path_buf(),
+            dev_database_url: "postgres://localhost/test_db".to_string(),
+            shadow_config: crate::prompts::ShadowDatabaseInput::Auto,
+            shadow_pg_version: None,
+            detected_pg_version: None,
+            schema_dir: PathBuf::from("schema"),
+            migrations_dir: dir_defaults.migrations,
+            baselines_dir: dir_defaults.baselines,
+            import_source: None,
+            object_config: ObjectManagementConfig::default(),
+            baseline_config: BaselineCreationConfig::default(),
+            tracking_table: crate::config::types::TrackingTable::default(),
+            roles_file: None,
+        }
+    }
 
     #[test]
     fn test_create_project_structure() {
         let temp_dir = env::temp_dir().join("pgmt_test_project_structure");
         let _ = std::fs::remove_dir_all(&temp_dir);
 
-        let schema_dir = PathBuf::from("schema");
-        create_project_structure(&temp_dir, &schema_dir).unwrap();
+        let options = test_options(&temp_dir);
+        create_project_structure(&options).unwrap();
 
         let dir_defaults = Directories::default();
 
@@ -124,24 +145,33 @@ mod tests {
     }
 
     #[test]
+    fn test_create_project_structure_custom_directories() {
+        let temp_dir = env::temp_dir().join("pgmt_test_project_structure_custom");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let mut options = test_options(&temp_dir);
+        options.migrations_dir = "db/migrations".to_string();
+        options.baselines_dir = "db/baselines".to_string();
+
+        create_project_structure(&options).unwrap();
+
+        // Check that custom directories were created
+        assert!(temp_dir.join("db/migrations").exists());
+        assert!(temp_dir.join("db/baselines").exists());
+        assert!(temp_dir.join("schema").exists());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_generate_config_file() {
         let temp_dir = env::temp_dir().join("pgmt_test_config");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let options = InitOptions {
-            project_dir: temp_dir.clone(),
-            dev_database_url: "postgres://localhost/test_db".to_string(),
-            shadow_config: crate::prompts::ShadowDatabaseInput::Auto,
-            shadow_pg_version: None,
-            detected_pg_version: None,
-            schema_dir: PathBuf::from("custom_schema"),
-            import_source: None,
-            object_config: ObjectManagementConfig::default(),
-            baseline_config: BaselineCreationConfig::default(),
-            tracking_table: crate::config::types::TrackingTable::default(),
-            roles_file: None,
-        };
+        let mut options = test_options(&temp_dir);
+        options.schema_dir = PathBuf::from("custom_schema");
 
         generate_config_file(&options, &temp_dir).unwrap();
 
@@ -156,6 +186,93 @@ mod tests {
         assert!(content.contains("auto: true"));
         assert!(content.contains(&format!("migrations_dir: {}", dir_defaults.migrations)));
         assert!(content.contains(&format!("baselines_dir: {}", dir_defaults.baselines)));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_generate_config_file_custom_directories() {
+        let temp_dir = env::temp_dir().join("pgmt_test_config_custom_dirs");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut options = test_options(&temp_dir);
+        options.migrations_dir = "db/migrations".to_string();
+        options.baselines_dir = "db/baselines".to_string();
+
+        generate_config_file(&options, &temp_dir).unwrap();
+
+        let config_path = temp_dir.join("pgmt.yaml");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+
+        assert!(
+            content.contains("migrations_dir: db/migrations"),
+            "Expected custom migrations_dir, got:\n{}",
+            content
+        );
+        assert!(
+            content.contains("baselines_dir: db/baselines"),
+            "Expected custom baselines_dir, got:\n{}",
+            content
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_generate_config_file_with_detected_version() {
+        let temp_dir = env::temp_dir().join("pgmt_test_config_detected_version");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Test that detected_pg_version is persisted when shadow_pg_version is None
+        let mut options = test_options(&temp_dir);
+        options.detected_pg_version = Some("15.4".to_string()); // Detected from dev DB
+
+        generate_config_file(&options, &temp_dir).unwrap();
+
+        let config_path = temp_dir.join("pgmt.yaml");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+
+        // Should use detected version, NOT auto: true
+        assert!(
+            content.contains("version: \"15\""),
+            "Expected detected version to be persisted, got:\n{}",
+            content
+        );
+        assert!(
+            !content.contains("auto: true"),
+            "Should not have auto: true when version is detected"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_generate_config_file_explicit_version_takes_precedence() {
+        let temp_dir = env::temp_dir().join("pgmt_test_config_explicit_version");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Test that explicit shadow_pg_version takes precedence over detected_pg_version
+        let mut options = test_options(&temp_dir);
+        options.shadow_pg_version = Some("16".to_string()); // Explicit from CLI
+        options.detected_pg_version = Some("15.4".to_string()); // Detected from dev DB
+
+        generate_config_file(&options, &temp_dir).unwrap();
+
+        let config_path = temp_dir.join("pgmt.yaml");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+
+        // Should use explicit version (16), not detected version (15)
+        assert!(
+            content.contains("version: \"16\""),
+            "Expected explicit version to take precedence, got:\n{}",
+            content
+        );
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);

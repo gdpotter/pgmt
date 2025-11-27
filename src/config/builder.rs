@@ -161,20 +161,7 @@ impl ConfigBuilder {
             })
             .unwrap_or_else(|| defaults.exclude.clone());
 
-        Objects {
-            include,
-            exclude,
-            comments: obj_input
-                .and_then(|o| o.comments)
-                .unwrap_or(defaults.comments),
-            grants: obj_input.and_then(|o| o.grants).unwrap_or(defaults.grants),
-            triggers: obj_input
-                .and_then(|o| o.triggers)
-                .unwrap_or(defaults.triggers),
-            extensions: obj_input
-                .and_then(|o| o.extensions)
-                .unwrap_or(defaults.extensions),
-        }
+        Objects { include, exclude }
     }
 
     fn resolve_migration(&self, defaults: &Migration) -> Migration {

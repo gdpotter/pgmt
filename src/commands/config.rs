@@ -130,11 +130,8 @@ fn get_config_value(config: &Config, key: &str) -> Result<String> {
         }
         ["migration", "tracking_table", "name"] => Ok(config.migration.tracking_table.name.clone()),
 
-        ["objects", "comments"] => Ok(config.objects.comments.to_string()),
-        ["objects", "grants"] => Ok(config.objects.grants.to_string()),
-        ["objects", "triggers"] => Ok(config.objects.triggers.to_string()),
-        ["objects", "extensions"] => Ok(config.objects.extensions.to_string()),
-
+        // Note: objects.comments, objects.grants, objects.triggers, objects.extensions
+        // have been removed. Schema files are now the source of truth.
         ["docker", "auto_cleanup"] => Ok(config.docker.auto_cleanup.to_string()),
         ["docker", "check_system_identifier"] => {
             Ok(config.docker.check_system_identifier.to_string())
@@ -234,43 +231,8 @@ fn set_config_value(config_file: &str, key: &str, value: &str) -> Result<()> {
                 .name = Some(value.to_string());
         }
 
-        ["objects", "comments"] => {
-            let bool_val = value
-                .parse::<bool>()
-                .map_err(|_| anyhow!("Invalid boolean value: {}", value))?;
-            config_input
-                .objects
-                .get_or_insert_with(Default::default)
-                .comments = Some(bool_val);
-        }
-        ["objects", "grants"] => {
-            let bool_val = value
-                .parse::<bool>()
-                .map_err(|_| anyhow!("Invalid boolean value: {}", value))?;
-            config_input
-                .objects
-                .get_or_insert_with(Default::default)
-                .grants = Some(bool_val);
-        }
-        ["objects", "triggers"] => {
-            let bool_val = value
-                .parse::<bool>()
-                .map_err(|_| anyhow!("Invalid boolean value: {}", value))?;
-            config_input
-                .objects
-                .get_or_insert_with(Default::default)
-                .triggers = Some(bool_val);
-        }
-        ["objects", "extensions"] => {
-            let bool_val = value
-                .parse::<bool>()
-                .map_err(|_| anyhow!("Invalid boolean value: {}", value))?;
-            config_input
-                .objects
-                .get_or_insert_with(Default::default)
-                .extensions = Some(bool_val);
-        }
-
+        // Note: objects.comments, objects.grants, objects.triggers, objects.extensions
+        // have been removed. Schema files are now the source of truth.
         ["docker", "auto_cleanup"] => {
             let bool_val = value
                 .parse::<bool>()
@@ -324,10 +286,6 @@ fn list_config_values(config: &Config, format: &OutputFormat) -> Result<()> {
             }
         },
         "objects": {
-            "comments": config.objects.comments,
-            "grants": config.objects.grants,
-            "triggers": config.objects.triggers,
-            "extensions": config.objects.extensions,
             "include": {
                 "schemas": config.objects.include.schemas,
                 "tables": config.objects.include.tables,

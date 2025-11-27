@@ -67,10 +67,6 @@ impl ObjectsInput {
         ObjectsInput {
             include: other.include.or(self.include),
             exclude: other.exclude.or(self.exclude),
-            comments: other.comments.or(self.comments),
-            grants: other.grants.or(self.grants),
-            triggers: other.triggers.or(self.triggers),
-            extensions: other.extensions.or(self.extensions),
         }
     }
 }

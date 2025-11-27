@@ -103,11 +103,13 @@ fn test_pgmt_version() {
 #[test]
 fn test_init_workflow_components() -> Result<()> {
     use pgmt::commands::init::{BaselineCreationConfig, InitOptions, ObjectManagementConfig};
+    use pgmt::config::types::Directories;
     use pgmt::prompts::ShadowDatabaseInput;
     use std::path::PathBuf;
 
     let temp_dir = TempDir::new()?;
     let project_path = temp_dir.path().to_path_buf();
+    let dir_defaults = Directories::default();
 
     // Test that we can create InitOptions struct
     let options = InitOptions {
@@ -117,6 +119,8 @@ fn test_init_workflow_components() -> Result<()> {
         shadow_pg_version: None,
         detected_pg_version: None,
         schema_dir: PathBuf::from("schema"),
+        migrations_dir: dir_defaults.migrations.clone(),
+        baselines_dir: dir_defaults.baselines.clone(),
         import_source: None,
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
@@ -125,10 +129,7 @@ fn test_init_workflow_components() -> Result<()> {
     };
 
     // Test project structure creation
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
 
     // Verify structure was created
     assert!(project_path.join("schema").exists());
@@ -152,6 +153,7 @@ fn test_init_workflow_components() -> Result<()> {
 #[test]
 fn test_init_workflow_error_handling() -> Result<()> {
     use pgmt::commands::init::{BaselineCreationConfig, InitOptions, ObjectManagementConfig};
+    use pgmt::config::types::Directories;
     use pgmt::prompts::ShadowDatabaseInput;
     use std::path::PathBuf;
 
@@ -159,6 +161,7 @@ fn test_init_workflow_error_handling() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_path = temp_dir.path().to_path_buf();
     let non_existent_file = temp_dir.path().join("does_not_exist.sql");
+    let dir_defaults = Directories::default();
 
     let options = InitOptions {
         project_dir: project_path.clone(),
@@ -167,6 +170,8 @@ fn test_init_workflow_error_handling() -> Result<()> {
         shadow_pg_version: None,
         detected_pg_version: None,
         schema_dir: PathBuf::from("schema"),
+        migrations_dir: dir_defaults.migrations.clone(),
+        baselines_dir: dir_defaults.baselines.clone(),
         import_source: Some(ImportSource::SqlFile(non_existent_file)),
         object_config: ObjectManagementConfig::default(),
         baseline_config: BaselineCreationConfig::default(),
@@ -175,10 +180,7 @@ fn test_init_workflow_error_handling() -> Result<()> {
     };
 
     // Project structure creation should still work
-    let result = pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    );
+    let result = pgmt::commands::init::project::create_project_structure(&options);
     assert!(result.is_ok());
 
     // Config generation should work
@@ -244,4 +246,48 @@ async fn test_init_with_existing_config() -> Result<()> {
         Ok(())
     })
     .await
+}
+
+/// Test that --fresh flag help is available
+#[test]
+fn test_init_fresh_flag_in_help() {
+    use assert_cmd::Command;
+
+    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    cmd.args(["init", "--help"]);
+
+    let output = cmd.assert().success();
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+
+    // Verify --fresh flag is documented in help
+    assert!(
+        stdout.contains("--fresh"),
+        "Help should document --fresh flag"
+    );
+}
+
+/// Test directory customization flags
+#[test]
+fn test_init_directory_flags_in_help() {
+    use assert_cmd::Command;
+
+    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    cmd.args(["init", "--help"]);
+
+    let output = cmd.assert().success();
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+
+    // Verify directory flags are documented in help
+    assert!(
+        stdout.contains("--migrations-dir"),
+        "Help should document --migrations-dir flag"
+    );
+    assert!(
+        stdout.contains("--baselines-dir"),
+        "Help should document --baselines-dir flag"
+    );
+    assert!(
+        stdout.contains("--schema-dir"),
+        "Help should document --schema-dir flag"
+    );
 }

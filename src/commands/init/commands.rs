@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::InitArgs;
@@ -9,8 +10,180 @@ use crate::baseline::operations::{
     BaselineCreationRequest, create_baseline, display_baseline_summary,
 };
 use crate::catalog::Catalog;
+use crate::config::load_config;
+use crate::constants::CONFIG_FILENAME;
 use crate::migration_tracking;
 use crate::prompts::ShadowDatabaseInput;
+
+/// Result of checking for existing configuration
+#[derive(Debug)]
+pub enum ExistingConfigResult {
+    /// No existing config found - proceed with fresh init
+    NotFound,
+    /// User chose to update existing config - provides loaded config
+    Update(Box<crate::config::types::ConfigInput>),
+    /// User chose fresh init - overwrite existing config
+    Fresh,
+    /// User cancelled the operation
+    Cancelled,
+}
+
+/// Values extracted from existing config for use as defaults
+#[derive(Debug, Default)]
+pub struct ExistingConfigDefaults {
+    pub dev_url: Option<String>,
+    #[allow(dead_code)] // Future: use for shadow config prompting
+    pub shadow_url: Option<String>,
+    pub shadow_pg_version: Option<String>,
+    pub schema_dir: Option<String>,
+    pub migrations_dir: Option<String>,
+    pub baselines_dir: Option<String>,
+    #[allow(dead_code)] // Future: use for roles file prompting
+    pub roles_file: Option<String>,
+}
+
+impl From<&crate::config::types::ConfigInput> for ExistingConfigDefaults {
+    fn from(config: &crate::config::types::ConfigInput) -> Self {
+        let shadow_url = config
+            .databases
+            .as_ref()
+            .and_then(|d| d.shadow.as_ref())
+            .and_then(|s| s.url.clone());
+
+        let shadow_pg_version = config
+            .databases
+            .as_ref()
+            .and_then(|d| d.shadow.as_ref())
+            .and_then(|s| s.docker.as_ref())
+            .and_then(|d| d.version.clone());
+
+        Self {
+            dev_url: config.databases.as_ref().and_then(|d| d.dev_url.clone()),
+            shadow_url,
+            shadow_pg_version,
+            schema_dir: config
+                .directories
+                .as_ref()
+                .and_then(|d| d.schema_dir.clone()),
+            migrations_dir: config
+                .directories
+                .as_ref()
+                .and_then(|d| d.migrations_dir.clone()),
+            baselines_dir: config
+                .directories
+                .as_ref()
+                .and_then(|d| d.baselines_dir.clone()),
+            roles_file: config
+                .directories
+                .as_ref()
+                .and_then(|d| d.roles_file.clone()),
+        }
+    }
+}
+
+/// Check for existing config file and prompt user for how to proceed
+pub fn check_existing_config(
+    project_dir: &Path,
+    force_fresh: bool,
+) -> Result<ExistingConfigResult> {
+    let config_path = project_dir.join(CONFIG_FILENAME);
+
+    if !config_path.exists() {
+        return Ok(ExistingConfigResult::NotFound);
+    }
+
+    // If --fresh flag was passed, skip prompting
+    if force_fresh {
+        println!(
+            "⚠️  Existing {} will be overwritten (--fresh flag)\n",
+            CONFIG_FILENAME
+        );
+        return Ok(ExistingConfigResult::Fresh);
+    }
+
+    // Load existing config
+    let config_path_str = config_path.to_string_lossy();
+    let (existing_config, _) = load_config(&config_path_str)?;
+    let defaults = ExistingConfigDefaults::from(&existing_config);
+
+    // Show current configuration
+    println!("📋 Existing configuration found:\n");
+    if let Some(ref url) = defaults.dev_url {
+        println!("   Database: {}", mask_url_password(url));
+    }
+    if let Some(ref schema_dir) = defaults.schema_dir {
+        println!("   Schema dir: {}", schema_dir);
+    }
+    if let Some(ref migrations_dir) = defaults.migrations_dir {
+        println!("   Migrations: {}", migrations_dir);
+    }
+    if let Some(ref baselines_dir) = defaults.baselines_dir {
+        println!("   Baselines: {}", baselines_dir);
+    }
+    if let Some(ref pg_version) = defaults.shadow_pg_version {
+        println!("   Shadow PG: {}", pg_version);
+    }
+    println!();
+
+    // Prompt user for action
+    let choices = vec![
+        "Update - modify existing configuration",
+        "Fresh - start over with new configuration",
+        "Cancel - keep current configuration",
+    ];
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("What would you like to do?")
+        .items(&choices)
+        .default(0)
+        .interact()?;
+
+    match selection {
+        0 => {
+            println!("\n✏️  Update mode: existing values will be shown as defaults\n");
+            Ok(ExistingConfigResult::Update(Box::new(existing_config)))
+        }
+        1 => {
+            println!("\n🔄 Fresh mode: creating new configuration\n");
+            Ok(ExistingConfigResult::Fresh)
+        }
+        _ => {
+            println!("\n❌ Keeping existing configuration");
+            Ok(ExistingConfigResult::Cancelled)
+        }
+    }
+}
+
+/// Mask password in database URL for display
+fn mask_url_password(url: &str) -> String {
+    // Handle case where URL doesn't contain ://
+    if !url.contains("://") {
+        return url.to_string();
+    }
+
+    // Split on :// to get protocol and rest
+    let parts: Vec<&str> = url.splitn(2, "://").collect();
+    if parts.len() != 2 {
+        return url.to_string();
+    }
+
+    let protocol = parts[0];
+    let rest = parts[1];
+
+    // Check if there's user info (user:pass@host or user@host)
+    if let Some(at_pos) = rest.find('@') {
+        let user_info = &rest[..at_pos];
+        let host_and_path = &rest[at_pos + 1..];
+
+        // Check if there's a password (user:pass)
+        if let Some(colon_pos) = user_info.find(':') {
+            let username = &user_info[..colon_pos];
+            return format!("{}://{}:***@{}", protocol, username, host_and_path);
+        }
+    }
+
+    url.to_string()
+}
 
 /// Complete configuration for project initialization
 #[derive(Debug)]
@@ -24,6 +197,8 @@ pub struct InitOptions {
     /// PostgreSQL version detected from dev database connection (e.g., "15.4")
     pub detected_pg_version: Option<String>,
     pub schema_dir: std::path::PathBuf,
+    pub migrations_dir: String,
+    pub baselines_dir: String,
     pub import_source: Option<ImportSource>,
     pub object_config: ObjectManagementConfig,
     pub baseline_config: BaselineCreationConfig,
@@ -66,8 +241,21 @@ pub struct BaselineCreationConfig {
 pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
     println!("🚀 Welcome to pgmt! Let's set up your PostgreSQL migration project.\n");
 
+    // Check for existing config before proceeding
+    let project_dir = std::env::current_dir()?;
+    let existing_config = check_existing_config(&project_dir, args.fresh)?;
+
+    // Handle the different init modes
+    let existing_defaults = match existing_config {
+        ExistingConfigResult::NotFound | ExistingConfigResult::Fresh => None,
+        ExistingConfigResult::Update(config) => Some(ExistingConfigDefaults::from(config.as_ref())),
+        ExistingConfigResult::Cancelled => {
+            return Ok(());
+        }
+    };
+
     // Gather configuration through prompts or CLI args (WITHOUT object management yet)
-    let mut options = gather_init_options_with_args(args).await?;
+    let mut options = gather_init_options_with_args(args, existing_defaults.as_ref()).await?;
 
     // Show confirmation summary and get user approval (unless using defaults)
     if !args.defaults {
@@ -80,7 +268,7 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
 
     // Step 1: Create directories only (no config file yet)
     println!("🏗️  Creating project structure...");
-    create_project_structure(&options.project_dir, &options.schema_dir)?;
+    create_project_structure(&options)?;
     println!("✅ Project directories created");
 
     // Step 2: Import existing schema catalog (just fetch, don't process yet)
@@ -451,7 +639,7 @@ async fn create_baseline_with_migration_sync(
             .description
             .clone()
             .unwrap_or_else(|| "baseline".to_string()),
-        baselines_dir: options.project_dir.join("schema_baselines"),
+        baselines_dir: options.project_dir.join(&options.baselines_dir),
         verbose: false, // Less verbose for init context
     };
 
@@ -767,6 +955,125 @@ mod tests {
 
         let count = count_generated_files(&temp_dir).unwrap();
         assert_eq!(count, 2); // Only .sql files are counted
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_mask_url_password() {
+        // URL with password
+        assert_eq!(
+            mask_url_password("postgres://user:secret@localhost:5432/mydb"),
+            "postgres://user:***@localhost:5432/mydb"
+        );
+
+        // URL without password
+        assert_eq!(
+            mask_url_password("postgres://user@localhost/mydb"),
+            "postgres://user@localhost/mydb"
+        );
+
+        // URL without any auth
+        assert_eq!(
+            mask_url_password("postgres://localhost/mydb"),
+            "postgres://localhost/mydb"
+        );
+
+        // Invalid URL (no protocol)
+        assert_eq!(mask_url_password("not a url"), "not a url");
+    }
+
+    #[test]
+    fn test_existing_config_defaults_from_config_input() {
+        use crate::config::types::{
+            ConfigInput, DatabasesInput, DirectoriesInput,
+            ShadowDatabaseInput as ConfigShadowInput, ShadowDockerInput,
+        };
+
+        let config = ConfigInput {
+            databases: Some(DatabasesInput {
+                dev_url: Some("postgres://localhost/mydb".to_string()),
+                shadow: Some(ConfigShadowInput {
+                    docker: Some(ShadowDockerInput {
+                        version: Some("15".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            directories: Some(DirectoriesInput {
+                schema_dir: Some("custom_schema".to_string()),
+                migrations_dir: Some("db/migrations".to_string()),
+                baselines_dir: Some("db/baselines".to_string()),
+                roles_file: Some("roles.sql".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let defaults = ExistingConfigDefaults::from(&config);
+
+        assert_eq!(
+            defaults.dev_url,
+            Some("postgres://localhost/mydb".to_string())
+        );
+        assert_eq!(defaults.shadow_pg_version, Some("15".to_string()));
+        assert_eq!(defaults.schema_dir, Some("custom_schema".to_string()));
+        assert_eq!(defaults.migrations_dir, Some("db/migrations".to_string()));
+        assert_eq!(defaults.baselines_dir, Some("db/baselines".to_string()));
+        assert_eq!(defaults.roles_file, Some("roles.sql".to_string()));
+    }
+
+    #[test]
+    fn test_existing_config_defaults_from_empty_config() {
+        use crate::config::types::ConfigInput;
+
+        let config = ConfigInput::default();
+        let defaults = ExistingConfigDefaults::from(&config);
+
+        assert_eq!(defaults.dev_url, None);
+        assert_eq!(defaults.shadow_pg_version, None);
+        assert_eq!(defaults.schema_dir, None);
+        assert_eq!(defaults.migrations_dir, None);
+        assert_eq!(defaults.baselines_dir, None);
+        assert_eq!(defaults.roles_file, None);
+    }
+
+    #[test]
+    fn test_check_existing_config_not_found() {
+        use std::env;
+
+        let temp_dir = env::temp_dir().join("pgmt_test_no_config");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // No config file - should return NotFound
+        let result = check_existing_config(&temp_dir, false).unwrap();
+        assert!(matches!(result, ExistingConfigResult::NotFound));
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_check_existing_config_fresh_flag() {
+        use std::env;
+
+        let temp_dir = env::temp_dir().join("pgmt_test_fresh_flag");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a config file
+        let config_content = r#"
+databases:
+  dev_url: postgres://localhost/test
+"#;
+        std::fs::write(temp_dir.join("pgmt.yaml"), config_content).unwrap();
+
+        // With --fresh flag, should return Fresh without prompting
+        let result = check_existing_config(&temp_dir, true).unwrap();
+        assert!(matches!(result, ExistingConfigResult::Fresh));
 
         // Clean up
         let _ = std::fs::remove_dir_all(&temp_dir);

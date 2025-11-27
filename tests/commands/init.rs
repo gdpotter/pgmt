@@ -2,11 +2,32 @@ use anyhow::Result;
 use pgmt::commands::init::import::ImportSource;
 use pgmt::commands::init::project::{create_project_structure, generate_config_file};
 use pgmt::commands::init::{BaselineCreationConfig, InitOptions, ObjectManagementConfig};
+use pgmt::config::types::Directories;
 use pgmt::db::sql_executor::discover_sql_files_ordered;
 use pgmt::prompts::ShadowDatabaseInput;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+/// Helper to create default InitOptions for testing
+fn test_init_options(project_dir: PathBuf) -> InitOptions {
+    let dir_defaults = Directories::default();
+    InitOptions {
+        project_dir,
+        dev_database_url: "postgres://localhost/test".to_string(),
+        shadow_config: ShadowDatabaseInput::Auto,
+        shadow_pg_version: None,
+        detected_pg_version: None,
+        schema_dir: PathBuf::from("schema"),
+        migrations_dir: dir_defaults.migrations,
+        baselines_dir: dir_defaults.baselines,
+        import_source: None,
+        object_config: ObjectManagementConfig::default(),
+        baseline_config: BaselineCreationConfig::default(),
+        tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
+    }
+}
 
 #[test]
 fn test_import_source_variants() {
@@ -127,8 +148,8 @@ fn test_create_project_structure() -> Result<()> {
     let temp_dir = env::temp_dir().join("pgmt_test_project_structure");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    let schema_dir = PathBuf::from("schema");
-    create_project_structure(&temp_dir, &schema_dir)?;
+    let options = test_init_options(temp_dir.clone());
+    create_project_structure(&options)?;
 
     // Verify main directories
     assert!(temp_dir.exists());
@@ -153,8 +174,9 @@ fn test_create_project_structure_custom_schema_dir() -> Result<()> {
     let temp_dir = env::temp_dir().join("pgmt_test_custom_schema");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    let schema_dir = PathBuf::from("custom_schema");
-    create_project_structure(&temp_dir, &schema_dir)?;
+    let mut options = test_init_options(temp_dir.clone());
+    options.schema_dir = PathBuf::from("custom_schema");
+    create_project_structure(&options)?;
 
     // Verify custom schema directory structure
     assert!(temp_dir.join("custom_schema").exists());
@@ -177,8 +199,8 @@ fn test_create_project_structure_existing_gitignore() -> Result<()> {
     let existing_content = "# Existing content\n*.log\n";
     fs::write(temp_dir.join(".gitignore"), existing_content)?;
 
-    let schema_dir = PathBuf::from("schema");
-    create_project_structure(&temp_dir, &schema_dir)?;
+    let options = test_init_options(temp_dir.clone());
+    create_project_structure(&options)?;
 
     // Verify that existing .gitignore was not overwritten
     let gitignore_content = fs::read_to_string(temp_dir.join(".gitignore"))?;
@@ -195,19 +217,8 @@ fn test_generate_config_file_auto_shadow() -> Result<()> {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir)?;
 
-    let options = InitOptions {
-        project_dir: temp_dir.clone(),
-        dev_database_url: "postgres://localhost/myapp_dev".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: None,
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(temp_dir.clone());
+    options.dev_database_url = "postgres://localhost/myapp_dev".to_string();
 
     generate_config_file(&options, &temp_dir)?;
 
@@ -222,10 +233,8 @@ fn test_generate_config_file_auto_shadow() -> Result<()> {
     assert!(config_content.contains("schema_dir: schema"));
     assert!(config_content.contains("migrations_dir: migrations"));
     assert!(config_content.contains("baselines_dir: schema_baselines"));
-    assert!(config_content.contains("comments: true"));
-    assert!(config_content.contains("grants: true"));
-    assert!(config_content.contains("triggers: true"));
-    assert!(config_content.contains("extensions: true"));
+    // Toggle fields (comments, grants, triggers, extensions) are no longer written to config
+    // Schema files are now the source of truth for object management
 
     // Cleanup
     fs::remove_dir_all(&temp_dir)?;
@@ -238,23 +247,16 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir)?;
 
-    let options = InitOptions {
-        project_dir: temp_dir.clone(),
-        dev_database_url: "postgres://localhost/myapp_dev".to_string(),
-        shadow_config: ShadowDatabaseInput::Manual("postgres://localhost/myapp_shadow".to_string()),
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("custom_schema"),
-        import_source: None,
-        object_config: ObjectManagementConfig {
-            comments: false,
-            grants: true,
-            triggers: false,
-            extensions: true,
-        },
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
+    let mut options = test_init_options(temp_dir.clone());
+    options.dev_database_url = "postgres://localhost/myapp_dev".to_string();
+    options.shadow_config =
+        ShadowDatabaseInput::Manual("postgres://localhost/myapp_shadow".to_string());
+    options.schema_dir = PathBuf::from("custom_schema");
+    options.object_config = ObjectManagementConfig {
+        comments: false,
+        grants: true,
+        triggers: false,
+        extensions: true,
     };
 
     generate_config_file(&options, &temp_dir)?;
@@ -268,12 +270,8 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
     assert!(config_content.contains("auto: false"));
     assert!(config_content.contains("url: postgres://localhost/myapp_shadow"));
     assert!(config_content.contains("schema_dir: custom_schema"));
-
-    // Verify object management config
-    assert!(config_content.contains("comments: false"));
-    assert!(config_content.contains("grants: true"));
-    assert!(config_content.contains("triggers: false"));
-    assert!(config_content.contains("extensions: true"));
+    // Toggle fields are no longer written to config file
+    // ObjectManagementConfig is only used during init import phase
 
     // Cleanup
     fs::remove_dir_all(&temp_dir)?;
@@ -283,19 +281,8 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
 #[test]
 fn test_init_options_debug() {
     // Test that InitOptions can be debugged (has Debug trait)
-    let options = InitOptions {
-        project_dir: PathBuf::from("/tmp/test"),
-        dev_database_url: "postgres://localhost/test".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::Directory(PathBuf::from("migrations"))),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(PathBuf::from("/tmp/test"));
+    options.import_source = Some(ImportSource::Directory(PathBuf::from("migrations")));
 
     let debug_output = format!("{:?}", options);
     assert!(debug_output.contains("InitOptions"));

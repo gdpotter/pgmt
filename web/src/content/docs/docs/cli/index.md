@@ -53,7 +53,7 @@ Directory overrides:
 
 ## pgmt init
 
-Initialize a new pgmt project.
+Initialize a new pgmt project. Can be re-run to update an existing configuration.
 
 ```bash
 pgmt init [OPTIONS]
@@ -68,10 +68,22 @@ pgmt init [OPTIONS]
 --no-import                   # Skip import (empty project)
 --defaults                    # Use defaults for all prompts
 --schema-dir <DIR>            # Schema directory name (default: "schema")
+--migrations-dir <DIR>        # Migrations directory name (default: "migrations")
+--baselines-dir <DIR>         # Baselines directory name (default: "schema_baselines")
 --auto-shadow                 # Use auto shadow database
 --shadow-pg-version <VER>     # PostgreSQL version for auto shadow (e.g., "14", "15", "16")
 --roles-file <PATH>           # Path to roles file (default: auto-detect roles.sql)
+--fresh                       # Force fresh init (overwrite existing config)
 ```
+
+**Re-initialization:**
+
+When run in a directory with an existing `pgmt.yaml`, you'll be prompted to:
+- **Update** - Modify existing config (shows current values as defaults)
+- **Fresh** - Start over with new configuration
+- **Cancel** - Keep current configuration
+
+Use `--fresh` to skip this prompt and always overwrite.
 
 **Examples:**
 
@@ -85,8 +97,17 @@ pgmt init --dev-url postgres://localhost/existing_db --create-baseline
 # Empty project
 pgmt init --defaults --no-import
 
+# Custom directory structure
+pgmt init --dev-url postgres://localhost/myapp_dev \
+    --schema-dir db/schema \
+    --migrations-dir db/migrations \
+    --baselines-dir db/baselines
+
 # Specify PostgreSQL version for shadow database
 pgmt init --dev-url postgres://localhost/myapp_dev --auto-shadow --shadow-pg-version 14
+
+# Re-initialize with fresh config
+pgmt init --dev-url postgres://localhost/newdb --fresh
 ```
 
 ---

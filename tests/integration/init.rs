@@ -1,6 +1,7 @@
 use anyhow::Result;
 use pgmt::commands::init::import::ImportSource;
 use pgmt::commands::init::{BaselineCreationConfig, InitOptions, ObjectManagementConfig};
+use pgmt::config::types::Directories;
 use pgmt::prompts::ShadowDatabaseInput;
 use std::fs;
 use std::path::PathBuf;
@@ -8,38 +9,44 @@ use tempfile::TempDir;
 
 use crate::helpers::harness::with_test_db;
 
-/// Integration tests for the init command end-to-end workflow
-/// These tests validate the complete init process including:
-/// - Project structure creation
-/// - Configuration file generation
-/// - Schema import from various sources
-/// - Co-located file organization
-/// - Database catalog loading and validation
-/// - Context-aware object management
+// Integration tests for the init command end-to-end workflow
+// These tests validate the complete init process including:
+// - Project structure creation
+// - Configuration file generation
+// - Schema import from various sources
+// - Co-located file organization
+// - Database catalog loading and validation
+// - Context-aware object management
+
+/// Helper to create default InitOptions for testing
+fn test_init_options(project_dir: PathBuf) -> InitOptions {
+    let dir_defaults = Directories::default();
+    InitOptions {
+        project_dir,
+        dev_database_url: "postgres://localhost/test".to_string(),
+        shadow_config: ShadowDatabaseInput::Auto,
+        shadow_pg_version: None,
+        detected_pg_version: None,
+        schema_dir: PathBuf::from("schema"),
+        migrations_dir: dir_defaults.migrations,
+        baselines_dir: dir_defaults.baselines,
+        import_source: None,
+        object_config: ObjectManagementConfig::default(),
+        baseline_config: BaselineCreationConfig::default(),
+        tracking_table: pgmt::config::types::TrackingTable::default(),
+        roles_file: None,
+    }
+}
 
 #[tokio::test]
 async fn test_init_workflow_minimal_setup() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_path = temp_dir.path().to_path_buf();
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_minimal".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: None, // No schema import
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_minimal".to_string();
 
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     assert!(project_path.exists());
@@ -57,10 +64,8 @@ async fn test_init_workflow_minimal_setup() -> Result<()> {
     assert!(config_content.contains("dev_url: postgres://localhost/test_minimal"));
     assert!(config_content.contains("auto: true"));
     assert!(config_content.contains("schema_dir: schema"));
-    assert!(config_content.contains("comments: true"));
-    assert!(config_content.contains("grants: true"));
-    assert!(config_content.contains("triggers: true"));
-    assert!(config_content.contains("extensions: true"));
+    // Toggle fields (comments, grants, triggers, extensions) are no longer written to config
+    // Schema files are now the source of truth for object management
 
     Ok(())
 }
@@ -70,32 +75,20 @@ async fn test_init_workflow_custom_configuration() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_path = temp_dir.path().to_path_buf();
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://user:pass@localhost:5432/custom_db".to_string(),
-        shadow_config: ShadowDatabaseInput::Manual(
-            "postgres://localhost/custom_shadow".to_string(),
-        ),
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("db_schema"),
-        import_source: None,
-        object_config: ObjectManagementConfig {
-            comments: false,
-            grants: true,
-            triggers: false,
-            extensions: true,
-        },
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://user:pass@localhost:5432/custom_db".to_string();
+    options.shadow_config =
+        ShadowDatabaseInput::Manual("postgres://localhost/custom_shadow".to_string());
+    options.schema_dir = PathBuf::from("db_schema");
+    options.object_config = ObjectManagementConfig {
+        comments: false,
+        grants: true,
+        triggers: false,
+        extensions: true,
     };
 
     // Execute the init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Verify custom schema directory structure
@@ -110,10 +103,8 @@ async fn test_init_workflow_custom_configuration() -> Result<()> {
     assert!(config_content.contains("auto: false"));
     assert!(config_content.contains("url: postgres://localhost/custom_shadow"));
     assert!(config_content.contains("schema_dir: db_schema"));
-    assert!(config_content.contains("comments: false"));
-    assert!(config_content.contains("grants: true"));
-    assert!(config_content.contains("triggers: false"));
-    assert!(config_content.contains("extensions: true"));
+    // Toggle fields are no longer written to config file
+    // ObjectManagementConfig is only used during init import phase
 
     Ok(())
 }
@@ -152,25 +143,12 @@ COMMENT ON COLUMN app.users.email IS 'User email address';
 "#;
     fs::write(&sql_file, sql_content)?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_import".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::SqlFile(sql_file)),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_import".to_string();
+    options.import_source = Some(ImportSource::SqlFile(sql_file));
 
     // Execute init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // For this test, we verify the structure was created
@@ -214,25 +192,12 @@ async fn test_init_workflow_with_directory_import() -> Result<()> {
         "CREATE INDEX idx_users_role ON auth.users (role);",
     )?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_dir_import".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::Directory(import_dir.clone())),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_dir_import".to_string();
+    options.import_source = Some(ImportSource::Directory(import_dir.clone()));
 
     // Execute init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Test the enhanced SQL file discovery functionality
@@ -288,25 +253,12 @@ async fn test_init_workflow_with_prisma_style_migrations() -> Result<()> {
         "CREATE INDEX idx_users_email ON app.users (email);",
     )?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_prisma_import".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::Directory(prisma_migrations.clone())),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_prisma_import".to_string();
+    options.import_source = Some(ImportSource::Directory(prisma_migrations.clone()));
 
     // Execute init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Test enhanced discovery with Prisma structure
@@ -362,25 +314,12 @@ async fn test_init_workflow_with_mixed_migration_structure() -> Result<()> {
     )?;
     fs::write(migration3.join("down.sql"), "DROP INDEX idx_users_id;")?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_mixed_import".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::Directory(migrations_dir.clone())),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_mixed_import".to_string();
+    options.import_source = Some(ImportSource::Directory(migrations_dir.clone()));
 
     // Execute init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Test discovery of mixed structure
@@ -410,25 +349,12 @@ async fn test_init_workflow_with_empty_migration_directory() -> Result<()> {
     let empty_migrations = temp_dir.path().join("empty_migrations");
     fs::create_dir_all(&empty_migrations)?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_empty_import".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::Directory(empty_migrations.clone())),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_empty_import".to_string();
+    options.import_source = Some(ImportSource::Directory(empty_migrations.clone()));
 
     // Execute init workflow - should succeed even with empty directory
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Test discovery with empty directory (should warn but not fail)
@@ -453,25 +379,11 @@ async fn test_init_workflow_preserves_existing_gitignore() -> Result<()> {
         "# Existing project gitignore\n*.log\ntarget/\nnode_modules/\n";
     fs::write(project_path.join(".gitignore"), existing_gitignore_content)?;
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_preserve".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: None,
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_preserve".to_string();
 
     // Execute init workflow
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Verify that existing .gitignore was preserved
@@ -495,25 +407,12 @@ async fn test_init_workflow_nested_project_directory() -> Result<()> {
         .join("level2")
         .join("my_project");
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test_nested".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("db_structure"),
-        import_source: None,
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test_nested".to_string();
+    options.schema_dir = PathBuf::from("db_structure");
 
     // Execute init workflow - should create nested directories
-    pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    )?;
+    pgmt::commands::init::project::create_project_structure(&options)?;
     pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
 
     // Verify nested structure was created
@@ -545,25 +444,11 @@ async fn test_init_workflow_error_handling() -> Result<()> {
         fs::set_permissions(&readonly_dir, perms)?;
 
         let invalid_project = readonly_dir.join("should_fail");
-        let options = InitOptions {
-            project_dir: invalid_project,
-            dev_database_url: "postgres://localhost/test".to_string(),
-            shadow_config: ShadowDatabaseInput::Auto,
-            shadow_pg_version: None,
-            detected_pg_version: None,
-            schema_dir: PathBuf::from("schema"),
-            import_source: None,
-            object_config: ObjectManagementConfig::default(),
-            baseline_config: BaselineCreationConfig::default(),
-            tracking_table: pgmt::config::types::TrackingTable::default(),
-            roles_file: None,
-        };
+        let mut options = test_init_options(invalid_project);
+        options.dev_database_url = "postgres://localhost/test".to_string();
 
         // This should fail gracefully
-        let result = pgmt::commands::init::project::create_project_structure(
-            &options.project_dir,
-            &options.schema_dir,
-        );
+        let result = pgmt::commands::init::project::create_project_structure(&options);
         assert!(result.is_err());
     }
 
@@ -572,25 +457,12 @@ async fn test_init_workflow_error_handling() -> Result<()> {
     let project_path = temp_dir.path().join("test_project");
     let non_existent_file = temp_dir.path().join("does_not_exist.sql");
 
-    let options = InitOptions {
-        project_dir: project_path.clone(),
-        dev_database_url: "postgres://localhost/test".to_string(),
-        shadow_config: ShadowDatabaseInput::Auto,
-        shadow_pg_version: None,
-        detected_pg_version: None,
-        schema_dir: PathBuf::from("schema"),
-        import_source: Some(ImportSource::SqlFile(non_existent_file)),
-        object_config: ObjectManagementConfig::default(),
-        baseline_config: BaselineCreationConfig::default(),
-        tracking_table: pgmt::config::types::TrackingTable::default(),
-        roles_file: None,
-    };
+    let mut options = test_init_options(project_path.clone());
+    options.dev_database_url = "postgres://localhost/test".to_string();
+    options.import_source = Some(ImportSource::SqlFile(non_existent_file));
 
     // Project structure creation should still work
-    let result = pgmt::commands::init::project::create_project_structure(
-        &options.project_dir,
-        &options.schema_dir,
-    );
+    let result = pgmt::commands::init::project::create_project_structure(&options);
     assert!(result.is_ok());
 
     // But importing the non-existent file would fail in the import step
@@ -952,6 +824,218 @@ GRANT SELECT ON import_test_items TO import_test_role;
     assert!(
         has_import_test_grant,
         "Should have grant to import_test_role"
+    );
+
+    Ok(())
+}
+
+/// Test that custom migrations_dir and baselines_dir are correctly persisted to config
+#[tokio::test]
+async fn test_init_workflow_custom_directories() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let project_path = temp_dir.path().to_path_buf();
+
+    let mut options = test_init_options(project_path.clone());
+    options.migrations_dir = "db/migrations".to_string();
+    options.baselines_dir = "db/baselines".to_string();
+    options.schema_dir = PathBuf::from("db/schema");
+
+    // Execute init workflow
+    pgmt::commands::init::project::create_project_structure(&options)?;
+    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+
+    // Verify custom directories were created
+    assert!(
+        project_path.join("db/migrations").exists(),
+        "Custom migrations_dir should be created"
+    );
+    assert!(
+        project_path.join("db/baselines").exists(),
+        "Custom baselines_dir should be created"
+    );
+    assert!(
+        project_path.join("db/schema").exists(),
+        "Custom schema_dir should be created"
+    );
+    assert!(
+        project_path.join("db/schema/tables").exists(),
+        "Schema subdirectories should be created"
+    );
+
+    // Verify config contains custom directory paths
+    let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
+    assert!(
+        config_content.contains("migrations_dir: db/migrations"),
+        "Config should contain custom migrations_dir"
+    );
+    assert!(
+        config_content.contains("baselines_dir: db/baselines"),
+        "Config should contain custom baselines_dir"
+    );
+    assert!(
+        config_content.contains("schema_dir: db/schema"),
+        "Config should contain custom schema_dir"
+    );
+
+    Ok(())
+}
+
+/// Test that detected PostgreSQL version is persisted in config
+#[tokio::test]
+async fn test_init_workflow_detected_pg_version() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let project_path = temp_dir.path().to_path_buf();
+
+    let mut options = test_init_options(project_path.clone());
+    options.detected_pg_version = Some("15.4".to_string());
+
+    // Execute init workflow
+    pgmt::commands::init::project::create_project_structure(&options)?;
+    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+
+    // Verify config contains detected version (should be converted to major version)
+    let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
+    assert!(
+        config_content.contains("version: \"15\""),
+        "Config should contain detected pg version (major only): {}",
+        config_content
+    );
+    // Should not have auto: true when version is detected
+    assert!(
+        !config_content.contains("auto: true"),
+        "Config should not have auto: true when version is detected"
+    );
+
+    Ok(())
+}
+
+/// Test that schema generation includes REVOKE statements when default privileges are revoked
+/// This tests the full init workflow: DB with revoked defaults → schema files with REVOKE
+/// Also verifies that explicit grants to other roles are preserved alongside the REVOKE
+#[tokio::test]
+async fn test_init_schema_generation_includes_revoke_for_revoked_defaults() -> Result<()> {
+    with_test_db(async |db| {
+        // Create a role, a function, revoke PUBLIC EXECUTE, and grant to the role
+        db.execute(
+            r#"
+            DO $$ BEGIN CREATE ROLE app_executor; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+            CREATE FUNCTION revoked_public_func()
+            RETURNS INT AS $$ SELECT 42; $$ LANGUAGE SQL;
+
+            -- Revoke the default PUBLIC EXECUTE privilege
+            REVOKE EXECUTE ON FUNCTION revoked_public_func() FROM PUBLIC;
+
+            -- Grant EXECUTE to a specific role
+            GRANT EXECUTE ON FUNCTION revoked_public_func() TO app_executor;
+            "#,
+        )
+        .await;
+
+        // Load catalog from the database
+        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+
+        // Generate schema files
+        let temp_dir = TempDir::new()?;
+        let schema_path = temp_dir.path().join("schema");
+
+        let generator = pgmt::schema_generator::SchemaGenerator::new(
+            catalog,
+            schema_path.clone(),
+            pgmt::schema_generator::SchemaGeneratorConfig {
+                include_comments: true,
+                include_grants: true,
+                include_triggers: true,
+                include_extensions: true,
+            },
+        );
+
+        generator.generate_files()?;
+
+        // Find the function file and check its contents
+        let function_file = schema_path.join("functions/revoked_public_func.sql");
+        assert!(
+            function_file.exists(),
+            "Function file should exist at {:?}",
+            function_file
+        );
+
+        let function_content = std::fs::read_to_string(&function_file)?;
+
+        // Verify all 3 statements are present:
+        // 1. CREATE FUNCTION
+        assert!(
+            function_content.contains("CREATE FUNCTION")
+                || function_content.contains("CREATE OR REPLACE FUNCTION"),
+            "Function file should contain CREATE FUNCTION.\nActual content:\n{}",
+            function_content
+        );
+
+        // 2. REVOKE EXECUTE FROM PUBLIC (because default was revoked)
+        assert!(
+            function_content.contains("REVOKE")
+                && function_content.contains("EXECUTE")
+                && function_content.contains("PUBLIC"),
+            "Function file should contain REVOKE EXECUTE ... FROM PUBLIC statement.\nActual content:\n{}",
+            function_content
+        );
+
+        // 3. GRANT EXECUTE TO app_executor
+        assert!(
+            function_content.contains("GRANT")
+                && function_content.contains("EXECUTE")
+                && function_content.contains("app_executor"),
+            "Function file should contain GRANT EXECUTE ... TO app_executor statement.\nActual content:\n{}",
+            function_content
+        );
+
+        // Verify ordering: CREATE FUNCTION must come before REVOKE and GRANT
+        let create_pos = function_content
+            .find("CREATE")
+            .expect("CREATE not found");
+        let revoke_pos = function_content
+            .find("REVOKE")
+            .expect("REVOKE not found");
+        let grant_pos = function_content
+            .find("GRANT EXECUTE")
+            .expect("GRANT not found");
+
+        assert!(
+            create_pos < revoke_pos,
+            "CREATE FUNCTION should come before REVOKE.\nActual content:\n{}",
+            function_content
+        );
+        assert!(
+            create_pos < grant_pos,
+            "CREATE FUNCTION should come before GRANT.\nActual content:\n{}",
+            function_content
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Test that explicit shadow_pg_version takes precedence over detected_pg_version
+#[tokio::test]
+async fn test_init_workflow_explicit_pg_version_precedence() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let project_path = temp_dir.path().to_path_buf();
+
+    let mut options = test_init_options(project_path.clone());
+    options.shadow_pg_version = Some("16".to_string()); // Explicit CLI arg
+    options.detected_pg_version = Some("15.4".to_string()); // From dev DB
+
+    // Execute init workflow
+    pgmt::commands::init::project::create_project_structure(&options)?;
+    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+
+    // Verify config uses explicit version (16), not detected (15)
+    let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
+    assert!(
+        config_content.contains("version: \"16\""),
+        "Config should use explicit version (16), not detected (15): {}",
+        config_content
     );
 
     Ok(())

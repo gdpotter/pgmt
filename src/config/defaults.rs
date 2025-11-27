@@ -24,20 +24,8 @@ impl Default for Directories {
     }
 }
 
-impl Default for Objects {
-    fn default() -> Self {
-        Self {
-            include: ObjectInclude::default(),
-            exclude: ObjectExclude::default(),
-            comments: true,
-            grants: true,
-            triggers: true,
-            extensions: true,
-        }
-    }
-}
-
 // ObjectInclude can derive Default since it's just two empty Vecs
+// Objects derives Default - uses ObjectInclude::default() and ObjectExclude::default()
 
 impl Default for ObjectExclude {
     fn default() -> Self {

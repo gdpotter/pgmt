@@ -145,14 +145,13 @@ pub struct Directories {
 }
 
 // Object filtering configuration
+// Note: Boolean toggles (comments, grants, triggers, extensions) have been removed.
+// Schema files are now the source of truth - what's in your files is what gets managed.
+// Use exclude patterns to filter objects during init import.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ObjectsInput {
     pub include: Option<ObjectIncludeInput>,
     pub exclude: Option<ObjectExcludeInput>,
-    pub comments: Option<bool>,
-    pub grants: Option<bool>,
-    pub triggers: Option<bool>,
-    pub extensions: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -167,14 +166,10 @@ pub struct ObjectExcludeInput {
     pub exclude_tables: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Objects {
     pub include: ObjectInclude,
     pub exclude: ObjectExclude,
-    pub comments: bool,
-    pub grants: bool,
-    pub triggers: bool,
-    pub extensions: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -305,18 +300,6 @@ pub struct ObjectFilterArgs {
 
     #[arg(long, help = "Exclude these tables (glob patterns)")]
     pub exclude_tables: Option<Vec<String>>,
-
-    #[arg(long, help = "Disable comment management")]
-    pub no_comments: bool,
-
-    #[arg(long, help = "Disable grant management")]
-    pub no_grants: bool,
-
-    #[arg(long, help = "Disable trigger management")]
-    pub no_triggers: bool,
-
-    #[arg(long, help = "Disable extension management")]
-    pub no_extensions: bool,
 }
 
 // Conversion functions from CLI args to config input
@@ -362,18 +345,7 @@ impl From<ObjectFilterArgs> for ObjectsInput {
             None
         };
 
-        Self {
-            include,
-            exclude,
-            comments: if args.no_comments { Some(false) } else { None },
-            grants: if args.no_grants { Some(false) } else { None },
-            triggers: if args.no_triggers { Some(false) } else { None },
-            extensions: if args.no_extensions {
-                Some(false)
-            } else {
-                None
-            },
-        }
+        Self { include, exclude }
     }
 }
 

@@ -46,10 +46,6 @@ fn test_config_input_merge() {
                 exclude_schemas: Some(vec!["temp_*".to_string()]),
                 exclude_tables: None,
             }),
-            comments: Some(false),
-            grants: None,
-            triggers: None,
-            extensions: None,
         }),
         migration: None,
         schema: None,
@@ -86,9 +82,19 @@ fn test_config_input_merge() {
         Some("baselines".to_string())
     );
 
-    // CLI object config should be present
+    // CLI object config should be present with exclude patterns
     assert!(merged.objects.is_some());
-    assert_eq!(merged.objects.as_ref().unwrap().comments, Some(false));
+    assert_eq!(
+        merged
+            .objects
+            .as_ref()
+            .unwrap()
+            .exclude
+            .as_ref()
+            .unwrap()
+            .exclude_schemas,
+        Some(vec!["temp_*".to_string()])
+    );
 }
 
 #[test]
@@ -107,10 +113,6 @@ fn test_config_builder_resolve() {
                 exclude_schemas: Some(vec!["pg_*".to_string()]),
                 exclude_tables: Some(vec!["temp_*".to_string()]),
             }),
-            comments: Some(true),
-            grants: Some(false),
-            triggers: None,   // Use default
-            extensions: None, // Use default
         }),
         migration: None, // Use defaults
         schema: None,    // Use defaults
@@ -139,10 +141,6 @@ fn test_config_builder_resolve() {
     // Check object filtering
     assert_eq!(config.objects.exclude.schemas, vec!["pg_*".to_string()]);
     assert_eq!(config.objects.exclude.tables, vec!["temp_*".to_string()]);
-    assert!(config.objects.comments);
-    assert!(!config.objects.grants);
-    assert!(config.objects.triggers); // Default
-    assert!(config.objects.extensions); // Default
 
     // Check migration defaults
     assert_eq!(config.migration.default_mode, "safe_only");
@@ -175,10 +173,6 @@ fn test_object_filter_schema_filtering() {
             schemas: vec!["pg_*".to_string(), "information_schema".to_string()],
             tables: vec![],
         },
-        comments: true,
-        grants: true,
-        triggers: true,
-        extensions: true,
     };
 
     let tracking_table = TrackingTable::default();
@@ -207,10 +201,6 @@ fn test_object_filter_table_filtering() {
             schemas: vec!["pg_*".to_string()],
             tables: vec!["temp_*".to_string()],
         },
-        comments: true,
-        grants: true,
-        triggers: true,
-        extensions: true,
     };
 
     let tracking_table = TrackingTable::default();
@@ -231,31 +221,6 @@ fn test_object_filter_table_filtering() {
 }
 
 #[test]
-fn test_object_filter_management_flags() {
-    let objects = Objects {
-        include: ObjectInclude {
-            schemas: vec![],
-            tables: vec![],
-        },
-        exclude: ObjectExclude {
-            schemas: vec![],
-            tables: vec![],
-        },
-        comments: true,
-        grants: false,
-        triggers: true,
-        extensions: false,
-    };
-
-    let tracking_table = TrackingTable::default();
-    let filter = ObjectFilter::new(&objects, &tracking_table);
-
-    assert!(!filter.should_manage_grants());
-    assert!(filter.should_manage_triggers());
-    assert!(!filter.should_manage_extensions());
-}
-
-#[test]
 fn test_empty_include_patterns_means_include_all() {
     let objects = Objects {
         include: ObjectInclude {
@@ -266,10 +231,6 @@ fn test_empty_include_patterns_means_include_all() {
             schemas: vec!["pg_*".to_string()],
             tables: vec![],
         },
-        comments: true,
-        grants: true,
-        triggers: true,
-        extensions: true,
     };
 
     let tracking_table = TrackingTable::default();

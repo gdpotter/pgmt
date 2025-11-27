@@ -223,3 +223,67 @@ async fn test_grant_view_privilege_migration() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that migrating from default privileges to revoked defaults generates REVOKE
+/// This is the key test for the default ACL handling fix:
+/// - Initial DB: function with default PUBLIC EXECUTE (NULL ACL)
+/// - Target DB: function with REVOKE PUBLIC EXECUTE (explicit ACL)
+/// - Expected: Migration generates REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC
+#[tokio::test]
+async fn test_revoke_default_public_execute_on_function() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: function
+            &["CREATE FUNCTION test_func() RETURNS INT AS $$ SELECT 1; $$ LANGUAGE SQL"],
+            // Initial DB only: nothing extra (uses default PUBLIC EXECUTE)
+            &[],
+            // Target DB only: revoke the default PUBLIC EXECUTE
+            &["REVOKE EXECUTE ON FUNCTION test_func() FROM PUBLIC"],
+            // Verification closure
+            |steps, final_catalog| {
+                // Should have a REVOKE step for PUBLIC EXECUTE
+                let revoke_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
+                    if matches!(&grant.grantee, pgmt::catalog::grant::GranteeType::Public)
+                        && matches!(&grant.object, pgmt::catalog::grant::ObjectType::Function { name, .. } if name == "test_func"))
+                });
+
+                assert!(
+                    revoke_step.is_some(),
+                    "Should have REVOKE step for PUBLIC EXECUTE on function. Steps: {:?}",
+                    steps
+                );
+
+                // Verify the REVOKE SQL is correct
+                if let Some(step) = revoke_step {
+                    let sql_list = step.to_sql();
+                    let revoke_sql = &sql_list[0].sql;
+                    assert!(
+                        revoke_sql.contains("REVOKE")
+                            && revoke_sql.contains("EXECUTE")
+                            && revoke_sql.contains("PUBLIC"),
+                        "Should generate correct REVOKE SQL: {}",
+                        revoke_sql
+                    );
+                }
+
+                // Verify final state: no PUBLIC grant on the function
+                let public_grant_exists = final_catalog.grants.iter().any(|g| {
+                    matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Public)
+                        && matches!(&g.object, pgmt::catalog::grant::ObjectType::Function { name, .. } if name == "test_func")
+                });
+
+                assert!(
+                    !public_grant_exists,
+                    "PUBLIC should not have EXECUTE on test_func after migration"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

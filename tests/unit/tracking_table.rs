@@ -124,10 +124,6 @@ fn test_object_filter_migration_table_inclusion() {
             schemas: vec![],
             tables: vec![],
         },
-        comments: true,
-        grants: true,
-        triggers: true,
-        extensions: true,
     };
 
     let filter = ObjectFilter::new(&objects, &tracking_table);

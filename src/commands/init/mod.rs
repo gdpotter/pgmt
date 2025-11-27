@@ -29,6 +29,14 @@ pub struct InitArgs {
     #[clap(long, default_value = "schema")]
     pub schema_dir: String,
 
+    /// Migrations directory name
+    #[clap(long)]
+    pub migrations_dir: Option<String>,
+
+    /// Baselines directory name
+    #[clap(long)]
+    pub baselines_dir: Option<String>,
+
     /// Use auto shadow database (skip shadow database prompt)
     #[clap(long)]
     pub auto_shadow: bool,
@@ -52,4 +60,8 @@ pub struct InitArgs {
     /// Path to roles file (default: auto-detect roles.sql)
     #[clap(long)]
     pub roles_file: Option<String>,
+
+    /// Force fresh initialization (overwrite existing config)
+    #[clap(long)]
+    pub fresh: bool,
 }

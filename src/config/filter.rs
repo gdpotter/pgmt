@@ -2,13 +2,12 @@ use crate::catalog;
 use crate::config::types::{ObjectExclude, ObjectInclude, Objects, TrackingTable};
 use glob::Pattern;
 
-/// Object filter for determining which database objects pgmt should manage
+/// Object filter for determining which database objects pgmt should manage.
+/// Schema files are the source of truth - what's in your files is what gets managed.
+/// Use include/exclude patterns to control which schemas and tables are processed.
 pub struct ObjectFilter {
     include: ObjectInclude,
     exclude: ObjectExclude,
-    grants: bool,
-    triggers: bool,
-    extensions: bool,
     tracking_table: TrackingTable,
 }
 
@@ -18,9 +17,6 @@ impl ObjectFilter {
         Self {
             include: config.include.clone(),
             exclude: config.exclude.clone(),
-            grants: config.grants,
-            triggers: config.triggers,
-            extensions: config.extensions,
             tracking_table: tracking_table.clone(),
         }
     }
@@ -67,21 +63,6 @@ impl ObjectFilter {
         true
     }
 
-    /// Check if grants should be managed
-    pub fn should_manage_grants(&self) -> bool {
-        self.grants
-    }
-
-    /// Check if triggers should be managed
-    pub fn should_manage_triggers(&self) -> bool {
-        self.triggers
-    }
-
-    /// Check if extensions should be managed
-    pub fn should_manage_extensions(&self) -> bool {
-        self.extensions
-    }
-
     /// Check if this is a pgmt internal table (migration tracking, sections, etc.)
     /// These tables are infrastructure managed by pgmt itself, not part of the user's schema.
     pub fn is_pgmt_internal_table(&self, schema_name: &str, table_name: &str) -> bool {
@@ -99,6 +80,8 @@ impl ObjectFilter {
     }
 
     /// Apply filter to a catalog, removing objects that shouldn't be managed
+    /// based on include/exclude patterns. Schema files are the source of truth
+    /// for what object types to manage (grants, triggers, extensions, etc.).
     pub fn filter_catalog(&self, mut catalog: catalog::Catalog) -> catalog::Catalog {
         // Filter schemas
         catalog
@@ -140,23 +123,13 @@ impl ObjectFilter {
             .constraints
             .retain(|constraint| self.should_include_table(&constraint.schema, &constraint.table));
 
-        // Conditionally filter object types based on management settings
-        if !self.should_manage_triggers() {
-            catalog.triggers.clear();
-        } else {
-            // Filter triggers by table inclusion
-            catalog
-                .triggers
-                .retain(|trigger| self.should_include_table(&trigger.schema, &trigger.table_name));
-        }
+        // Filter triggers by table inclusion
+        catalog
+            .triggers
+            .retain(|trigger| self.should_include_table(&trigger.schema, &trigger.table_name));
 
-        if !self.should_manage_grants() {
-            catalog.grants.clear();
-        }
-
-        if !self.should_manage_extensions() {
-            catalog.extensions.clear();
-        }
+        // Note: grants and extensions are not filtered by pattern - schema files are the source of truth.
+        // If you don't want grants/extensions managed, don't include them in your schema files.
 
         catalog
     }
@@ -189,10 +162,6 @@ mod tests {
                 schemas: vec!["pg_*".to_string(), "information_schema".to_string()],
                 tables: vec!["temp_*".to_string()],
             },
-            comments: true,
-            grants: true,
-            triggers: false,
-            extensions: true,
         }
     }
 
@@ -241,15 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn test_object_type_management() {
-        let filter = ObjectFilter::new(&create_test_objects(), &create_test_tracking_table());
-
-        assert!(filter.should_manage_grants());
-        assert!(!filter.should_manage_triggers());
-        assert!(filter.should_manage_extensions());
-    }
-
-    #[test]
     fn test_pgmt_internal_tables() {
         let filter = ObjectFilter::new(&create_test_objects(), &create_test_tracking_table());
 
@@ -274,10 +234,6 @@ mod tests {
                 schemas: vec!["pg_*".to_string()],
                 tables: vec!["temp_*".to_string()],
             },
-            comments: true,
-            grants: true,
-            triggers: true,
-            extensions: true,
         };
 
         let filter = ObjectFilter::new(&objects, &create_test_tracking_table());
@@ -306,10 +262,6 @@ mod tests {
                 schemas: vec![],
                 tables: vec![],
             },
-            comments: true,
-            grants: true,
-            triggers: true,
-            extensions: true,
         };
 
         let filter = ObjectFilter::new(&objects, &tracking_table);

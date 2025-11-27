@@ -133,6 +133,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -154,6 +155,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -185,6 +187,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -207,6 +210,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -229,6 +233,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -251,6 +256,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -273,6 +279,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -295,6 +302,7 @@ mod tests {
             with_grant_option: true,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -316,6 +324,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -337,6 +346,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_revoke_statement(&grant);
@@ -358,6 +368,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);
@@ -379,6 +390,7 @@ mod tests {
             with_grant_option: false,
             depends_on: vec![],
             object_owner: "postgres".to_string(),
+            is_default_acl: false,
         };
 
         let sql = render_grant_statement(&grant);

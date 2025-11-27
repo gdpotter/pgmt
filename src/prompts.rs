@@ -37,11 +37,27 @@ pub struct DatabaseConnectionResult {
 
 /// Prompt for database URL with guidance and connection testing
 /// Returns the URL and detected PostgreSQL version
+#[allow(dead_code)] // May be used by other commands in the future
 pub async fn prompt_database_url_with_guidance() -> Result<DatabaseConnectionResult> {
+    prompt_database_url_with_guidance_and_default(None).await
+}
+
+/// Prompt for database URL with guidance and connection testing, with optional default
+/// Returns the URL and detected PostgreSQL version
+pub async fn prompt_database_url_with_guidance_and_default(
+    default_url: Option<String>,
+) -> Result<DatabaseConnectionResult> {
     loop {
-        let url: String = Input::new()
-            .with_prompt("💾 Local dev database URL (e.g., postgres://localhost/myapp_dev)")
-            .interact_text()?;
+        let url: String = if let Some(ref default) = default_url {
+            Input::new()
+                .with_prompt("💾 Local dev database URL (e.g., postgres://localhost/myapp_dev)")
+                .default(default.clone())
+                .interact_text()?
+        } else {
+            Input::new()
+                .with_prompt("💾 Local dev database URL (e.g., postgres://localhost/myapp_dev)")
+                .interact_text()?
+        };
 
         let url = url.trim();
         if url.is_empty() {

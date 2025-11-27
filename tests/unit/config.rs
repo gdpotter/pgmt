@@ -33,10 +33,6 @@ mod config_integration_tests {
                     exclude_schemas: Some(vec!["temp_*".to_string()]),
                     exclude_tables: None,
                 }),
-                comments: Some(true),
-                grants: Some(false),
-                triggers: None,
-                extensions: None,
             }),
             migration: None,
             schema: None,
@@ -54,10 +50,6 @@ mod config_integration_tests {
             objects: Some(ObjectsInput {
                 include: None,
                 exclude: None,
-                comments: Some(false),
-                grants: None,
-                triggers: Some(true),
-                extensions: Some(false),
             }),
             migration: None,
             schema: None,
@@ -75,10 +67,8 @@ mod config_integration_tests {
             Some("postgres://localhost/cli_target".to_string())
         );
 
-        assert!(!config.objects.comments); // CLI override
-        assert!(!config.objects.grants); // From file
-        assert!(config.objects.triggers); // From CLI
-        assert!(!config.objects.extensions); // From CLI
+        // Verify exclude patterns from file config
+        assert_eq!(config.objects.exclude.schemas, vec!["temp_*".to_string()]);
 
         Ok(())
     }
@@ -196,10 +186,6 @@ mod config_integration_tests {
                     ]),
                     exclude_tables: Some(vec!["temp_*".to_string(), "cache_*".to_string()]),
                 }),
-                comments: Some(true),
-                grants: Some(false),
-                triggers: Some(true),
-                extensions: Some(false),
             }),
             migration: None,
             schema: None,
@@ -222,11 +208,6 @@ mod config_integration_tests {
         assert!(!filter.should_include_table("public", "cache_sessions"));
         assert!(filter.should_include_table("public", "users"));
 
-        // Test object type management flags
-        assert!(!filter.should_manage_grants());
-        assert!(filter.should_manage_triggers());
-        assert!(!filter.should_manage_extensions());
-
         Ok(())
     }
 
@@ -243,11 +224,11 @@ mod config_integration_tests {
         assert_eq!(config.directories.baselines, "schema_baselines");
         assert_eq!(config.directories.roles, "roles.sql");
 
-        // Verify object management defaults
-        assert!(config.objects.comments);
-        assert!(config.objects.grants);
-        assert!(config.objects.triggers);
-        assert!(config.objects.extensions);
+        // Verify default exclude patterns
+        assert_eq!(
+            config.objects.exclude.schemas,
+            vec!["pg_*".to_string(), "information_schema".to_string()]
+        );
 
         // Verify migration defaults
         assert_eq!(config.migration.default_mode, "safe_only");
@@ -273,11 +254,10 @@ mod config_integration_tests {
             directories: None, // Should use all defaults
             objects: Some(ObjectsInput {
                 include: None,
-                exclude: None,
-                comments: Some(false), // Override default
-                grants: None,          // Use default
-                triggers: None,        // Use default
-                extensions: None,      // Use default
+                exclude: Some(ObjectExcludeInput {
+                    exclude_schemas: Some(vec!["custom_*".to_string()]),
+                    exclude_tables: None,
+                }),
             }),
             migration: None, // Use defaults
             schema: None,
@@ -288,13 +268,10 @@ mod config_integration_tests {
 
         // Custom settings should be applied
         assert_eq!(config.databases.dev, "postgres://custom/dev");
-        assert!(!config.objects.comments);
+        assert_eq!(config.objects.exclude.schemas, vec!["custom_*".to_string()]);
 
         // Defaults should be used for unspecified values
         assert_eq!(config.directories.schema, "schema");
-        assert!(config.objects.grants);
-        assert!(config.objects.triggers);
-        assert!(config.objects.extensions);
         assert_eq!(config.migration.default_mode, "safe_only");
 
         Ok(())
@@ -320,8 +297,6 @@ directories:
 objects:
   exclude:
     exclude_schemas: ["temp_*", "test_*"]
-  comments: false
-  grants: true
 
 migration:
   default_mode: force_all
@@ -339,8 +314,6 @@ migration:
         assert_eq!(config.directories.schema, "custom_schema/");
         assert_eq!(config.directories.migrations, "custom_migrations/");
         assert_eq!(config.objects.exclude.schemas, vec!["temp_*", "test_*"]);
-        assert!(!config.objects.comments);
-        assert!(config.objects.grants);
         assert_eq!(config.migration.default_mode, "force_all");
         assert!(!config.migration.validate_baseline_consistency);
 
