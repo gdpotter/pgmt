@@ -6,6 +6,7 @@ import { links } from './src/config/links.ts';
 
 // https://astro.build/config
 export default defineConfig({
+  site: 'https://pgmt.dev',
   output: 'static', // Ensures static site generation for GitHub Pages
   markdown: {
     rehypePlugins: [[rehypeMermaid, { strategy: 'img-svg' }]],
