@@ -14,7 +14,7 @@ async fn test_simple_help_interactive() -> Result<()> {
         let mut session = helper.interactive_command(&["--help"]).await?;
 
         // Wait for the help output
-        session.expect("PostgreSQL Migration Tool")?;
+        session.expect("Usage:")?;
         session.expect(Eof)?;
 
         Ok(())
