@@ -287,6 +287,38 @@ async fn test_domain_depends_on_trait() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fetch_domain_based_on_domain() -> Result<()> {
+    with_test_db(async |db| {
+        // Create base domain
+        db.execute("CREATE DOMAIN positive_amount AS NUMERIC(19,2) CHECK (VALUE > 0)")
+            .await;
+        // Create domain based on another domain
+        db.execute("CREATE DOMAIN large_amount AS positive_amount CHECK (VALUE >= 1000)")
+            .await;
+
+        let domains = fetch(&mut *db.conn().await).await.unwrap();
+
+        let large_amount = domains.iter().find(|d| d.name == "large_amount").unwrap();
+
+        // Should depend on the base domain, NOT Type
+        let deps = large_amount.depends_on();
+        assert!(deps.contains(&DbObjectId::Domain {
+            schema: "public".to_string(),
+            name: "positive_amount".to_string(),
+        }));
+        // Should NOT contain Type variant
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "positive_amount"))
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn test_fetch_multiple_domains() {
     with_test_db(async |db| {
         db.execute("CREATE SCHEMA app").await;

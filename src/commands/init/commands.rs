@@ -19,7 +19,10 @@ pub struct InitOptions {
     pub dev_database_url: String,
     pub shadow_config: ShadowDatabaseInput,
     /// PostgreSQL version for auto shadow database (e.g., "14", "15", "16")
+    /// If None, uses detected_pg_version from dev database
     pub shadow_pg_version: Option<String>,
+    /// PostgreSQL version detected from dev database connection (e.g., "15.4")
+    pub detected_pg_version: Option<String>,
     pub schema_dir: std::path::PathBuf,
     pub import_source: Option<ImportSource>,
     pub object_config: ObjectManagementConfig,
@@ -124,14 +127,18 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
 fn resolve_shadow_database(
     shadow_config: &ShadowDatabaseInput,
     shadow_pg_version: Option<&String>,
+    detected_pg_version: Option<&String>,
 ) -> crate::config::types::ShadowDatabase {
     use crate::config::types::{ShadowDatabase, ShadowDockerConfig};
 
     match shadow_config {
         ShadowDatabaseInput::Auto => {
-            if let Some(version) = shadow_pg_version {
+            // CLI takes precedence, then detected version, then default
+            let version = shadow_pg_version.or(detected_pg_version);
+            if let Some(v) = version {
+                let major_version = crate::prompts::extract_major_version(v);
                 ShadowDatabase::Docker(ShadowDockerConfig {
-                    version: Some(version.clone()),
+                    version: Some(major_version),
                     ..Default::default()
                 })
             } else {
@@ -152,8 +159,11 @@ async fn import_catalog_from_source(
     println!("   Source: {}", import_source.description());
 
     // Convert ShadowDatabaseInput to ShadowDatabase for import
-    let shadow_database =
-        resolve_shadow_database(&options.shadow_config, options.shadow_pg_version.as_ref());
+    let shadow_database = resolve_shadow_database(
+        &options.shadow_config,
+        options.shadow_pg_version.as_ref(),
+        options.detected_pg_version.as_ref(),
+    );
 
     // Resolve roles file path for import (roles must exist before schema GRANTs)
     let roles_path = options
@@ -216,6 +226,8 @@ pub enum BaselineResult {
     NotRequested,
     /// Baseline was successfully created and synced
     Created,
+    /// Validation found issues that need manual resolution (e.g., circular deps)
+    NeedsAttention { reason: String },
     /// Baseline creation was requested but failed
     Failed(String),
 }
@@ -257,6 +269,7 @@ async fn process_imported_catalog(
         roles_path.as_deref(),
         &options.shadow_config,
         options.shadow_pg_version.as_ref(),
+        options.detected_pg_version.as_ref(),
     )
     .await
     {
@@ -264,12 +277,28 @@ async fn process_imported_catalog(
             println!("✅ Schema validation passed");
         }
         Err(e) => {
-            // Validation failed - show error and skip baseline
+            let error_str = format!("{:#}", e);
+
+            // Check if this is a circular dependency (expected for complex databases)
+            if error_str.contains("Circular dependency") {
+                println!("\n📌 Circular dependency detected in schema files");
+                if let Some(cycle_info) = extract_circular_dep_info(&error_str) {
+                    println!("   {}", cycle_info);
+                }
+                println!();
+                println!("   This is common in complex databases with bidirectional foreign keys.");
+                println!("   To fix: move one foreign key to a separate file (e.g., constraints/)");
+                println!("   so the tables can be created before the constraint is added.");
+                return Ok(BaselineResult::NeedsAttention {
+                    reason: "Circular dependency detected".to_string(),
+                });
+            }
+
+            // Other validation failures are actual errors
             println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("⚠️  SCHEMA VALIDATION FAILED");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            // Use {:#} to show the full error chain including the root cause
-            println!("{:#}\n", e);
+            println!("{}\n", error_str);
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             println!("Next steps:");
             println!("  1. Fix dependencies in schema files (add '-- require:' statements)");
@@ -361,6 +390,24 @@ fn show_catalog_preview(catalog: &Catalog) {
     println!("  🔑 {} grants", catalog.grants.len());
     println!("  ═══════════════════");
     println!("  📦 {} total objects", total_objects);
+}
+
+/// Extract the circular dependency cycle info from an error message
+/// Returns the cycle portion like "A.sql -> B.sql -> A.sql"
+fn extract_circular_dep_info(error_str: &str) -> Option<String> {
+    // Look for the cycle pattern in the error message
+    // Format: "Circular dependency detected: A -> B -> A"
+    if let Some(start) = error_str.find("Circular dependency detected:") {
+        let after_prefix = &error_str[start + "Circular dependency detected:".len()..];
+        // Take until end of line or end of string
+        let cycle = after_prefix
+            .lines()
+            .next()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        return cycle;
+    }
+    None
 }
 
 /// Handle baseline creation failure with user-friendly error messages and guidance
@@ -474,6 +521,27 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
             println!("  🚀 Run 'pgmt migrate new \"description\"' to create new migrations");
             println!("  💡 Future migrations will only contain NEW changes");
         }
+        BaselineResult::NeedsAttention { reason } => {
+            println!("\n🎉 Project initialized successfully!");
+            println!("\n📝 Created:");
+            println!("  ✅ pgmt.yaml (configuration)");
+            println!(
+                "  ✅ {} directory with modular files",
+                options.schema_dir.display()
+            );
+            println!("  ✅ migrations/ directory");
+            println!("  ✅ schema_baselines/ directory");
+
+            println!("\n📌 {}", reason);
+            println!("\nNext steps:");
+            println!(
+                "  1. Move one foreign key from the cycle to a separate file (e.g., schema/constraints/)"
+            );
+            println!("  2. Test with: pgmt apply --dry-run");
+            println!("  3. Create baseline: pgmt baseline create");
+            println!("  💻 Run 'pgmt apply' to sync your dev database");
+            println!("  🚀 Run 'pgmt migrate new \"description\"' to create migrations");
+        }
         BaselineResult::Failed(error) => {
             // Validation failure - schema needs to be fixed
             if error.contains("relation") || error.contains("does not exist") {
@@ -564,8 +632,16 @@ async fn validate_schema_files(
     roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
     shadow_pg_version: Option<&String>,
+    detected_pg_version: Option<&String>,
 ) -> Result<()> {
-    validate_schema_files_impl(schema_dir, roles_file, shadow_config, shadow_pg_version).await
+    validate_schema_files_impl(
+        schema_dir,
+        roles_file,
+        shadow_config,
+        shadow_pg_version,
+        detected_pg_version,
+    )
+    .await
 }
 
 /// Implementation of schema validation
@@ -574,13 +650,15 @@ async fn validate_schema_files_impl(
     roles_file: Option<&std::path::Path>,
     shadow_config: &ShadowDatabaseInput,
     shadow_pg_version: Option<&String>,
+    detected_pg_version: Option<&String>,
 ) -> Result<()> {
     use crate::db::cleaner;
     use crate::db::connection::connect_with_retry;
     use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 
     // Get shadow URL from in-memory config (no yaml file needed!)
-    let shadow_database = resolve_shadow_database(shadow_config, shadow_pg_version);
+    let shadow_database =
+        resolve_shadow_database(shadow_config, shadow_pg_version, detected_pg_version);
     let shadow_url = shadow_database.get_connection_string().await?;
 
     // Connect to shadow database

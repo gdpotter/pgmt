@@ -91,6 +91,47 @@ async fn test_fetch_function_with_custom_types() {
 }
 
 #[tokio::test]
+async fn test_fetch_function_with_extension_type_dependency() -> anyhow::Result<()> {
+    with_test_db(async |db| {
+        // Create citext extension
+        db.execute("CREATE EXTENSION citext").await;
+
+        // Create function that uses citext type
+        db.execute(
+            "CREATE FUNCTION normalize_email(email citext) RETURNS citext AS $$
+                SELECT lower(email)
+            $$ LANGUAGE SQL",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+        let func = functions
+            .iter()
+            .find(|f| f.name == "normalize_email")
+            .expect("function should exist");
+
+        // Should depend on Extension, NOT Type
+        let deps = func.depends_on();
+        assert!(
+            deps.contains(&DbObjectId::Extension {
+                name: "citext".to_string(),
+            }),
+            "Function should depend on the extension providing the citext type"
+        );
+        // Should NOT contain Type variant for citext
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "citext")),
+            "Extension type should not be recorded as Type"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn test_fetch_procedure() {
     with_test_db(async |db| {
         db.execute(

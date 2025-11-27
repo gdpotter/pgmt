@@ -159,7 +159,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
             COALESCE(a.attndims, 0)::int AS "attr_attndims!: i32",
             -- Check if attribute type (or element type for arrays) is from an extension
             ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
-            ext_types.extname AS "extension_name?"
+            ext_types.extname AS "extension_name?",
+            -- Get typtype to distinguish domains ('d') from other types
+            CASE
+                WHEN attr_t.typelem != 0 THEN elem_t.typtype::text
+                ELSE attr_t.typtype::text
+            END AS "attr_type_typtype?"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         JOIN pg_class c ON t.typrelid = c.oid
@@ -199,8 +204,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
     }
 
     // 5. Organize composite attributes by type (with extension info for dependency building)
-    // Tuple: (CompositeAttribute, is_extension_type, extension_name)
-    type AttrWithExtInfo = (CompositeAttribute, bool, Option<String>);
+    // Tuple: (CompositeAttribute, is_extension_type, extension_name, typtype)
+    type AttrWithExtInfo = (CompositeAttribute, bool, Option<String>, Option<String>);
     let mut composite_attrs_by_type: std::collections::HashMap<
         (String, String),
         Vec<AttrWithExtInfo>,
@@ -219,6 +224,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                 },
                 attr.is_extension_type,
                 attr.extension_name,
+                attr.attr_type_typtype,
             ));
     }
 
@@ -236,7 +242,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
         // Separate attributes from extension info
         let composite_attributes: Vec<CompositeAttribute> = attrs_with_ext_info
             .iter()
-            .map(|(attr, _, _)| attr.clone())
+            .map(|(attr, _, _, _)| attr.clone())
             .collect();
 
         // Build dependencies using DependencyBuilder
@@ -244,10 +250,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
 
         // Add dependencies for composite types - analyze each attribute
         if row.typtype == "c" {
-            for (attr, is_extension, extension_name) in &attrs_with_ext_info {
-                builder.add_type_or_extension(
+            for (attr, is_extension, extension_name, typtype) in &attrs_with_ext_info {
+                builder.add_type_dependency(
                     attr.type_schema.clone(),
                     attr.raw_type_name.clone(),
+                    typtype.clone(),
                     *is_extension,
                     extension_name.clone(),
                 );

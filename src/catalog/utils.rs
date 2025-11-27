@@ -24,7 +24,7 @@ impl DependencyBuilder {
 
     /// Add a custom type dependency if the type is not a system type.
     /// Used when objects reference user-defined types (ENUMs, DOMAINs, COMPOSITE).
-    /// Note: Prefer `add_type_or_extension()` when extension type detection is available.
+    /// Note: Prefer `add_type_dependency()` when extension and typtype information is available.
     #[allow(dead_code)] // Used in tests; kept as a simpler API when extension detection isn't needed
     pub fn add_custom_type(&mut self, type_schema: Option<String>, type_name: Option<String>) {
         if let (Some(schema), Some(name)) = (type_schema, type_name)
@@ -46,6 +46,10 @@ impl DependencyBuilder {
     /// ```sql
     /// CASE WHEN t.typelem != 0 THEN elem_t.typname ELSE t.typname END AS "type_name?"
     /// ```
+    ///
+    /// Note: Prefer `add_type_dependency()` when you have access to `typtype` information,
+    /// as it correctly distinguishes domains from other custom types.
+    #[allow(dead_code)] // Used in tests; kept as a simpler API when typtype isn't available
     pub fn add_type_or_extension(
         &mut self,
         type_schema: Option<String>,

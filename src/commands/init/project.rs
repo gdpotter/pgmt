@@ -134,6 +134,7 @@ mod tests {
             dev_database_url: "postgres://localhost/test_db".to_string(),
             shadow_config: crate::prompts::ShadowDatabaseInput::Auto,
             shadow_pg_version: None,
+            detected_pg_version: None,
             schema_dir: PathBuf::from("custom_schema"),
             import_source: None,
             object_config: ObjectManagementConfig::default(),

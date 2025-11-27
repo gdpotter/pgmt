@@ -154,6 +154,7 @@ struct ColumnRow {
     column_comment: Option<String>,
     is_extension_type: bool,
     extension_name: Option<String>,
+    type_typtype: Option<String>,
 }
 
 async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> {
@@ -180,7 +181,12 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
           d.description AS "column_comment?",
           -- Check if the type (or element type for arrays) is from an extension
           ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
-          ext_types.extname AS "extension_name?"
+          ext_types.extname AS "extension_name?",
+          -- Get typtype to distinguish domains ('d') from other types
+          CASE
+            WHEN t.typelem != 0 THEN elem_t.typtype::text
+            ELSE t.typtype::text
+          END AS "type_typtype?"
         FROM pg_attribute a
         LEFT JOIN pg_attrdef ad
           ON a.attrelid = ad.adrelid
@@ -228,6 +234,7 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
             column_comment: r.column_comment,
             is_extension_type: r.is_extension_type,
             extension_name: r.extension_name,
+            type_typtype: r.type_typtype,
         })
         .collect())
 }
@@ -436,11 +443,18 @@ fn populate_columns(
                     (r.type_schema.clone(), base_type_name.clone())
                     && !is_system_schema(&type_schema)
                 {
-                    // For user-defined types, depend on the type
-                    column_depends_on.push(DbObjectId::Type {
-                        schema: type_schema.clone(),
-                        name: base_type_name.clone(),
-                    });
+                    // For user-defined types, depend on the type or domain
+                    if r.type_typtype.as_deref() == Some("d") {
+                        column_depends_on.push(DbObjectId::Domain {
+                            schema: type_schema.clone(),
+                            name: base_type_name.clone(),
+                        });
+                    } else {
+                        column_depends_on.push(DbObjectId::Type {
+                            schema: type_schema.clone(),
+                            name: base_type_name.clone(),
+                        });
+                    }
                 }
 
                 if let Some(funcs) =

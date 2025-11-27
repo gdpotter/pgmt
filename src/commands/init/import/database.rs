@@ -7,15 +7,15 @@ use crate::catalog::Catalog;
 
 /// Import schema from an existing database with interactive schema selection
 pub async fn import_from_database(url: String) -> Result<Catalog> {
-    println!("🔄 Connecting to database...");
+    tracing::debug!("Connecting to database...");
 
     // Connect directly to the source database
     let pool = PgPool::connect(&url)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
 
-    println!("✅ Connected successfully");
-    println!("📊 Analyzing database schema...");
+    tracing::debug!("Connected successfully");
+    tracing::debug!("Analyzing database schema...");
 
     // Load full catalog first to analyze available schemas
     let full_catalog = Catalog::load(&pool)
@@ -26,8 +26,8 @@ pub async fn import_from_database(url: String) -> Result<Catalog> {
 
     let total_objects = count_catalog_objects(&full_catalog);
 
-    println!(
-        "✅ Found {} schemas with {} total objects",
+    tracing::debug!(
+        "Found {} schemas with {} total objects",
         full_catalog.schemas.len(),
         total_objects
     );
@@ -35,15 +35,15 @@ pub async fn import_from_database(url: String) -> Result<Catalog> {
     // Show schema analysis and get user selection
     let selected_schemas = prompt_schema_selection(&full_catalog)?;
 
-    println!("🔄 Filtering catalog for selected schemas...");
+    tracing::debug!("Filtering catalog for selected schemas...");
 
     // Filter catalog to only include selected schemas
     let filtered_catalog = filter_catalog_by_schemas(full_catalog, &selected_schemas);
 
     let filtered_objects = count_catalog_objects(&filtered_catalog);
 
-    println!(
-        "✅ Filtered to {} objects from {} selected schemas",
+    tracing::debug!(
+        "Filtered to {} objects from {} selected schemas",
         filtered_objects,
         selected_schemas.len()
     );

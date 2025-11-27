@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            n.nspname AS \"schema!\",\n            t.typname AS \"name!\",\n            format_type(t.typbasetype, t.typtypmod) AS \"base_type!\",\n            t.typnotnull AS \"not_null!\",\n            pg_get_expr(t.typdefaultbin, 0) AS \"default?\",\n            CASE\n                WHEN t.typcollation != 0 AND t.typcollation != (\n                    SELECT oid FROM pg_collation WHERE collname = 'default'\n                ) THEN (SELECT collname FROM pg_collation WHERE oid = t.typcollation)\n                ELSE NULL\n            END AS \"collation?\",\n            d.description AS \"comment?\",\n            -- For dependency tracking on the base type (resolve array element type)\n            CASE\n                WHEN bt.typelem != 0 THEN elem_btn.nspname\n                ELSE btn.nspname\n            END AS \"base_type_schema?\",\n            CASE\n                WHEN bt.typelem != 0 THEN elem_bt.typname\n                ELSE bt.typname\n            END AS \"base_type_name?\",\n            -- Check if base type (or element type for arrays) is from an extension\n            ext_types.extname IS NOT NULL AS \"is_base_type_extension!: bool\",\n            ext_types.extname AS \"base_type_extension_name?\",\n            -- Get typtype to distinguish domains ('d') from other types\n            CASE\n                WHEN bt.typelem != 0 THEN elem_bt.typtype::text\n                ELSE bt.typtype::text\n            END AS \"base_type_typtype?\"\n        FROM pg_type t\n        JOIN pg_namespace n ON t.typnamespace = n.oid\n        LEFT JOIN pg_type bt ON t.typbasetype = bt.oid\n        LEFT JOIN pg_namespace btn ON bt.typnamespace = btn.oid\n        -- Element type for array base types\n        LEFT JOIN pg_type elem_bt ON bt.typelem = elem_bt.oid AND bt.typelem != 0\n        LEFT JOIN pg_namespace elem_btn ON elem_bt.typnamespace = elem_btn.oid\n        LEFT JOIN pg_description d ON d.objoid = t.oid AND d.objsubid = 0\n        -- Extension type lookup: compute once as derived table, then hash join\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(bt.typelem, 0::oid), bt.oid)\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND t.typtype = 'd'  -- domain only\n          -- Exclude domains that belong to extensions\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = t.oid\n            AND dep.deptype = 'e'\n          )\n        ORDER BY n.nspname, t.typname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "base_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "not_null!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "default?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "collation?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 7,
+        "name": "comment?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "base_type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 9,
+        "name": "base_type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_base_type_extension!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "base_type_extension_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 12,
+        "name": "base_type_typtype?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      false,
+      null,
+      null,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "7645eaccf7d928986988e0faf8a78f28671745bdbd1c5e18e9e452bac91919eb"
+}

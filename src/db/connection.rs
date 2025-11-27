@@ -1,6 +1,8 @@
 use anyhow::Result;
 use sqlx::PgPool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::time::Duration;
+use tracing::log::LevelFilter;
 
 /// Database connection configuration
 #[derive(Debug, Clone)]
@@ -34,6 +36,66 @@ pub async fn connect_with_retry_config(url: &str, config: &ConnectionConfig) -> 
 
     for attempt in 0..=config.max_retries {
         match PgPool::connect(url).await {
+            Ok(pool) => {
+                if attempt > 0 {
+                    println!(
+                        "✅ Connected to database (after {} retry{})",
+                        attempt,
+                        if attempt == 1 { "" } else { "ies" }
+                    );
+                } else {
+                    println!("✅ Connected to database");
+                }
+                return Ok(pool);
+            }
+            Err(e) => {
+                last_error = Some(e);
+                if attempt < config.max_retries {
+                    if attempt == 0 {
+                        println!("🔄 Database not ready, retrying...");
+                    }
+                    tokio::time::sleep(config.retry_delay).await;
+                }
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Failed to connect to database after {} attempts: {}",
+        config.max_retries + 1,
+        last_error.unwrap()
+    ))
+}
+
+/// Connect to database with retry logic and no slow query logging
+///
+/// Use this for operations where slow queries are expected (e.g., large schema imports).
+/// This prevents sqlx from logging the entire SQL content when queries exceed 1 second.
+pub async fn connect_with_retry_quiet(url: &str) -> Result<PgPool> {
+    connect_with_retry_config_quiet(url, &ConnectionConfig::default()).await
+}
+
+/// Connect to database with custom retry configuration and no slow query logging
+pub async fn connect_with_retry_config_quiet(
+    url: &str,
+    config: &ConnectionConfig,
+) -> Result<PgPool> {
+    use sqlx::ConnectOptions;
+    use std::str::FromStr;
+
+    let mut last_error = None;
+
+    // Parse connection options and disable slow statement logging
+    let connect_options = PgConnectOptions::from_str(url)
+        .map_err(|e| anyhow::anyhow!("Invalid database URL: {}", e))?
+        .log_slow_statements(LevelFilter::Off, Duration::from_secs(0));
+
+    for attempt in 0..=config.max_retries {
+        let result = PgPoolOptions::new()
+            .connect_with(connect_options.clone())
+            .await;
+
+        match result {
             Ok(pool) => {
                 if attempt > 0 {
                     println!(

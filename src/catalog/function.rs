@@ -77,6 +77,7 @@ struct FunctionDependencyRow {
     typ_name: Option<String>,
     typ_schema: Option<String>,
     typ_typtype: Option<String>,
+    typ_extension_name: Option<String>,
     proc_name: Option<String>,
     proc_schema: Option<String>,
     proc_args: Option<String>,
@@ -113,6 +114,7 @@ async fn fetch_all_function_dependencies(
                 WHEN typ.typelem != 0 THEN elem_typ.typtype::text
                 ELSE typ.typtype::text
             END AS "typ_typtype?",
+            ext_dep_types.extname AS "typ_extension_name?",
 
             -- Function reference
             proc.proname AS "proc_name?",
@@ -142,6 +144,13 @@ async fn fetch_all_function_dependencies(
         -- Element type for array types (typelem != 0 means it's an array type)
         LEFT JOIN pg_type elem_typ ON typ.typelem = elem_typ.oid AND typ.typelem != 0
         LEFT JOIN pg_namespace elem_typ_n ON elem_typ.typnamespace = elem_typ_n.oid
+        -- Extension type lookup for pg_depend type references
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS type_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_dep_types ON ext_dep_types.type_oid = COALESCE(NULLIF(typ.typelem, 0::oid), typ.oid)
 
         -- Function reference
         LEFT JOIN pg_proc proc
@@ -189,6 +198,7 @@ async fn fetch_all_function_dependencies(
                 typ_name: row.typ_name,
                 typ_schema: row.typ_schema,
                 typ_typtype: row.typ_typtype,
+                typ_extension_name: row.typ_extension_name,
                 proc_name: row.proc_name,
                 proc_schema: row.proc_schema,
                 proc_args: row.proc_args,
@@ -256,10 +266,15 @@ fn populate_function_dependencies(
             }
 
             // Type dependency (beyond what DependencyBuilder already added)
-            // Use typtype to distinguish domains ('d') from other custom types
+            // Check for extension types first, then use typtype to distinguish domains from other types
             if let (Some(typ_schema), Some(typ_name)) = (&dep.typ_schema, &dep.typ_name) {
                 if !is_system_schema(typ_schema) {
-                    let dep_id = if dep.typ_typtype.as_deref() == Some("d") {
+                    let dep_id = if let Some(ext_name) = &dep.typ_extension_name {
+                        // Type is from an extension - depend on the extension
+                        DbObjectId::Extension {
+                            name: ext_name.clone(),
+                        }
+                    } else if dep.typ_typtype.as_deref() == Some("d") {
                         DbObjectId::Domain {
                             schema: typ_schema.clone(),
                             name: typ_name.clone(),

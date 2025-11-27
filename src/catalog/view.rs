@@ -191,6 +191,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             ELSE typ_n.nspname
           END AS "typ_schema",
           ext_types.extname AS "typ_extension_name?",
+          -- Get typtype to distinguish domains ('d') from other types
+          CASE
+            WHEN typ.typelem != 0 THEN elem_typ.typtype::text
+            ELSE typ.typtype::text
+          END AS "typ_typtype?",
 
           -- Function reference
           proc.proname                  AS "proc_name",
@@ -282,7 +287,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                 continue;
             }
 
-            // Custom type or extension type?
+            // Custom type, domain, or extension type?
             // Type name is already resolved to element type for arrays via SQL
             if let (Some(name), Some(ns)) = (&d.typ_name, &d.typ_schema) {
                 if !is_system_schema(ns) {
@@ -290,6 +295,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                     if let Some(ext_name) = &d.typ_extension_name {
                         v.push(DbObjectId::Extension {
                             name: ext_name.clone(),
+                        });
+                    } else if d.typ_typtype.as_deref() == Some("d") {
+                        // Domain type
+                        v.push(DbObjectId::Domain {
+                            schema: ns.to_string(),
+                            name: name.to_string(),
                         });
                     } else {
                         v.push(DbObjectId::Type {

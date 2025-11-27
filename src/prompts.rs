@@ -29,20 +29,18 @@ where
     }
 }
 
+/// Result of database URL prompt including detected version
+pub struct DatabaseConnectionResult {
+    pub url: String,
+    pub pg_version: Option<String>,
+}
+
 /// Prompt for database URL with guidance and connection testing
-pub async fn prompt_database_url_with_guidance() -> Result<String> {
-    let explanation = "
-📊 Development Database
-   This is where you test your application locally during development.
-   Examples:
-   • postgres://localhost/myapp_dev
-   • postgres://user:pass@localhost:5432/myapp_dev";
-
-    println!("{}", explanation);
-
+/// Returns the URL and detected PostgreSQL version
+pub async fn prompt_database_url_with_guidance() -> Result<DatabaseConnectionResult> {
     loop {
         let url: String = Input::new()
-            .with_prompt("💾 Database URL")
+            .with_prompt("💾 Local dev database URL (e.g., postgres://localhost/myapp_dev)")
             .interact_text()?;
 
         let url = url.trim();
@@ -51,15 +49,53 @@ pub async fn prompt_database_url_with_guidance() -> Result<String> {
             continue;
         }
 
+        // Test connection and detect version
+        print!("🔄 Testing connection...");
+        match test_database_connection_with_version(url).await {
+            Ok(pg_version) => {
+                println!(" ✅ (PostgreSQL {})", pg_version);
+                return Ok(DatabaseConnectionResult {
+                    url: url.to_string(),
+                    pg_version: Some(pg_version),
+                });
+            }
+            Err(e) => {
+                println!(" ❌");
+                println!("   Connection failed: {}", e);
+                let retry = Confirm::new()
+                    .with_prompt("Try a different URL?")
+                    .default(true)
+                    .interact()?;
+
+                if !retry {
+                    return Err(anyhow::anyhow!("Database connection required"));
+                }
+            }
+        }
+    }
+}
+
+/// Prompt for database URL without guidance (for imports, etc.)
+pub async fn prompt_database_url_simple(prompt: &str) -> Result<String> {
+    loop {
+        let url: String = Input::new().with_prompt(prompt).interact_text()?;
+
+        let url = url.trim();
+        if url.is_empty() {
+            println!("❌ Database URL cannot be empty");
+            continue;
+        }
+
         // Test connection
-        println!("🔄 Testing connection...");
+        print!("🔄 Testing connection...");
         match test_database_connection(url).await {
             Ok(_) => {
-                println!("✅ Connection successful!");
+                println!(" ✅");
                 return Ok(url.to_string());
             }
             Err(e) => {
-                println!("❌ Connection failed: {}", e);
+                println!(" ❌");
+                println!("   Connection failed: {}", e);
                 let retry = Confirm::new()
                     .with_prompt("Try a different URL?")
                     .default(true)
@@ -82,27 +118,13 @@ pub enum ShadowDatabaseInput {
 
 /// Prompt for shadow database mode with explanation
 pub async fn prompt_shadow_mode_with_explanation() -> Result<ShadowDatabaseInput> {
-    let explanation = "
-🛡️  Shadow Database Configuration
-   pgmt uses a temporary database to safely test schema changes before applying them.
-   This ensures your migrations are correct and won't break your development database.";
-
-    println!("{}", explanation);
-
     // Check Docker availability first
     let (docker_available, debug_info) = crate::docker::DockerManager::is_available_verbose().await;
 
     if docker_available {
-        let auto_explanation = "
-   ✅ Auto mode (recommended): pgmt automatically creates and manages
-      a temporary PostgreSQL database using Docker. No setup required.
-
-   🔧 Manual mode: You provide a specific database URL that pgmt can use
-      for testing. The database will be cleaned before each use.";
-        println!("{}", auto_explanation);
-
+        println!("🛡️  Shadow database (for testing migrations safely)");
         let auto = Confirm::new()
-            .with_prompt("🔧 Use auto mode (recommended)?")
+            .with_prompt("   Use auto mode? (Docker-managed, recommended)")
             .default(true)
             .interact()?;
 
@@ -110,41 +132,20 @@ pub async fn prompt_shadow_mode_with_explanation() -> Result<ShadowDatabaseInput
             Ok(ShadowDatabaseInput::Auto)
         } else {
             let url: String = Input::new()
-                .with_prompt("Shadow database URL")
+                .with_prompt("   Shadow database URL")
                 .interact_text()?;
             Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
         }
     } else {
-        println!("⚠️  Docker not available: Auto mode requires Docker to be running.\n");
-        println!("{}", debug_info);
-        println!("💡 Troubleshooting tips:");
-        println!("   • Make sure Docker Desktop is running");
-        println!(
-            "   • On macOS: Try 'export DOCKER_HOST=unix:///Users/$USER/.docker/run/docker.sock'"
-        );
-        println!("   • Check Docker Desktop settings or restart Docker");
-        println!("   • For Colima users: Make sure Colima is running with 'colima start'");
-        println!();
-
-        let docker_error_explanation = "
-   🔧 Manual mode: You'll need to specify your own shadow database URL.
-      This can be any PostgreSQL database that pgmt can use temporarily.";
-        println!("{}", docker_error_explanation);
+        println!("🛡️  Shadow database (for testing migrations safely)");
+        println!("   ⚠️  Docker not available - manual mode required");
+        tracing::debug!("Docker availability details: {}", debug_info);
 
         let url: String = Input::new()
-            .with_prompt("Shadow database URL")
+            .with_prompt("   Shadow database URL")
             .interact_text()?;
         Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
     }
-}
-
-/// Simple yes/no prompt
-pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool> {
-    Confirm::new()
-        .with_prompt(prompt)
-        .default(default)
-        .interact()
-        .map_err(Into::into)
 }
 
 /// Select from a list of options
@@ -199,6 +200,37 @@ async fn test_database_connection(url: &str) -> Result<()> {
 
     pool.close().await;
     Ok(())
+}
+
+/// Test database connection and return PostgreSQL version
+async fn test_database_connection_with_version(url: &str) -> Result<String> {
+    let pool = PgPool::connect(url).await?;
+
+    // Get server version
+    let row: (String,) = sqlx::query_as("SHOW server_version")
+        .fetch_one(&pool)
+        .await?;
+
+    pool.close().await;
+
+    // Parse version - extract just the version number (e.g., "15.4" from "15.4 (Debian ...)")
+    let version = row
+        .0
+        .split_whitespace()
+        .next()
+        .unwrap_or(&row.0)
+        .to_string();
+
+    Ok(version)
+}
+
+/// Extract major version from full version string (e.g., "15" from "15.4")
+pub fn extract_major_version(full_version: &str) -> String {
+    full_version
+        .split('.')
+        .next()
+        .unwrap_or(full_version)
+        .to_string()
 }
 
 #[cfg(test)]

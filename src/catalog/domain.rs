@@ -89,7 +89,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
             END AS "base_type_name?",
             -- Check if base type (or element type for arrays) is from an extension
             ext_types.extname IS NOT NULL AS "is_base_type_extension!: bool",
-            ext_types.extname AS "base_type_extension_name?"
+            ext_types.extname AS "base_type_extension_name?",
+            -- Get typtype to distinguish domains ('d') from other types
+            CASE
+                WHEN bt.typelem != 0 THEN elem_bt.typtype::text
+                ELSE bt.typtype::text
+            END AS "base_type_typtype?"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         LEFT JOIN pg_type bt ON t.typbasetype = bt.oid
@@ -157,10 +162,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
     for row in domain_rows {
         let mut builder = DependencyBuilder::new(row.schema.clone());
 
-        // Add dependency on the base type (extension or custom type)
-        builder.add_type_or_extension(
+        // Add dependency on the base type (extension, domain, or custom type)
+        builder.add_type_dependency(
             row.base_type_schema.clone(),
             row.base_type_name.clone(),
+            row.base_type_typtype.clone(),
             row.is_base_type_extension,
             row.base_type_extension_name.clone(),
         );

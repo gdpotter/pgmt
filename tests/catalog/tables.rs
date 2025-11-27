@@ -153,6 +153,40 @@ async fn test_fetch_table_with_custom_types() {
 }
 
 #[tokio::test]
+async fn test_fetch_table_with_domain_column() -> anyhow::Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE DOMAIN positive_amount AS NUMERIC(19,2) CHECK (VALUE > 0)")
+            .await;
+        db.execute(
+            "CREATE TABLE transactions (
+                id SERIAL PRIMARY KEY,
+                amount positive_amount NOT NULL
+            )",
+        )
+        .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+        let table = tables.iter().find(|t| t.name == "transactions").unwrap();
+
+        // Should depend on Domain, NOT Type
+        let deps = table.depends_on();
+        assert!(deps.contains(&DbObjectId::Domain {
+            schema: "public".to_string(),
+            name: "positive_amount".to_string(),
+        }));
+        // Should NOT contain Type variant for domain
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "positive_amount"))
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn test_fetch_table_with_generated_column() {
     with_test_db(async |db| {
         db.execute(

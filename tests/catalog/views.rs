@@ -90,6 +90,56 @@ async fn test_fetch_view_with_custom_types() {
 }
 
 #[tokio::test]
+async fn test_fetch_view_with_domain_dependency() -> anyhow::Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE DOMAIN positive_amount AS NUMERIC(19,2) CHECK (VALUE > 0)")
+            .await;
+
+        db.execute(
+            "CREATE TABLE transactions (
+                id SERIAL PRIMARY KEY,
+                amount positive_amount NOT NULL
+            )",
+        )
+        .await;
+
+        // Use explicit cast to domain to create direct pg_depend dependency
+        db.execute(
+            "CREATE VIEW large_transactions AS
+             SELECT * FROM transactions WHERE amount > 1000::positive_amount",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+        let view = views
+            .iter()
+            .find(|v| v.name == "large_transactions")
+            .unwrap();
+
+        // Should depend on Domain (via explicit cast)
+        let deps = view.depends_on();
+        println!("View dependencies: {:?}", deps);
+        assert!(
+            deps.contains(&DbObjectId::Domain {
+                schema: "public".to_string(),
+                name: "positive_amount".to_string(),
+            }),
+            "View should depend on the domain it references"
+        );
+        // Should NOT contain Type variant for domain
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "positive_amount")),
+            "Domain should not be recorded as Type"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn test_fetch_view_with_function_dependency() {
     with_test_db(async |db| {
         db.execute(

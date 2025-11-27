@@ -404,6 +404,52 @@ async fn test_composite_type_custom_dependency() {
 }
 
 #[tokio::test]
+async fn test_composite_type_domain_dependency() -> anyhow::Result<()> {
+    with_test_db(async |db| {
+        // Create a domain
+        db.execute("CREATE DOMAIN positive_amount AS NUMERIC(19,2) CHECK (VALUE > 0)")
+            .await;
+
+        // Create a composite type that uses the domain
+        db.execute(
+            "CREATE TYPE money_transfer AS (
+                from_account TEXT,
+                to_account TEXT,
+                amount positive_amount
+            )",
+        )
+        .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+
+        let money_transfer = types
+            .iter()
+            .find(|t| t.name == "money_transfer")
+            .expect("composite type should exist");
+
+        // Should depend on Domain, NOT Type
+        let deps = money_transfer.depends_on();
+        assert!(
+            deps.contains(&DbObjectId::Domain {
+                schema: "public".to_string(),
+                name: "positive_amount".to_string(),
+            }),
+            "Composite type should depend on the domain it references"
+        );
+        // Should NOT contain Type variant for domain
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "positive_amount")),
+            "Domain should not be recorded as Type"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn test_composite_type_custom_array_dependency() {
     with_test_db(async |db| {
         // Create an enum type

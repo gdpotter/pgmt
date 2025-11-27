@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::catalog::Catalog;
-use crate::db::connection::connect_with_retry;
+use crate::db::connection::connect_with_retry_quiet;
 use crate::db::sql_executor::{SqlExecutorConfig, discover_sql_files_ordered, execute_sql_file};
 
 /// Import schema from a directory of SQL files
@@ -16,26 +16,23 @@ pub async fn import_from_directory(
     // Discover SQL files in alphabetical order
     let sql_files = discover_sql_files_ordered(&dir)?;
 
-    println!(
-        "🔄 Found {} SQL files. Executing in order...",
-        sql_files.len()
-    );
+    tracing::debug!("Found {} SQL files. Executing in order...", sql_files.len());
 
-    // Connect to shadow database with retry logic
-    let pool = connect_with_retry(&shadow_url).await?;
+    // Connect to shadow database with retry logic (quiet mode to avoid slow query logging)
+    let pool = connect_with_retry_quiet(&shadow_url).await?;
 
     // Apply roles file first if it exists (roles must exist before GRANTs)
     if let Some(roles_path) = roles_file
         && roles_path.exists()
     {
-        println!("   📋 Applying roles from: {}", roles_path.display());
+        tracing::debug!("Applying roles from: {}", roles_path.display());
         crate::schema_ops::apply_roles_file(&pool, roles_path).await?;
     }
 
-    // Configure SQL executor for import scenario
+    // Configure SQL executor for import scenario (quiet mode for init)
     let executor_config = SqlExecutorConfig {
         initialize_session: true,
-        verbose: true,
+        verbose: false,
     };
 
     // Execute each file - errors bubble up with line numbers already formatted

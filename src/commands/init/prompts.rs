@@ -12,16 +12,44 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
     let project_dir = std::env::current_dir()?;
 
     // Database URL - use CLI arg or prompt
-    let dev_database_url = if let Some(url) = &args.dev_url {
-        url.clone()
+    let (dev_database_url, detected_pg_version) = if let Some(url) = &args.dev_url {
+        // CLI arg provided - test connection and detect version
+        print!("🔄 Testing connection...");
+        match sqlx::PgPool::connect(url).await {
+            Ok(pool) => {
+                let version: Result<(String,), _> =
+                    sqlx::query_as("SHOW server_version").fetch_one(&pool).await;
+                pool.close().await;
+                match version {
+                    Ok((v,)) => {
+                        let pg_version = v.split_whitespace().next().unwrap_or(&v).to_string();
+                        println!(" ✅ (PostgreSQL {})", pg_version);
+                        (url.clone(), Some(pg_version))
+                    }
+                    Err(_) => {
+                        println!(" ✅");
+                        (url.clone(), None)
+                    }
+                }
+            }
+            Err(e) => {
+                println!(" ❌");
+                return Err(anyhow::anyhow!("Connection failed: {}", e));
+            }
+        }
     } else if args.defaults {
-        "postgres://localhost/pgmt_dev".to_string()
+        ("postgres://localhost/pgmt_dev".to_string(), None)
     } else {
-        crate::prompts::prompt_database_url_with_guidance().await?
+        let result = crate::prompts::prompt_database_url_with_guidance().await?;
+        (result.url, result.pg_version)
     };
 
-    // Shadow database configuration - use CLI arg or prompt
-    let shadow_config = if args.auto_shadow || args.defaults {
+    // Shadow database configuration
+    // - If --shadow-pg-version is specified, use auto mode with that version
+    // - If --auto-shadow is specified, use auto mode
+    // - If defaults mode, use auto mode
+    // - Otherwise prompt (but we'll simplify this prompt too)
+    let shadow_config = if args.auto_shadow || args.shadow_pg_version.is_some() || args.defaults {
         crate::prompts::ShadowDatabaseInput::Auto
     } else {
         crate::prompts::prompt_shadow_mode_with_explanation().await?
@@ -77,6 +105,7 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
         dev_database_url,
         shadow_config,
         shadow_pg_version: args.shadow_pg_version.clone(),
+        detected_pg_version,
         schema_dir,
         import_source,
         object_config,
@@ -88,38 +117,24 @@ pub async fn gather_init_options_with_args(args: &super::InitArgs) -> Result<Ini
 
 /// Prompt for schema import options
 pub async fn prompt_import_source() -> Result<Option<ImportSource>> {
-    let import_explanation = "
-📥 Schema Import (Optional)
-   You can import an existing database schema to get started quickly.
-   This is useful if you already have a database or migration files.
-
-   💡 Skip this if you're starting a new project from scratch.";
-
-    println!("{}", import_explanation);
-
-    let import_wanted = crate::prompts::prompt_yes_no("Import existing schema?", false)?;
-
-    if !import_wanted {
-        return Ok(None);
-    }
-
-    println!("\n📂 Choose Import Source:");
     let options = vec![
-        (1, "Directory with SQL files (e.g., existing migrations)"),
-        (2, "Single SQL dump file (e.g., from pg_dump)"),
+        (0, "None (empty project)"),
+        (1, "SQL dump file (e.g., from pg_dump)"),
+        (2, "Directory with SQL files"),
         (3, "Live database connection"),
     ];
 
-    let choice = crate::prompts::prompt_select("Import from", options)?;
+    let choice = crate::prompts::prompt_select("📥 Import from", options)?;
 
     let source = match choice {
+        0 => return Ok(None),
         1 => {
-            let dir = prompt_import_directory()?;
-            ImportSource::Directory(dir)
-        }
-        2 => {
             let file = prompt_import_sql_file()?;
             ImportSource::SqlFile(file)
+        }
+        2 => {
+            let dir = prompt_import_directory()?;
+            ImportSource::Directory(dir)
         }
         3 => {
             let url = prompt_import_database_url().await?;
@@ -133,10 +148,6 @@ pub async fn prompt_import_source() -> Result<Option<ImportSource>> {
 
 /// Prompt for import directory with validation
 fn prompt_import_directory() -> Result<PathBuf> {
-    println!("\n📁 SQL Directory Import:");
-    println!("   Import schema from a directory containing SQL files.");
-    println!("   Supports various migration tools (Prisma, Flyway, etc.)");
-
     loop {
         let dir = crate::prompts::prompt_directory_with_validation(
             "📁 SQL files directory",
@@ -179,9 +190,6 @@ fn prompt_import_directory() -> Result<PathBuf> {
 
 /// Prompt for SQL file with validation
 fn prompt_import_sql_file() -> Result<PathBuf> {
-    println!("\n📄 SQL File Import:");
-    println!("   Import schema from a single SQL dump file (pg_dump, etc.)");
-
     loop {
         let file_path: String = Input::new()
             .with_prompt("📄 SQL file path")
@@ -214,11 +222,7 @@ fn prompt_import_sql_file() -> Result<PathBuf> {
 
 /// Prompt for database URL for import
 async fn prompt_import_database_url() -> Result<String> {
-    println!("\n🔗 Database Import:");
-    println!("   Import schema directly from an existing PostgreSQL database.");
-    println!("   You'll be able to select which schemas to import.");
-
-    crate::prompts::prompt_database_url_with_guidance().await
+    crate::prompts::prompt_database_url_simple("🔗 Source database URL").await
 }
 
 /// Prompt for object management configuration (without catalog context)
@@ -268,105 +272,39 @@ pub fn prompt_object_management_config() -> Result<ObjectManagementConfig> {
 }
 
 /// Prompt for object management configuration WITH catalog context
-/// Shows counts of objects found in the imported schema
+/// Uses smart defaults, only prompts for grants if there are many (>100)
 pub fn prompt_object_management_config_with_context(
     catalog: &crate::catalog::Catalog,
 ) -> Result<ObjectManagementConfig> {
-    // Count objects that would be affected by each setting
+    // Count objects
     let comment_count = count_commentable_objects(catalog);
     let grant_count = catalog.grants.len();
     let trigger_count = catalog.triggers.len();
     let extension_count = catalog.extensions.len();
 
-    // Smart defaults: only enable what exists in the database
-    let smart_defaults = ObjectManagementConfig {
+    // Smart defaults: enable what exists in the database
+    let mut config = ObjectManagementConfig {
         comments: comment_count > 0,
         grants: grant_count > 0,
         triggers: trigger_count > 0,
         extensions: extension_count > 0,
     };
 
-    let context_explanation = format!(
-        "
-⚙️  Object Management Configuration
-
-   Your imported schema contains:
-     💬 {} objects with potential comments {}
-     🔑 {} grant definitions {}
-     ⚡  {} triggers {}
-     🧩 {} extensions {}
-
-   By default, pgmt will manage object types that exist in your database.
-   Press Enter to use these defaults, or customize if needed.",
-        comment_count,
-        if comment_count > 0 {
-            "(will manage)"
-        } else {
-            "(will skip)"
-        },
-        grant_count,
-        if grant_count > 0 {
-            "(will manage)"
-        } else {
-            "(will skip)"
-        },
-        trigger_count,
-        if trigger_count > 0 {
-            "(will manage)"
-        } else {
-            "(will skip)"
-        },
-        extension_count,
-        if extension_count > 0 {
-            "(will manage)"
-        } else {
-            "(will skip)"
-        }
-    );
-
-    println!("{}", context_explanation);
-
-    let configure_advanced = Confirm::new()
-        .with_prompt("Customize these settings?")
-        .default(false)
-        .interact()?;
-
-    if !configure_advanced {
-        return Ok(smart_defaults);
+    // Only prompt for grants if there are many (complex permission setup)
+    // Simple projects with few/no grants don't need to think about this
+    if grant_count > 100 {
+        println!(
+            "\n   Your schema has {} grant definitions across multiple roles.",
+            grant_count
+        );
+        let manage_grants = Confirm::new()
+            .with_prompt("🔑 Manage GRANTs/permissions?")
+            .default(true)
+            .interact()?;
+        config.grants = manage_grants;
     }
 
-    // Build items with counts
-    let items = vec![
-        format!("Comments ({} commentable objects)", comment_count),
-        format!("Grants ({} permissions)", grant_count),
-        format!("Triggers ({} triggers)", trigger_count),
-        format!("Extensions ({} extensions)", extension_count),
-    ];
-
-    println!("\n🎯 Select object types to manage (use Space to toggle, Enter to confirm):");
-    let selections = MultiSelect::new()
-        .with_prompt("Which object types should pgmt manage?")
-        .items(&items)
-        .defaults(&[
-            smart_defaults.comments,
-            smart_defaults.grants,
-            smart_defaults.triggers,
-            smart_defaults.extensions,
-        ])
-        .interact()?;
-
-    // Convert selections to individual booleans
-    let comments = selections.contains(&0);
-    let grants = selections.contains(&1);
-    let triggers = selections.contains(&2);
-    let extensions = selections.contains(&3);
-
-    Ok(ObjectManagementConfig {
-        comments,
-        grants,
-        triggers,
-        extensions,
-    })
+    Ok(config)
 }
 
 /// Count objects that can have comments (tables, views, functions)
@@ -435,29 +373,51 @@ pub fn prompt_baseline_creation(database_state: &DatabaseState) -> Result<bool> 
 
 /// Prompt for project creation confirmation with summary
 pub fn prompt_project_confirmation(options: &InitOptions) -> Result<bool> {
-    println!("\n📋 Project Setup Summary:");
-    println!("  📁 Project directory: {}", options.project_dir.display());
+    // Build compact summary line
+    let shadow_version = options
+        .shadow_pg_version
+        .as_ref()
+        .or(options
+            .detected_pg_version
+            .as_ref()
+            .map(|v| {
+                // Extract major version from detected (e.g., "15" from "15.4")
+                crate::prompts::extract_major_version(v)
+            })
+            .as_ref())
+        .cloned()
+        .unwrap_or_else(|| "auto".to_string());
+
+    let shadow_desc = match &options.shadow_config {
+        ShadowDatabaseInput::Auto => {
+            if options.detected_pg_version.is_some() {
+                format!("Docker (PG {} - matches dev)", shadow_version)
+            } else {
+                format!("Docker (PG {})", shadow_version)
+            }
+        }
+        ShadowDatabaseInput::Manual(url) => format!("Manual ({})", mask_sensitive_url(url)),
+    };
+
+    // Build roles info if present
+    let roles_info = options
+        .roles_file
+        .as_ref()
+        .map(|f| format!(" | Roles: {}", f))
+        .unwrap_or_default();
+
     println!(
-        "  💾 Database: {}",
+        "\n📋 Setup: {}",
         mask_sensitive_url(&options.dev_database_url)
     );
-    println!(
-        "  🛡️  Shadow database: {}",
-        describe_shadow_config(&options.shadow_config)
-    );
-    println!("  📂 Schema directory: {}", options.schema_dir.display());
+    println!("   💡 Shadow: {}{}", shadow_desc, roles_info);
 
     if let Some(ref import_source) = options.import_source {
-        println!("  📥 Import source: {}", import_source.description());
-    } else {
-        println!("  📥 Import source: None (empty project)");
+        println!("   📥 Import: {}", import_source.description());
     }
 
-    // Object management and baseline will be configured after import
-    // No need to show them in the confirmation summary
-
     Confirm::new()
-        .with_prompt("\n🚀 Proceed with project initialization?")
+        .with_prompt("\n🚀 Proceed?")
         .default(true)
         .interact()
         .map_err(Into::into)
@@ -497,14 +457,6 @@ fn mask_sensitive_url(url: &str) -> String {
     }
 }
 
-/// Describe shadow database configuration for display
-fn describe_shadow_config(config: &ShadowDatabaseInput) -> String {
-    match config {
-        ShadowDatabaseInput::Auto => "Auto (Docker-managed)".to_string(),
-        ShadowDatabaseInput::Manual(url) => format!("Manual ({})", mask_sensitive_url(url)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,17 +474,5 @@ mod tests {
         );
 
         assert_eq!(mask_sensitive_url("invalid url"), "Invalid URL");
-    }
-
-    #[test]
-    fn test_describe_shadow_config() {
-        let auto_config = ShadowDatabaseInput::Auto;
-        assert_eq!(
-            describe_shadow_config(&auto_config),
-            "Auto (Docker-managed)"
-        );
-
-        let manual_config = ShadowDatabaseInput::Manual("postgres://localhost/shadow".to_string());
-        assert!(describe_shadow_config(&manual_config).contains("Manual"));
     }
 }
