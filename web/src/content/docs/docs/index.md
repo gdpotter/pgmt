@@ -10,7 +10,7 @@ pgmt is a PostgreSQL migration tool for schema-as-code development with explicit
 ## Install
 
 ```bash
-cargo install --git https://github.com/gdpotter/pgmt.git
+cargo install pgmt
 ```
 
 ## Get Started

@@ -203,7 +203,7 @@ validate-schema:
   script:
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source ~/.cargo/env
-    - cargo install --git https://github.com/gdpotter/pgmt.git
+    - cargo install pgmt
     - pgmt config validate
     - pgmt migrate validate
 
@@ -213,7 +213,7 @@ deploy-migrations:
   script:
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source ~/.cargo/env
-    - cargo install --git https://github.com/gdpotter/pgmt.git
+    - cargo install pgmt
     - pgmt migrate apply
   only:
     - main
@@ -230,7 +230,7 @@ check-drift:
   script:
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source ~/.cargo/env
-    - cargo install --git https://github.com/gdpotter/pgmt.git
+    - cargo install pgmt
     - pgmt migrate diff --format summary
   allow_failure: true # Don't block other pipelines
 ```

@@ -17,7 +17,7 @@ pgmt is a PostgreSQL migration tool that lets you develop your schema like softw
 
 Install pgmt:
 ```bash
-cargo install --git https://github.com/gdpotter/pgmt.git
+cargo install pgmt
 ```
 
 Initialize your project:

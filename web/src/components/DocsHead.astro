@@ -4,6 +4,9 @@ import Default from '@astrojs/starlight/components/Head.astro';
 
 <Default {...Astro.props} />
 
+<!-- Default OG image for docs -->
+<meta property="og:image" content={new URL('/og-default.png', Astro.site)} />
+
 <!-- Umami Analytics -->
 <script
   defer

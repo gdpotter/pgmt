@@ -8,8 +8,7 @@ Get started with pgmt in 10 minutes and see what makes it different from other m
 ## Install pgmt
 
 ```bash
-# Install directly from GitHub
-cargo install --git https://github.com/gdpotter/pgmt.git
+cargo install pgmt
 ```
 
 **Don't have Rust?** Install it first:
