@@ -79,6 +79,7 @@ pgmt init [OPTIONS]
 **Re-initialization:**
 
 When run in a directory with an existing `pgmt.yaml`, you'll be prompted to:
+
 - **Update** - Modify existing config (shows current values as defaults)
 - **Fresh** - Start over with new configuration
 - **Cancel** - Keep current configuration
