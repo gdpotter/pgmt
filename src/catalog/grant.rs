@@ -106,6 +106,22 @@ impl ObjectType {
             },
         }
     }
+
+    /// Returns the schema this object belongs to.
+    /// For Schema objects, returns the schema name itself.
+    pub fn schema(&self) -> &str {
+        match self {
+            ObjectType::Table { schema, .. } => schema,
+            ObjectType::View { schema, .. } => schema,
+            ObjectType::Schema { name } => name,
+            ObjectType::Function { schema, .. } => schema,
+            ObjectType::Procedure { schema, .. } => schema,
+            ObjectType::Aggregate { schema, .. } => schema,
+            ObjectType::Sequence { schema, .. } => schema,
+            ObjectType::Type { schema, .. } => schema,
+            ObjectType::Domain { schema, .. } => schema,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

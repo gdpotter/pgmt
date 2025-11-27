@@ -1,4 +1,5 @@
 use crate::catalog;
+use crate::catalog::grant::ObjectType;
 use crate::config::types::{ObjectExclude, ObjectInclude, Objects, TrackingTable};
 use glob::Pattern;
 
@@ -128,8 +129,20 @@ impl ObjectFilter {
             .triggers
             .retain(|trigger| self.should_include_table(&trigger.schema, &trigger.table_name));
 
-        // Note: grants and extensions are not filtered by pattern - schema files are the source of truth.
-        // If you don't want grants/extensions managed, don't include them in your schema files.
+        // Filter grants by the schema of the object they apply to
+        catalog.grants.retain(|grant| {
+            // For table/view grants, check both schema and table exclusion patterns
+            // For other objects, just check schema inclusion
+            match &grant.object {
+                ObjectType::Table { schema, name } | ObjectType::View { schema, name } => {
+                    self.should_include_table(schema, name)
+                }
+                _ => self.should_include_schema(grant.object.schema()),
+            }
+        });
+
+        // Note: extensions are not filtered by schema pattern - an extension installed in
+        // one schema may be used across all schemas, so filtering would be incorrect.
 
         catalog
     }
@@ -281,5 +294,96 @@ mod tests {
         // Regular filtering should still work for non-migration tables
         assert!(filter.should_include_table("public", "users"));
         assert!(!filter.should_include_table("public", "posts")); // not in include list
+    }
+
+    #[test]
+    fn test_grant_filtering() {
+        use crate::catalog::Catalog;
+        use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+
+        let objects = Objects {
+            include: ObjectInclude {
+                schemas: vec![],
+                tables: vec![],
+            },
+            exclude: ObjectExclude {
+                schemas: vec!["excluded_schema".to_string()],
+                tables: vec!["excluded_table".to_string()],
+            },
+        };
+
+        let filter = ObjectFilter::new(&objects, &create_test_tracking_table());
+
+        // Helper to create a test grant
+        let make_grant = |object: ObjectType| Grant {
+            grantee: GranteeType::Public,
+            object,
+            privileges: vec!["EXECUTE".to_string()],
+            with_grant_option: false,
+            depends_on: vec![],
+            object_owner: "postgres".to_string(),
+            is_default_acl: false,
+        };
+
+        let mut catalog = Catalog::empty();
+        catalog.grants = vec![
+            // Should be kept - public schema function
+            make_grant(ObjectType::Function {
+                schema: "public".into(),
+                name: "my_func".into(),
+                arguments: "".into(),
+            }),
+            // Should be filtered - excluded schema function
+            make_grant(ObjectType::Function {
+                schema: "excluded_schema".into(),
+                name: "notify_watchers".into(),
+                arguments: "".into(),
+            }),
+            // Should be filtered - excluded table
+            make_grant(ObjectType::Table {
+                schema: "public".into(),
+                name: "excluded_table".into(),
+            }),
+            // Should be kept - non-excluded table
+            make_grant(ObjectType::Table {
+                schema: "public".into(),
+                name: "users".into(),
+            }),
+            // Should be filtered - grant on excluded schema itself
+            make_grant(ObjectType::Schema {
+                name: "excluded_schema".into(),
+            }),
+            // Should be kept - grant on included schema
+            make_grant(ObjectType::Schema {
+                name: "public".into(),
+            }),
+        ];
+
+        let filtered = filter.filter_catalog(catalog);
+
+        // Should have 3 grants remaining: public function, users table, public schema
+        assert_eq!(filtered.grants.len(), 3);
+
+        // Verify the remaining grants are the correct ones
+        let remaining_ids: Vec<String> = filtered.grants.iter().map(|g| g.id()).collect();
+        assert!(
+            remaining_ids
+                .iter()
+                .any(|id| id.contains("function:public.my_func"))
+        );
+        assert!(
+            remaining_ids
+                .iter()
+                .any(|id| id.contains("table:public.users"))
+        );
+        assert!(remaining_ids.iter().any(|id| id.contains("schema:public")));
+
+        // Verify excluded grants are NOT present
+        assert!(
+            !remaining_ids
+                .iter()
+                .any(|id| id.contains("excluded_schema"))
+        );
+        assert!(!remaining_ids.iter().any(|id| id.contains("excluded_table")));
     }
 }

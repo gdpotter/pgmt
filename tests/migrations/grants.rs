@@ -1,7 +1,11 @@
 //! Grant migration tests
 
+use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
+use pgmt::catalog::Catalog;
+use pgmt::config::filter::ObjectFilter;
+use pgmt::config::types::{ObjectExclude, ObjectInclude, Objects, TrackingTable};
 use pgmt::diff::operations::{GrantOperation, MigrationStep, SqlRenderer};
 
 #[tokio::test]
@@ -286,4 +290,115 @@ async fn test_revoke_default_public_execute_on_function() -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+/// Test that grants in excluded schemas are filtered from the catalog.
+/// This verifies the fix for the issue where schema exclusion wasn't applied to grants.
+#[tokio::test]
+async fn test_grants_filtered_by_excluded_schema() {
+    with_test_db(async |db| {
+        // Create an excluded schema with a function
+        db.execute("CREATE SCHEMA excluded_schema").await;
+        db.execute(
+            "CREATE FUNCTION excluded_schema.notify_func() RETURNS VOID AS $$ SELECT 1; $$ LANGUAGE SQL",
+        )
+        .await;
+        // By default, PUBLIC has EXECUTE on functions - this creates the grant
+
+        // Also create a function in public schema for comparison
+        db.execute("CREATE FUNCTION public.my_func() RETURNS VOID AS $$ SELECT 1; $$ LANGUAGE SQL")
+            .await;
+
+        // Load the catalog
+        let catalog = Catalog::load(db.pool()).await.unwrap();
+
+        // Verify grants exist in the unfiltered catalog for both schemas
+        let excluded_grants_before = catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(
+                    &g.object,
+                    pgmt::catalog::grant::ObjectType::Function { schema, .. }
+                    if schema == "excluded_schema"
+                )
+            })
+            .count();
+        assert!(
+            excluded_grants_before > 0,
+            "Should have grants in excluded_schema before filtering"
+        );
+
+        let public_grants_before = catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(
+                    &g.object,
+                    pgmt::catalog::grant::ObjectType::Function { schema, name, .. }
+                    if schema == "public" && name == "my_func"
+                )
+            })
+            .count();
+        assert!(
+            public_grants_before > 0,
+            "Should have grants on public.my_func before filtering"
+        );
+
+        // Create filter that excludes the schema
+        let filter = ObjectFilter::new(
+            &Objects {
+                include: ObjectInclude {
+                    schemas: vec![],
+                    tables: vec![],
+                },
+                exclude: ObjectExclude {
+                    schemas: vec!["excluded_schema".to_string()],
+                    tables: vec![],
+                },
+            },
+            &TrackingTable {
+                schema: "public".to_string(),
+                name: "pgmt_migrations".to_string(),
+            },
+        );
+
+        // Apply filter
+        let filtered_catalog = filter.filter_catalog(catalog);
+
+        // Verify grants in excluded schema are filtered out
+        let excluded_grants_after = filtered_catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(
+                    &g.object,
+                    pgmt::catalog::grant::ObjectType::Function { schema, .. }
+                    if schema == "excluded_schema"
+                )
+            })
+            .count();
+        assert_eq!(
+            excluded_grants_after, 0,
+            "Should NOT have grants in excluded_schema after filtering"
+        );
+
+        // Verify grants in public schema are still present
+        let public_grants_after = filtered_catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(
+                    &g.object,
+                    pgmt::catalog::grant::ObjectType::Function { schema, name, .. }
+                    if schema == "public" && name == "my_func"
+                )
+            })
+            .count();
+        assert!(
+            public_grants_after > 0,
+            "Should still have grants on public.my_func after filtering"
+        );
+    })
+    .await;
 }
