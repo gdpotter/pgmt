@@ -109,21 +109,16 @@ pub async fn cmd_baseline_create(
         )
         .await
         {
-            eprintln!("⚠️  Baseline validation detected inconsistencies:");
+            // Print clear error message once and exit (avoid double-printing via main's error handler)
+            eprintln!("⚠️  Baseline validation failed\n");
             eprintln!("{}", validation_error);
-            eprintln!();
-            eprintln!(
-                "💡 The baseline was created successfully but may not be perfectly consistent."
-            );
-            eprintln!(
-                "   Use 'pgmt baseline create --force' to skip validation if this is expected."
-            );
-            return Err(validation_error);
+            eprintln!("💡 To fix: Add `-- require:` headers to ensure correct file ordering.");
+            eprintln!("   Use 'pgmt debug dependencies' to analyze dependency relationships.");
+            eprintln!("   Use 'pgmt baseline create --force' to skip this validation.");
+            std::process::exit(1);
         }
 
-        if config.migration.validate_baseline_consistency {
-            println!("✅ Baseline validation passed");
-        }
+        println!("✅ Baseline validation passed");
     } else if force {
         println!("⚠️  Skipping baseline validation due to --force flag");
     }
