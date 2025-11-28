@@ -16,6 +16,7 @@ use crate::catalog::identity::{self, CatalogIdentity};
 use crate::db::cleaner;
 use crate::db::schema_executor::SchemaFileExecutor;
 use crate::schema_loader::{SchemaLoader, SchemaLoaderConfig};
+use std::collections::BTreeMap;
 
 /// Configuration for schema processing behavior
 #[derive(Debug, Clone)]
@@ -42,6 +43,10 @@ pub struct ProcessedSchema {
     pub catalog: Catalog,
     /// File-based dependency augmentation data
     pub augmentation: FileDependencyAugmentation,
+    /// Mapping of files to the objects they create
+    pub file_mapping: FileToObjectMapping,
+    /// File-to-file dependencies from `-- require:` headers
+    pub file_dependencies: BTreeMap<String, Vec<String>>,
 }
 
 impl ProcessedSchema {
@@ -165,7 +170,14 @@ impl SchemaProcessor {
         let augmentation = create_dependency_augmentation(&file_mapping, &schema_files)
             .context("Failed to create dependency augmentation from file mappings")?;
 
-        // Step 7: Return catalog and augmentation separately
+        // Step 7: Extract file-to-file dependencies before schema_files goes out of scope
+        let file_dependencies: BTreeMap<String, Vec<String>> = schema_files
+            .iter()
+            .filter(|f| !f.dependencies.is_empty())
+            .map(|f| (f.relative_path.clone(), f.dependencies.clone()))
+            .collect();
+
+        // Step 8: Return catalog and augmentation separately
         info!(
             "✅ Schema processing complete: {} files processed",
             schema_files.len()
@@ -174,6 +186,8 @@ impl SchemaProcessor {
         Ok(ProcessedSchema {
             catalog: final_catalog,
             augmentation,
+            file_mapping,
+            file_dependencies,
         })
     }
 }

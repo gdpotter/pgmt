@@ -108,7 +108,8 @@ pub async fn validate_baseline_against_catalog_with_suggestions(
         println!("Validating baseline matches intended schema...");
     }
 
-    let baseline_catalog = load_baseline_into_shadow(shadow_pool, baseline_path, roles_file).await?;
+    let baseline_catalog =
+        load_baseline_into_shadow(shadow_pool, baseline_path, roles_file).await?;
     validate_baseline_consistency_with_suggestions(
         &baseline_catalog,
         expected_catalog,
@@ -185,8 +186,13 @@ pub async fn get_migration_update_starting_state(
                 target_version
             );
         }
-        reconstruct_from_migration_chain_before_version(shadow_pool, migrations_dir, target_version, roles_file)
-            .await
+        reconstruct_from_migration_chain_before_version(
+            shadow_pool,
+            migrations_dir,
+            target_version,
+            roles_file,
+        )
+        .await
     }
 }
 

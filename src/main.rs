@@ -162,6 +162,12 @@ enum Commands {
         #[command(subcommand)]
         command: Option<commands::config::ConfigCommands>,
     },
+
+    /// Debug commands for troubleshooting
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -272,6 +278,31 @@ enum BaselineCommands {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum DebugCommands {
+    /// Show object dependencies (intrinsic from PostgreSQL + augmented from -- require:)
+    Dependencies {
+        /// Output format
+        #[arg(long, value_enum, default_value = "json")]
+        format: DebugOutputFormat,
+
+        /// Filter to specific object (e.g., "public.users" or "Table:public.users")
+        #[arg(long)]
+        object: Option<String>,
+
+        #[command(flatten)]
+        directory_args: config::DirectoryArgs,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
+pub enum DebugOutputFormat {
+    /// JSON output for piping to jq
+    Json,
+    /// Human-readable text format
+    Text,
 }
 
 #[tokio::main]
@@ -640,6 +671,40 @@ async fn run_main(cli: Cli) -> Result<()> {
                         }
                     }
                 }
+                Commands::Debug { command } => match command {
+                    DebugCommands::Dependencies {
+                        format,
+                        object,
+                        directory_args,
+                    } => {
+                        let cli_config = config::ConfigInput {
+                            databases: None,
+                            directories: Some(directory_args.clone().into()),
+                            objects: None,
+                            migration: None,
+                            schema: None,
+                            docker: None,
+                        };
+
+                        let config = config::ConfigBuilder::new()
+                            .with_file(file_config.clone())
+                            .with_cli_args(cli_config)
+                            .resolve()?;
+
+                        info!("Analyzing dependencies");
+                        let output_format = match format {
+                            DebugOutputFormat::Json => commands::debug::OutputFormat::Json,
+                            DebugOutputFormat::Text => commands::debug::OutputFormat::Text,
+                        };
+                        commands::cmd_debug_dependencies(
+                            &config,
+                            &root_dir,
+                            output_format,
+                            object.as_deref(),
+                        )
+                        .await
+                    }
+                },
             }
         }
     }
