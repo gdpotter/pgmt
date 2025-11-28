@@ -52,9 +52,7 @@ async fn test_init_command_with_flags() -> anyhow::Result<()> {
 #[test]
 fn test_init_windows_compatibility() {
     // Test basic init functionality that works on Windows
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["init", "--help"]);
 
     // Should succeed and show init help
@@ -64,9 +62,7 @@ fn test_init_windows_compatibility() {
 #[test]
 fn test_init_cli_help_non_interactive() {
     // This test can run on all platforms using assert_cmd
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["init", "--help"]);
 
     let output = cmd.assert().success();
@@ -80,9 +76,7 @@ fn test_init_cli_help_non_interactive() {
 #[test]
 fn test_init_command_exists_in_cli() {
     // Verify that the init subcommand is recognized
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["help", "init"]);
 
     // Should succeed and show init help
@@ -91,9 +85,7 @@ fn test_init_command_exists_in_cli() {
 
 #[test]
 fn test_pgmt_version() {
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["--version"]);
 
     cmd.assert().success();
@@ -251,9 +243,7 @@ async fn test_init_with_existing_config() -> Result<()> {
 /// Test that --fresh flag help is available
 #[test]
 fn test_init_fresh_flag_in_help() {
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["init", "--help"]);
 
     let output = cmd.assert().success();
@@ -269,9 +259,7 @@ fn test_init_fresh_flag_in_help() {
 /// Test directory customization flags
 #[test]
 fn test_init_directory_flags_in_help() {
-    use assert_cmd::Command;
-
-    let mut cmd = Command::cargo_bin("pgmt").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.args(["init", "--help"]);
 
     let output = cmd.assert().success();
