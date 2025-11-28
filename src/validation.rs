@@ -142,7 +142,7 @@ impl std::fmt::Display for BaselineValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
-            "Baseline has {} statement(s) in wrong order:\n",
+            "Baseline validation found {} unexpected difference(s):\n",
             self.differences.len()
         )?;
 
