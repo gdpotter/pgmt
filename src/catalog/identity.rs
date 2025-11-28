@@ -36,71 +36,99 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Tables
+            -- Tables (excluding extension-owned)
             SELECT 'table', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'r'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Views
+            -- Views (excluding extension-owned)
             SELECT 'view', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'v'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Materialized views (tracked as views)
+            -- Materialized views (tracked as views, excluding extension-owned)
             SELECT 'view', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'm'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Sequences
+            -- Sequences (excluding extension-owned)
             SELECT 'sequence', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'S'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Indexes (excluding constraint-backing indexes, which are tracked via constraints)
+            -- Indexes (excluding constraint-backing indexes and extension-owned)
             SELECT 'index', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'i'
               AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = c.oid)
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Functions and procedures
+            -- Functions and procedures (excluding extension-owned)
             SELECT 'function', n.nspname, p.proname, NULL, NULL
             FROM pg_proc p
             JOIN pg_namespace n ON p.pronamespace = n.oid
             WHERE p.prokind IN ('f', 'p')
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = p.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Aggregates (need argument signature for identity)
+            -- Aggregates (need argument signature for identity, excluding extension-owned)
             SELECT 'aggregate', n.nspname, p.proname, NULL, pg_get_function_identity_arguments(p.oid)
             FROM pg_proc p
             JOIN pg_namespace n ON p.pronamespace = n.oid
             WHERE p.prokind = 'a'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = p.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Custom types (enum and composite) - excludes row types from tables/views/sequences
+            -- Custom types (enum and composite) - excludes row types and extension-owned
             SELECT 'type', n.nspname, t.typname, NULL, NULL
             FROM pg_type t
             JOIN pg_namespace n ON t.typnamespace = n.oid
@@ -111,15 +139,23 @@ impl CatalogIdentity {
                 WHERE c.reltype = t.oid
                   AND c.relkind IN ('r', 'v', 'm', 'S')
               )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = t.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Domains
+            -- Domains (excluding extension-owned)
             SELECT 'domain', n.nspname, t.typname, NULL, NULL
             FROM pg_type t
             JOIN pg_namespace n ON t.typnamespace = n.oid
             WHERE t.typtype = 'd'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = t.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
