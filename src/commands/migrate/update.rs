@@ -48,11 +48,13 @@ pub async fn cmd_migrate_update_with_options(
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
+    let roles_file = root_dir.join(&config.directories.roles);
     let old_catalog = get_migration_update_starting_state(
         &shadow_pool,
         &baselines_dir,
         &migrations_dir,
         latest_migration.version,
+        &roles_file,
         &baseline_config,
     )
     .await?;
@@ -129,6 +131,7 @@ pub async fn cmd_migrate_update_with_options(
                 &filtered_new_catalog,
                 &baseline_config,
                 suggest_file_deps,
+                &roles_file,
             )
             .await?;
         }
@@ -210,11 +213,13 @@ pub async fn cmd_migrate_update_specific(
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
+    let roles_file = root_dir.join(&config.directories.roles);
     let old_catalog = get_migration_update_starting_state(
         &shadow_pool,
         &baselines_dir,
         &migrations_dir,
         target_migration.version,
+        &roles_file,
         &baseline_config,
     )
     .await?;
@@ -374,6 +379,7 @@ pub async fn cmd_migrate_update_specific(
                 &filtered_new_catalog,
                 &baseline_config,
                 suggest_file_deps,
+                &roles_file,
             )
             .await?;
         }

@@ -98,12 +98,14 @@ pub async fn cmd_baseline_create(
 
         // This provides better error messages when validation fails
         let suggest_file_deps = config.schema.augment_dependencies_from_files;
+        let roles_file = root_dir.join(&config.directories.roles);
         if let Err(validation_error) = validate_baseline_against_catalog_with_suggestions(
             &shadow_pool,
             &result.path,
             &catalog,
             &baseline_config,
             suggest_file_deps,
+            &roles_file,
         )
         .await
         {

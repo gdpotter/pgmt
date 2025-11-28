@@ -39,8 +39,12 @@ pub struct BaselineOperationResult {
 pub async fn load_baseline_into_shadow(
     shadow_pool: &PgPool,
     baseline_path: &Path,
+    roles_file: &Path,
 ) -> Result<Catalog> {
     cleaner::clean_shadow_db(shadow_pool).await?;
+
+    // Apply roles before baseline (handles non-existent files gracefully)
+    crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
 
     let baseline_sql = std::fs::read_to_string(baseline_path)
         .with_context(|| format!("Failed to read baseline file: {}", baseline_path.display()))?;
@@ -94,6 +98,7 @@ pub async fn validate_baseline_against_catalog_with_suggestions(
     expected_catalog: &Catalog,
     config: &BaselineConfig,
     suggest_file_dependencies: bool,
+    roles_file: &Path,
 ) -> Result<()> {
     if !config.validate_consistency {
         return Ok(());
@@ -103,7 +108,7 @@ pub async fn validate_baseline_against_catalog_with_suggestions(
         println!("Validating baseline matches intended schema...");
     }
 
-    let baseline_catalog = load_baseline_into_shadow(shadow_pool, baseline_path).await?;
+    let baseline_catalog = load_baseline_into_shadow(shadow_pool, baseline_path, roles_file).await?;
     validate_baseline_consistency_with_suggestions(
         &baseline_catalog,
         expected_catalog,
@@ -124,6 +129,7 @@ pub async fn get_migration_starting_state(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
     migrations_dir: &Path,
+    roles_file: &Path,
     config: &BaselineConfig,
 ) -> Result<Catalog> {
     let latest_baseline = find_latest_baseline(baselines_dir)?;
@@ -132,7 +138,7 @@ pub async fn get_migration_starting_state(
         if config.verbose {
             info!("Loading baseline: {}", baseline.path.display());
         }
-        load_baseline_into_shadow(shadow_pool, &baseline.path).await?;
+        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file).await?;
 
         // Apply any migrations that come after the baseline
         apply_migrations_after_version(shadow_pool, migrations_dir, baseline.version, config).await
@@ -140,7 +146,7 @@ pub async fn get_migration_starting_state(
         if config.verbose {
             info!("No existing baseline found, reconstructing from existing migrations");
         }
-        reconstruct_from_migration_chain(shadow_pool, migrations_dir).await
+        reconstruct_from_migration_chain(shadow_pool, migrations_dir, roles_file).await
     }
 }
 
@@ -152,6 +158,7 @@ pub async fn get_migration_update_starting_state(
     baselines_dir: &Path,
     migrations_dir: &Path,
     target_version: u64,
+    roles_file: &Path,
     config: &BaselineConfig,
 ) -> Result<Catalog> {
     let previous_baseline = find_baseline_for_version(baselines_dir, target_version)?;
@@ -160,7 +167,7 @@ pub async fn get_migration_update_starting_state(
         if config.verbose {
             info!("Loading previous baseline: {}", baseline.path.display());
         }
-        load_baseline_into_shadow(shadow_pool, &baseline.path).await?;
+        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file).await?;
 
         // Apply migrations between baseline and target version
         apply_migrations_in_range(
@@ -178,7 +185,7 @@ pub async fn get_migration_update_starting_state(
                 target_version
             );
         }
-        reconstruct_from_migration_chain_before_version(shadow_pool, migrations_dir, target_version)
+        reconstruct_from_migration_chain_before_version(shadow_pool, migrations_dir, target_version, roles_file)
             .await
     }
 }
@@ -298,8 +305,12 @@ async fn apply_migrations_in_range(
 async fn reconstruct_from_migration_chain(
     shadow_pool: &PgPool,
     migrations_dir: &Path,
+    roles_file: &Path,
 ) -> Result<Catalog> {
     cleaner::clean_shadow_db(shadow_pool).await?;
+
+    // Apply roles before migrations (handles non-existent files gracefully)
+    crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
 
     let migrations = discover_migrations(migrations_dir)?;
 
@@ -348,10 +359,14 @@ async fn reconstruct_from_migration_chain_before_version(
     shadow_pool: &PgPool,
     migrations_dir: &Path,
     target_version: u64,
+    roles_file: &Path,
 ) -> Result<Catalog> {
     use crate::migration::find_migrations_before_version;
 
     cleaner::clean_shadow_db(shadow_pool).await?;
+
+    // Apply roles before migrations (handles non-existent files gracefully)
+    crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
 
     let migrations = find_migrations_before_version(migrations_dir, target_version)?;
 

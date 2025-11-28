@@ -52,10 +52,12 @@ pub async fn cmd_migrate_new(
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
+    let roles_file = root_dir.join(&config.directories.roles);
     let old_catalog = get_migration_starting_state(
         &shadow_pool,
         &baselines_dir,
         &migrations_dir,
+        &roles_file,
         &baseline_config,
     )
     .await?;
@@ -109,6 +111,7 @@ pub async fn cmd_migrate_new(
                 &filtered_new_catalog,
                 &baseline_config,
                 suggest_file_deps,
+                &roles_file,
             )
             .await?;
         }
