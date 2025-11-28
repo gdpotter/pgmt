@@ -100,12 +100,17 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Custom types (enum and composite)
+            -- Custom types (enum and composite) - excludes row types from tables/views/sequences
             SELECT 'type', n.nspname, t.typname, NULL, NULL
             FROM pg_type t
             JOIN pg_namespace n ON t.typnamespace = n.oid
             WHERE t.typtype IN ('e', 'c')
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.reltype = t.oid
+                  AND c.relkind IN ('r', 'v', 'm', 'S')
+              )
 
             UNION ALL
 
