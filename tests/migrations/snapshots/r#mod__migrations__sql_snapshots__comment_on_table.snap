@@ -1,0 +1,5 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+COMMENT ON TABLE "app"."users" IS 'Stores user account information';

@@ -1,0 +1,20 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE SEQUENCE "app"."orders_id_seq" AS integer START 1 MINVALUE 1 MAXVALUE 2147483647 INCREMENT 1 NO CYCLE;
+
+CREATE TABLE "app"."orders" (
+    "id" integer DEFAULT nextval('app.orders_id_seq'::regclass) NOT NULL,
+    "user_id" integer NOT NULL,
+    "status" character varying(20),
+    "total" numeric(10,2) NOT NULL,
+    "created_at" timestamp without time zone DEFAULT now(),
+    CONSTRAINT "orders_pkey" PRIMARY KEY ("id")
+);
+
+ALTER TABLE "app"."orders" ADD CONSTRAINT "orders_total_check" CHECK (total >= 0::numeric);
+
+ALTER TABLE "app"."orders" ADD CONSTRAINT "orders_status_check" CHECK (status::text = ANY (ARRAY['pending'::character varying, 'completed'::character varying, 'cancelled'::character varying]::text[]));
+
+ALTER SEQUENCE "app"."orders_id_seq" OWNED BY "app"."orders"."id";

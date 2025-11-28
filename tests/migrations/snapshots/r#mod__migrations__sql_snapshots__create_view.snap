@@ -1,0 +1,9 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE VIEW "app"."active_users" AS
+ SELECT id,
+    email
+   FROM app.users
+  WHERE active = true;

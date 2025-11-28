@@ -1,0 +1,5 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+DROP TABLE "app"."old_table";

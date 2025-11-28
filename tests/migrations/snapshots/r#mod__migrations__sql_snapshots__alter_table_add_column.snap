@@ -1,0 +1,5 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+ALTER TABLE "app"."users" ADD COLUMN "email" character varying(255) NOT NULL;

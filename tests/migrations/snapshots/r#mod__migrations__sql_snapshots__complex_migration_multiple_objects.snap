@@ -1,0 +1,25 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE SCHEMA "app";
+
+CREATE SEQUENCE "app"."tasks_id_seq" AS integer START 1 MINVALUE 1 MAXVALUE 2147483647 INCREMENT 1 NO CYCLE;
+
+CREATE TYPE "app"."priority" AS ENUM ('low', 'medium', 'high');
+
+GRANT USAGE ON TYPE "app"."priority" TO PUBLIC;
+
+CREATE TABLE "app"."tasks" (
+    "id" integer DEFAULT nextval('app.tasks_id_seq'::regclass) NOT NULL,
+    "title" text NOT NULL,
+    "priority" "app"."priority" DEFAULT 'medium'::app.priority,
+    "created_at" timestamp without time zone DEFAULT now(),
+    CONSTRAINT "tasks_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "idx_tasks_priority" ON "app"."tasks" USING btree (priority pg_catalog.enum_ops);
+
+COMMENT ON TABLE "app"."tasks" IS 'Task management table';
+
+ALTER SEQUENCE "app"."tasks_id_seq" OWNED BY "app"."tasks"."id";

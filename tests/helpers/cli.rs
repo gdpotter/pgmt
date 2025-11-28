@@ -152,7 +152,7 @@ docker:
     /// Create a command for non-interactive CLI testing using assert_cmd
     /// This is the preferred method for testing straightforward commands
     pub fn command(&self) -> Command {
-        let mut cmd = Command::cargo_bin("pgmt").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
         cmd.current_dir(&self.project_root);
         cmd
     }

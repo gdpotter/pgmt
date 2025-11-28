@@ -1,0 +1,11 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE OR REPLACE FUNCTION app.add_numbers(a integer, b integer)
+ RETURNS integer
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$ SELECT a + b $function$;
+
+GRANT EXECUTE ON FUNCTION "app"."add_numbers"(a integer, b integer) TO PUBLIC;

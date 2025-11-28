@@ -44,6 +44,8 @@ anyhow = "1.0"
 assert_cmd = "2.0"
 predicates = "3.0"
 chrono = "0.4"
+rstest = "0.23"
+insta = "1.41"
 
 # Interactive CLI testing - better support on Unix-like systems
 [target.'cfg(not(windows))'.dev-dependencies]

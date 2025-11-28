@@ -1,0 +1,17 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE SEQUENCE "app"."users_id_seq" AS integer START 1 MINVALUE 1 MAXVALUE 2147483647 INCREMENT 1 NO CYCLE;
+
+CREATE TABLE "app"."users" (
+    "id" integer DEFAULT nextval('app.users_id_seq'::regclass) NOT NULL,
+    "email" character varying(255) NOT NULL,
+    "name" text,
+    "created_at" timestamp without time zone DEFAULT now(),
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+ALTER TABLE "app"."users" ADD CONSTRAINT "users_email_key" UNIQUE ("email");
+
+ALTER SEQUENCE "app"."users_id_seq" OWNED BY "app"."users"."id";

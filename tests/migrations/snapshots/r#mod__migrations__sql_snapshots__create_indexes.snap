@@ -1,0 +1,7 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE UNIQUE INDEX "idx_users_name" ON "app"."users" USING btree (name pg_catalog.text_ops) WHERE (name IS NOT NULL);
+
+CREATE INDEX "idx_users_email" ON "app"."users" USING btree (email pg_catalog.text_ops);

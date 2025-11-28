@@ -26,6 +26,7 @@ pub mod baseline_commands;
 pub mod baseline_extension_ordering;
 pub mod basic_interactive;
 pub mod diff;
+pub mod error_handling;
 pub mod init_interactive;
 pub mod migrate_end_to_end;
 pub mod migrate_new;

@@ -1,0 +1,5 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE TRIGGER update_users_timestamp BEFORE UPDATE ON app.users FOR EACH ROW EXECUTE FUNCTION app.update_timestamp();

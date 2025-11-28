@@ -1,0 +1,7 @@
+---
+source: tests/migrations/sql_snapshots.rs
+expression: sql
+---
+CREATE TYPE "app"."status" AS ENUM ('pending', 'active', 'completed', 'cancelled');
+
+GRANT USAGE ON TYPE "app"."status" TO PUBLIC;
