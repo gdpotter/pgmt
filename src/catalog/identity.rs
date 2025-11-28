@@ -103,7 +103,7 @@ impl CatalogIdentity {
             UNION ALL
 
             -- Functions and procedures (excluding extension-owned)
-            SELECT 'function', n.nspname, p.proname, NULL, NULL
+            SELECT 'function', n.nspname, p.proname, NULL, pg_get_function_identity_arguments(p.oid)
             FROM pg_proc p
             JOIN pg_namespace n ON p.pronamespace = n.oid
             WHERE p.prokind IN ('f', 'p')
