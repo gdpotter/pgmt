@@ -1,3 +1,4 @@
 config:
   pgmt-infra:domain: pgmt.dev
+  pgmt-infra:gh-pages-cname-domain: gdpotter.github.io
   aws:region: us-east-1

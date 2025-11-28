@@ -3,6 +3,7 @@ import * as aws from "@pulumi/aws";
 
 const config = new pulumi.Config();
 const domain = config.require("domain");
+const ghPagesCnameDomain = config.require("gh-pages-cname-domain");
 
 // GitHub Pages IP addresses
 const githubPagesIps = [
@@ -32,7 +33,7 @@ const wwwRecord = new aws.route53.Record("www", {
   name: `www.${domain}`,
   type: "CNAME",
   ttl: 300,
-  records: [domain],
+  records: [ghPagesCnameDomain],
 });
 
 // Exports
