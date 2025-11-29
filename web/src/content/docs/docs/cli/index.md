@@ -5,21 +5,21 @@ description: Complete command reference for pgmt.
 
 ## Quick Reference
 
-| Command                 | Purpose                             |
-| ----------------------- | ----------------------------------- |
-| `pgmt init`             | Initialize new project              |
-| `pgmt apply`            | Apply schema to dev database        |
-| `pgmt diff`             | Preview what apply would do         |
-| `pgmt migrate new`      | Generate migration                  |
-| `pgmt migrate update`   | Regenerate migration after changes  |
-| `pgmt migrate apply`    | Apply migrations to target database |
-| `pgmt migrate status`   | Show migration status               |
-| `pgmt migrate validate` | Validate migrations match schema    |
-| `pgmt migrate diff`     | Detect drift in target database     |
-| `pgmt baseline create`  | Create baseline snapshot            |
-| `pgmt baseline list`    | List baselines                      |
-| `pgmt baseline clean`   | Remove old baselines                |
-| `pgmt debug dependencies` | Analyze object dependencies       |
+| Command                   | Purpose                             |
+| ------------------------- | ----------------------------------- |
+| `pgmt init`               | Initialize new project              |
+| `pgmt apply`              | Apply schema to dev database        |
+| `pgmt diff`               | Preview what apply would do         |
+| `pgmt migrate new`        | Generate migration                  |
+| `pgmt migrate update`     | Regenerate migration after changes  |
+| `pgmt migrate apply`      | Apply migrations to target database |
+| `pgmt migrate status`     | Show migration status               |
+| `pgmt migrate validate`   | Validate migrations match schema    |
+| `pgmt migrate diff`       | Detect drift in target database     |
+| `pgmt baseline create`    | Create baseline snapshot            |
+| `pgmt baseline list`      | List baselines                      |
+| `pgmt baseline clean`     | Remove old baselines                |
+| `pgmt debug dependencies` | Analyze object dependencies         |
 
 ## Global Options
 

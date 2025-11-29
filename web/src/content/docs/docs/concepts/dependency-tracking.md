@@ -176,7 +176,7 @@ pgmt debug dependencies --format text
 
 - **Missing `-- require:` headers** - A file uses an object defined in another file that loads later alphabetically. Add explicit dependencies.
 - **Circular dependencies** - Restructure to break the cycle, or merge the interdependent objects into one file.
-- **Wrong file ordering** - Numbered prefixes (01_, 02_) should match the dependency order.
+- **Wrong file ordering** - Numbered prefixes (01*, 02*) should match the dependency order.
 
 ## How pgmt Uses Dependencies
 
