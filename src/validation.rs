@@ -3,7 +3,7 @@ use crate::config::{Config, ObjectFilter};
 use crate::diff::operations::{MigrationStep, SqlRenderer};
 use crate::diff::{cascade, diff_all, diff_order};
 use crate::schema_ops::apply_current_schema_to_shadow;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::path::Path;
 
 /// Validation configuration
@@ -130,16 +130,49 @@ fn format_validation_failure(differences: &[MigrationStep]) -> String {
 
 // Removed unused validate_tracking_table_exists function
 
+/// Baseline validation result with detailed differences
+#[derive(Debug)]
+pub struct BaselineValidationError {
+    pub differences: Vec<MigrationStep>,
+}
+
+impl std::error::Error for BaselineValidationError {}
+
+impl std::fmt::Display for BaselineValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Baseline validation found {} unexpected difference(s):\n",
+            self.differences.len()
+        )?;
+
+        for (i, step) in self.differences.iter().enumerate() {
+            writeln!(f, "  {}. {:?}", i + 1, step.id())?;
+            for rendered in step.to_sql() {
+                // Truncate long SQL for readability
+                let sql = if rendered.sql.len() > 100 {
+                    format!("{}...", &rendered.sql[..100])
+                } else {
+                    rendered.sql.clone()
+                };
+                writeln!(f, "     {}", sql)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Enhanced validation with optional file dependency suggestions
 pub fn validate_baseline_consistency_with_suggestions(
     baseline_catalog: &Catalog,
     expected_catalog: &Catalog,
-    suggest_file_dependencies: bool,
-) -> Result<()> {
-    let config = Config::default(); // Use default config for baseline validation
+    _suggest_file_dependencies: bool,
+) -> Result<(), BaselineValidationError> {
+    let config = Config::default();
     let validation_config = ValidationConfig {
-        show_differences: false, // Don't show detailed diffs for baseline validation
-        apply_object_filter: false, // Don't filter for baseline validation
+        show_differences: false,
+        apply_object_filter: false,
         verbose: false,
     };
 
@@ -148,90 +181,17 @@ pub fn validate_baseline_consistency_with_suggestions(
         expected_catalog,
         &config,
         &validation_config,
-    )?;
+    )
+    .map_err(|_| BaselineValidationError {
+        differences: vec![],
+    })?;
 
     if result.passed {
         Ok(())
     } else {
-        let mut error_msg = format!(
-            "Baseline validation failed: baseline does not match expected schema. {} differences found.",
-            result.differences.len()
-        );
-
-        if suggest_file_dependencies {
-            error_msg.push_str("\n\n💡 Possible solutions:");
-            error_msg
-                .push_str("\n   1. Check if your schema files have correct `-- require:` headers");
-            error_msg.push_str("\n   2. Enable file dependency augmentation with: augment_dependencies_from_files: true");
-            error_msg.push_str("\n   3. Re-create the baseline with: pgmt baseline create");
-            error_msg.push_str("\n   4. Add missing `-- require:` dependencies based on actual object relationships");
-
-            // Analyze missing dependencies and provide specific suggestions
-            if let Some(suggestions) = analyze_missing_dependencies(&result.differences) {
-                error_msg.push_str("\n\n🔍 Dependency analysis suggests:");
-                error_msg.push_str(&suggestions);
-            }
-        }
-
-        Err(anyhow!(error_msg))
-    }
-}
-
-/// Analyze migration differences to suggest missing file dependencies
-fn analyze_missing_dependencies(
-    differences: &[crate::diff::operations::MigrationStep],
-) -> Option<String> {
-    use crate::diff::operations::MigrationStep;
-
-    let mut suggestions = Vec::new();
-    let mut dependency_issues = Vec::new();
-
-    for step in differences {
-        match step {
-            MigrationStep::Table(_) => {
-                dependency_issues.push("Tables may depend on schemas or custom types");
-            }
-            MigrationStep::View(_) => {
-                dependency_issues.push("Views may depend on tables, other views, or functions");
-            }
-            MigrationStep::Function(_) => {
-                dependency_issues.push("Functions may depend on custom types or other functions");
-            }
-            MigrationStep::Index(_) => {
-                dependency_issues
-                    .push("Indexes may depend on tables and functions (for expression indexes)");
-            }
-            MigrationStep::Constraint(_) => {
-                dependency_issues.push("Constraints may depend on tables and custom types");
-            }
-            MigrationStep::Trigger(_) => {
-                dependency_issues.push("Triggers may depend on tables and functions");
-            }
-            _ => {} // Other objects have fewer common dependency issues
-        }
-    }
-
-    if !dependency_issues.is_empty() {
-        suggestions.push(
-            "\n   - Review object creation order and add appropriate `-- require:` headers"
-                .to_string(),
-        );
-        suggestions.push("\n   - Common dependency patterns:".to_string());
-        for (_i, issue) in dependency_issues.iter().enumerate().take(5) {
-            suggestions.push(format!("\n     • {}", issue));
-        }
-        if dependency_issues.len() > 5 {
-            suggestions.push(format!(
-                "\n     • ... and {} more dependency patterns",
-                dependency_issues.len() - 5
-            ));
-        }
-    }
-
-    if suggestions.is_empty() {
-        None
-    } else {
-        Some(suggestions.join(""))
+        Err(BaselineValidationError {
+            differences: result.differences,
+        })
     }
 }
 

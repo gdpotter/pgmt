@@ -402,3 +402,41 @@ async fn test_grants_filtered_by_excluded_schema() {
     })
     .await;
 }
+
+/// Test that no spurious REVOKE is generated when both catalogs have the same explicit ACL.
+/// This tests the fix for the bug where diff_grants() would generate REVOKEs for objects
+/// that already had explicit ACL in both old and new catalogs.
+#[tokio::test]
+async fn test_no_spurious_revoke_when_both_have_explicit_acl() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: function with explicit REVOKE (same state)
+            &[
+                "CREATE FUNCTION test_func() RETURNS INT AS $$ SELECT 1; $$ LANGUAGE SQL",
+                "REVOKE EXECUTE ON FUNCTION test_func() FROM PUBLIC",
+            ],
+            // Initial DB only: nothing extra
+            &[],
+            // Target DB only: nothing extra (same as initial)
+            &[],
+            |steps, _final_catalog| {
+                // Should have NO grant-related steps since both have same explicit ACL
+                let grant_steps: Vec<_> = steps
+                    .iter()
+                    .filter(|s| matches!(s, MigrationStep::Grant(_)))
+                    .collect();
+
+                assert!(
+                    grant_steps.is_empty(),
+                    "Expected no grant steps when both catalogs have same explicit ACL, got {:?}",
+                    grant_steps
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

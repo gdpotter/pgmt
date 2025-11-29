@@ -25,6 +25,7 @@
 pub mod baseline_commands;
 pub mod baseline_extension_ordering;
 pub mod basic_interactive;
+pub mod debug_commands;
 pub mod diff;
 pub mod error_handling;
 pub mod init_interactive;

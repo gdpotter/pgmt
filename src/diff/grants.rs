@@ -90,49 +90,81 @@ pub fn diff_grants(old_grants: &[Grant], new_grants: &[Grant]) -> Vec<MigrationS
     // Generate REVOKE statements for default privileges that have been explicitly revoked.
     // This captures cases like `REVOKE EXECUTE ON FUNCTION foo FROM PUBLIC` where
     // the default PUBLIC EXECUTE privilege was removed.
-    steps.extend(generate_revoke_for_missing_defaults(new_grants));
+    // We only generate REVOKEs for objects that newly have explicit ACL (not for objects
+    // that already had explicit ACL in the old state).
+    steps.extend(generate_revoke_for_new_explicit_acls(
+        old_grants, new_grants,
+    ));
 
     steps
 }
 
-/// Generate REVOKE statements for default privileges that have been explicitly revoked.
+/// Generate REVOKE statements for default privileges that have been explicitly revoked
+/// in the new state but were NOT already revoked in the old state.
 ///
 /// When an object has `is_default_acl = false`, it means the ACL was explicitly set.
 /// If a default privilege (like PUBLIC EXECUTE on functions) is not present in the
 /// actual grants, we need to generate a REVOKE statement for it.
 ///
-/// This is used during schema generation (init) to capture explicit revokes.
-pub fn generate_revoke_for_missing_defaults(grants: &[Grant]) -> Vec<MigrationStep> {
+/// However, we only generate the REVOKE if:
+/// 1. The object is new (didn't exist in old_grants), OR
+/// 2. The object existed but had default ACL in old (is_default_acl = true) and now has
+///    explicit ACL in new (is_default_acl = false)
+///
+/// This prevents generating spurious REVOKE statements when comparing two catalogs
+/// that already have the same explicit ACL state.
+fn generate_revoke_for_new_explicit_acls(
+    old_grants: &[Grant],
+    new_grants: &[Grant],
+) -> Vec<MigrationStep> {
     let mut steps = Vec::new();
 
-    // Group grants by object
-    let mut grants_by_object: BTreeMap<String, Vec<&Grant>> = BTreeMap::new();
-    for grant in grants {
-        grants_by_object
+    // Group old grants by object to check prior state
+    let mut old_by_object: BTreeMap<String, Vec<&Grant>> = BTreeMap::new();
+    for grant in old_grants {
+        old_by_object
             .entry(object_key(&grant.object))
             .or_default()
             .push(grant);
     }
 
-    // For each unique object, check if it has explicit ACL (is_default_acl = false)
-    // and whether any default grants are missing
-    for object_grants in grants_by_object.values() {
-        // If any grant on this object has is_default_acl = false, the object has explicit ACL
-        let has_explicit_acl = object_grants.iter().any(|g| !g.is_default_acl);
+    // Group new grants by object
+    let mut new_by_object: BTreeMap<String, Vec<&Grant>> = BTreeMap::new();
+    for grant in new_grants {
+        new_by_object
+            .entry(object_key(&grant.object))
+            .or_default()
+            .push(grant);
+    }
 
-        if !has_explicit_acl {
-            continue; // Object uses defaults, no REVOKEs needed
+    // For each unique object in new_grants, check if it newly has explicit ACL
+    for (obj_key, new_object_grants) in &new_by_object {
+        // Check if new state has explicit ACL
+        let new_has_explicit_acl = new_object_grants.iter().any(|g| !g.is_default_acl);
+
+        if !new_has_explicit_acl {
+            continue; // Object uses defaults in new, no REVOKEs needed
         }
 
-        // Get the first grant to determine object type and owner
-        let sample_grant = object_grants[0];
+        // Check if old state also had explicit ACL for this object
+        let old_had_explicit_acl = old_by_object
+            .get(obj_key)
+            .is_some_and(|old_grants| old_grants.iter().any(|g| !g.is_default_acl));
 
-        // Check for missing PUBLIC grants based on object type
+        if old_had_explicit_acl {
+            // Object already had explicit ACL in old state - don't generate REVOKE
+            // (the actual grants are compared separately via the normal diff path)
+            continue;
+        }
+
+        // Object either didn't exist or had default ACL before, now has explicit ACL
+        // Generate REVOKEs for missing PUBLIC privileges
+        let sample_grant = new_object_grants[0];
         let expected_public_privileges = get_default_public_privileges(&sample_grant.object);
 
         for privilege in expected_public_privileges {
-            // Check if this default PUBLIC grant exists
-            let public_grant_exists = object_grants.iter().any(|g| {
+            // Check if this default PUBLIC grant exists in new state
+            let public_grant_exists = new_object_grants.iter().any(|g| {
                 matches!(&g.grantee, GranteeType::Public) && g.privileges.contains(&privilege)
             });
 

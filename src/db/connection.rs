@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::time::Duration;
+use tracing::info;
 use tracing::log::LevelFilter;
 
 /// Database connection configuration
@@ -38,13 +39,13 @@ pub async fn connect_with_retry_config(url: &str, config: &ConnectionConfig) -> 
         match PgPool::connect(url).await {
             Ok(pool) => {
                 if attempt > 0 {
-                    println!(
+                    info!(
                         "✅ Connected to database (after {} retry{})",
                         attempt,
                         if attempt == 1 { "" } else { "ies" }
                     );
                 } else {
-                    println!("✅ Connected to database");
+                    info!("✅ Connected to database");
                 }
                 return Ok(pool);
             }
@@ -52,7 +53,7 @@ pub async fn connect_with_retry_config(url: &str, config: &ConnectionConfig) -> 
                 last_error = Some(e);
                 if attempt < config.max_retries {
                     if attempt == 0 {
-                        println!("🔄 Database not ready, retrying...");
+                        info!("🔄 Database not ready, retrying...");
                     }
                     tokio::time::sleep(config.retry_delay).await;
                 }
@@ -98,13 +99,13 @@ pub async fn connect_with_retry_config_quiet(
         match result {
             Ok(pool) => {
                 if attempt > 0 {
-                    println!(
+                    info!(
                         "✅ Connected to database (after {} retry{})",
                         attempt,
                         if attempt == 1 { "" } else { "ies" }
                     );
                 } else {
-                    println!("✅ Connected to database");
+                    info!("✅ Connected to database");
                 }
                 return Ok(pool);
             }
@@ -112,7 +113,7 @@ pub async fn connect_with_retry_config_quiet(
                 last_error = Some(e);
                 if attempt < config.max_retries {
                     if attempt == 0 {
-                        println!("🔄 Database not ready, retrying...");
+                        info!("🔄 Database not ready, retrying...");
                     }
                     tokio::time::sleep(config.retry_delay).await;
                 }
@@ -151,7 +152,7 @@ pub async fn initialize_database_session(pool: &PgPool) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to query search_path: {}", e))?;
 
-    println!(
+    info!(
         "🔧 Database session initialized with search_path: {}",
         search_path.0
     );
