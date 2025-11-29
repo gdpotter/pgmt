@@ -157,6 +157,27 @@ Many projects use a mix: numbered prefixes for broad categories, `-- require:` f
 
 Your schema must be a directed acyclic graph (DAG) - no circular dependencies. If view A depends on view B which depends on view A, pgmt will detect the cycle and fail. The fix is to merge files or restructure to break the cycle.
 
+## Troubleshooting Dependencies
+
+If `pgmt baseline create` or `pgmt migrate new` fails with dependency errors, use the debug command:
+
+```bash
+# View full dependency graph
+pgmt debug dependencies
+
+# Check a specific object
+pgmt debug dependencies --object public.orders
+
+# Human-readable format
+pgmt debug dependencies --format text
+```
+
+**Common issues:**
+
+- **Missing `-- require:` headers** - A file uses an object defined in another file that loads later alphabetically. Add explicit dependencies.
+- **Circular dependencies** - Restructure to break the cycle, or merge the interdependent objects into one file.
+- **Wrong file ordering** - Numbered prefixes (01_, 02_) should match the dependency order.
+
 ## How pgmt Uses Dependencies
 
 ### During `pgmt apply`

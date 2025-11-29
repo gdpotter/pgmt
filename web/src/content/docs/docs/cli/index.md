@@ -19,6 +19,7 @@ description: Complete command reference for pgmt.
 | `pgmt baseline create`  | Create baseline snapshot            |
 | `pgmt baseline list`    | List baselines                      |
 | `pgmt baseline clean`   | Remove old baselines                |
+| `pgmt debug dependencies` | Analyze object dependencies       |
 
 ## Global Options
 
@@ -393,6 +394,38 @@ pgmt baseline clean --keep 5
 pgmt baseline clean --older-than 30
 pgmt baseline clean --keep 3 --dry-run
 ```
+
+---
+
+## pgmt debug dependencies
+
+Analyze object dependencies from both PostgreSQL introspection and `-- require:` headers. Useful for troubleshooting dependency ordering issues.
+
+```bash
+pgmt debug dependencies [OPTIONS]
+```
+
+**Options:**
+
+```bash
+--format <FORMAT>             # json | text (default: json)
+--object <NAME>               # Filter to specific object
+```
+
+**Examples:**
+
+```bash
+pgmt debug dependencies                         # JSON output
+pgmt debug dependencies --format text           # Human-readable
+pgmt debug dependencies --object public.users   # Filter to one object
+```
+
+**Output includes:**
+
+- All tracked objects and their types
+- File-to-object mappings (which file defines which objects)
+- File dependencies from `-- require:` headers
+- Dependency graph showing what each object depends on
 
 ---
 

@@ -28,6 +28,21 @@ pgmt migrate validate
 pgmt diff
 ```
 
+For dependency ordering issues:
+
+```bash
+# Analyze the dependency graph
+pgmt debug dependencies
+
+# Focus on a specific object
+pgmt debug dependencies --object public.users
+
+# Human-readable format
+pgmt debug dependencies --format text
+```
+
+If `pgmt baseline create` or `pgmt migrate new` fails with ordering errors, use the debug command to inspect which objects depend on which, and add `-- require:` headers to your schema files as needed.
+
 ## Common Setup Issues
 
 **Can't connect to database:**
