@@ -124,4 +124,20 @@ impl MigrationTestHelper {
             .unwrap()
             .block_on(Self::new())
     }
+
+    /// Get the PostgreSQL major version number (e.g., 13, 14, 15, 16, 17, 18)
+    pub async fn pg_major_version(&self) -> u32 {
+        let db = self.pg.create_test_database().await;
+        let version: (String,) = sqlx::query_as("SHOW server_version")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        db.cleanup().await;
+        version
+            .0
+            .split('.')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
 }

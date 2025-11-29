@@ -159,6 +159,12 @@ async fn test_snapshot_create_function() -> Result<()> {
 async fn test_snapshot_create_view() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
+    // Skip on PG < 16 due to pg_get_viewdef() formatting differences
+    if helper.pg_major_version().await < 16 {
+        eprintln!("Skipping test_snapshot_create_view (requires PostgreSQL 16+)");
+        return Ok(());
+    }
+
     helper
         .run_migration_test(
             &[
