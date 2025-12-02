@@ -1,8 +1,8 @@
 //! Schema operations
 
-use super::{CommentOperation, CommentTarget, SqlRenderer};
+use super::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
-use crate::render::{RenderedSql, Safety, quote_ident};
+use crate::render::quote_ident;
 
 #[derive(Debug, Clone)]
 pub enum SchemaOperation {
@@ -27,34 +27,5 @@ impl CommentTarget for SchemaTarget {
         DbObjectId::Schema {
             name: self.name.clone(),
         }
-    }
-}
-
-impl SqlRenderer for SchemaOperation {
-    fn to_sql(&self) -> Vec<RenderedSql> {
-        match self {
-            SchemaOperation::Create { name } => vec![RenderedSql {
-                sql: format!("CREATE SCHEMA {};", quote_ident(name)),
-                safety: Safety::Safe,
-            }],
-            SchemaOperation::Drop { name } => vec![RenderedSql {
-                sql: format!("DROP SCHEMA {};", quote_ident(name)),
-                safety: Safety::Destructive,
-            }],
-            SchemaOperation::Comment(op) => op.to_sql(),
-        }
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        match self {
-            SchemaOperation::Create { name } | SchemaOperation::Drop { name } => {
-                DbObjectId::Schema { name: name.clone() }
-            }
-            SchemaOperation::Comment(op) => op.db_object_id(),
-        }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, SchemaOperation::Drop { .. })
     }
 }

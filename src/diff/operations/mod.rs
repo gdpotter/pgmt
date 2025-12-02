@@ -4,7 +4,9 @@
 //! using hierarchical enums and trait-based rendering.
 
 use crate::catalog::id::DbObjectId;
-use crate::render::RenderedSql;
+
+// Re-export SqlRenderer from render module
+pub use crate::render::SqlRenderer;
 
 pub use aggregate::*;
 pub use comments::*;
@@ -52,71 +54,6 @@ pub enum MigrationStep {
     Trigger(TriggerOperation),
     Extension(ExtensionOperation),
     Grant(GrantOperation),
-}
-
-/// Trait for rendering SQL from operations
-pub trait SqlRenderer {
-    fn to_sql(&self) -> Vec<RenderedSql>;
-    fn db_object_id(&self) -> DbObjectId;
-    fn is_destructive(&self) -> bool {
-        false
-    }
-}
-
-impl SqlRenderer for MigrationStep {
-    fn to_sql(&self) -> Vec<RenderedSql> {
-        match self {
-            MigrationStep::Schema(op) => op.to_sql(),
-            MigrationStep::Table(op) => op.to_sql(),
-            MigrationStep::View(op) => op.to_sql(),
-            MigrationStep::Type(op) => op.to_sql(),
-            MigrationStep::Domain(op) => op.to_sql(),
-            MigrationStep::Sequence(op) => op.to_sql(),
-            MigrationStep::Function(op) => op.to_sql(),
-            MigrationStep::Aggregate(op) => op.to_sql(),
-            MigrationStep::Index(op) => op.to_sql(),
-            MigrationStep::Constraint(op) => op.to_sql(),
-            MigrationStep::Trigger(op) => op.to_sql(),
-            MigrationStep::Extension(op) => op.to_sql(),
-            MigrationStep::Grant(op) => op.to_sql(),
-        }
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        match self {
-            MigrationStep::Schema(op) => op.db_object_id(),
-            MigrationStep::Table(op) => op.db_object_id(),
-            MigrationStep::View(op) => op.db_object_id(),
-            MigrationStep::Type(op) => op.db_object_id(),
-            MigrationStep::Domain(op) => op.db_object_id(),
-            MigrationStep::Sequence(op) => op.db_object_id(),
-            MigrationStep::Function(op) => op.db_object_id(),
-            MigrationStep::Aggregate(op) => op.db_object_id(),
-            MigrationStep::Index(op) => op.db_object_id(),
-            MigrationStep::Constraint(op) => op.db_object_id(),
-            MigrationStep::Trigger(op) => op.db_object_id(),
-            MigrationStep::Extension(op) => op.db_object_id(),
-            MigrationStep::Grant(op) => op.db_object_id(),
-        }
-    }
-
-    fn is_destructive(&self) -> bool {
-        match self {
-            MigrationStep::Schema(op) => op.is_destructive(),
-            MigrationStep::Table(op) => op.is_destructive(),
-            MigrationStep::View(op) => op.is_destructive(),
-            MigrationStep::Type(op) => op.is_destructive(),
-            MigrationStep::Domain(op) => op.is_destructive(),
-            MigrationStep::Sequence(op) => op.is_destructive(),
-            MigrationStep::Function(op) => op.is_destructive(),
-            MigrationStep::Aggregate(op) => op.is_destructive(),
-            MigrationStep::Index(op) => op.is_destructive(),
-            MigrationStep::Constraint(op) => op.is_destructive(),
-            MigrationStep::Trigger(op) => op.is_destructive(),
-            MigrationStep::Extension(op) => op.is_destructive(),
-            MigrationStep::Grant(op) => op.is_destructive(),
-        }
-    }
 }
 
 impl MigrationStep {
