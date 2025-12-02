@@ -19,6 +19,7 @@ mod validation;
 mod validation_output;
 
 use crate::commands::apply::ExecutionMode;
+use crate::commands::diff_output::DiffFormat;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
@@ -117,18 +118,6 @@ pub struct MigrateDiffArgs {
 
     #[command(flatten)]
     pub directory_args: config::DirectoryArgs,
-}
-
-#[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
-pub enum DiffFormat {
-    /// Detailed before/after comparison
-    Detailed,
-    /// Quick summary of changes
-    Summary,
-    /// SQL operations to fix drift
-    Sql,
-    /// JSON output for CI/CD
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -436,12 +425,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                             .resolve()?;
 
                         let diff_args = commands::MigrateDiffArgs {
-                            format: match args.format {
-                                DiffFormat::Detailed => commands::diff_output::DiffFormat::Detailed,
-                                DiffFormat::Summary => commands::diff_output::DiffFormat::Summary,
-                                DiffFormat::Sql => commands::diff_output::DiffFormat::Sql,
-                                DiffFormat::Json => commands::diff_output::DiffFormat::Json,
-                            },
+                            format: args.format.clone(),
                             output_sql: args.output_sql.clone(),
                         };
 
@@ -630,12 +614,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                         .resolve()?;
 
                     let diff_args = commands::diff::DiffArgs {
-                        format: match args.format {
-                            DiffFormat::Detailed => commands::diff::DiffFormat::Detailed,
-                            DiffFormat::Summary => commands::diff::DiffFormat::Summary,
-                            DiffFormat::Sql => commands::diff::DiffFormat::Sql,
-                            DiffFormat::Json => commands::diff::DiffFormat::Json,
-                        },
+                        format: args.format.clone(),
                         output_sql: args.output_sql.clone(),
                     };
 

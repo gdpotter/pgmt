@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 /// Output format for diff results
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, clap::ValueEnum)]
 pub enum DiffFormat {
     /// Detailed before/after comparison
     #[default]
