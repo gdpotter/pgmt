@@ -44,7 +44,7 @@ impl SqlRenderer for TypeOperation {
             }],
             TypeOperation::Drop { schema, name } => vec![RenderedSql {
                 sql: format!("DROP TYPE {}.{};", quote_ident(schema), quote_ident(name)),
-                safety: Safety::Destructive,
+                safety: Safety::Safe,
             }],
             TypeOperation::Alter {
                 schema,
@@ -75,10 +75,6 @@ impl SqlRenderer for TypeOperation {
             },
             TypeOperation::Comment(op) => op.db_object_id(),
         }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, TypeOperation::Drop { .. })
     }
 }
 
@@ -142,7 +138,7 @@ mod tests {
         let rendered = op.to_sql();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].sql, "DROP TYPE \"public\".\"old_type\";");
-        assert_eq!(rendered[0].safety, Safety::Destructive);
+        assert_eq!(rendered[0].safety, Safety::Safe);
     }
 
     #[test]
@@ -177,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let create = TypeOperation::Create {
             schema: "s".to_string(),
             name: "t".to_string(),
@@ -195,9 +191,25 @@ mod tests {
             definition: "'b'".to_string(),
         };
 
-        assert!(!create.is_destructive());
-        assert!(drop.is_destructive());
-        assert!(!alter.is_destructive());
+        // Types can be recreated from schema, so DROP TYPE is not destructive
+        assert!(
+            !create
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !drop
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !alter
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

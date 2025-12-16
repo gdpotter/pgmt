@@ -11,7 +11,7 @@ impl SqlRenderer for IndexOperation {
             IndexOperation::Create(index) => vec![render_create_index(index)],
             IndexOperation::Drop { schema, name } => vec![RenderedSql {
                 sql: format!("DROP INDEX {}.{};", quote_ident(schema), quote_ident(name)),
-                safety: Safety::Destructive,
+                safety: Safety::Safe,
             }],
             IndexOperation::Comment(comment_op) => comment_op.to_sql(),
             IndexOperation::Cluster {
@@ -78,10 +78,6 @@ impl SqlRenderer for IndexOperation {
                 name: name.clone(),
             },
         }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, IndexOperation::Drop { .. })
     }
 }
 
@@ -309,7 +305,8 @@ mod tests {
             index_name: "idx_users_email".to_string(),
         };
 
-        assert!(!op.is_destructive());
+        // Indexes can be recreated from schema, so no index operations are destructive
+        assert!(!op.to_sql().iter().any(|s| s.safety == Safety::Destructive));
     }
 
     #[test]
@@ -320,6 +317,7 @@ mod tests {
             concurrently: true,
         };
 
-        assert!(!op.is_destructive());
+        // Indexes can be recreated from schema, so no index operations are destructive
+        assert!(!op.to_sql().iter().any(|s| s.safety == Safety::Destructive));
     }
 }

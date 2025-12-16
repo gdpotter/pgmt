@@ -1,4 +1,4 @@
-use super::{CommentOperation, CommentTarget};
+use super::{CommentOperation, CommentTarget, OperationKind};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::triggers::Trigger;
 
@@ -61,4 +61,14 @@ pub enum TriggerOperation {
         new_trigger: Box<Trigger>,
     },
     Comment(CommentOperation<TriggerIdentifier>),
+}
+
+impl TriggerOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }

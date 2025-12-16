@@ -13,7 +13,7 @@ impl SqlRenderer for ConstraintOperation {
                 )]
             }
             ConstraintOperation::Drop(identifier) => {
-                vec![RenderedSql::destructive(
+                vec![RenderedSql::new(
                     crate::render::sql::render_drop_constraint(
                         &identifier.schema,
                         &identifier.table,
@@ -31,10 +31,6 @@ impl SqlRenderer for ConstraintOperation {
             ConstraintOperation::Drop(identifier) => identifier.to_db_object_id(),
             ConstraintOperation::Comment(comment_op) => comment_op.db_object_id(),
         }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, ConstraintOperation::Drop(_))
     }
 }
 
@@ -115,19 +111,30 @@ mod tests {
         assert!(rendered[0].sql.contains("ALTER TABLE"));
         assert!(rendered[0].sql.contains("DROP CONSTRAINT"));
         assert!(rendered[0].sql.contains("users_email_key"));
-        assert_eq!(rendered[0].safety, Safety::Destructive);
+        assert_eq!(rendered[0].safety, Safety::Safe);
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let constraint = create_unique_constraint();
         let identifier = ConstraintIdentifier::from_constraint(&constraint);
 
         let create_op = ConstraintOperation::Create(constraint);
         let drop_op = ConstraintOperation::Drop(identifier);
 
-        assert!(!create_op.is_destructive());
-        assert!(drop_op.is_destructive());
+        // Constraints can be recreated from schema, so DROP CONSTRAINT is not destructive
+        assert!(
+            !create_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !drop_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

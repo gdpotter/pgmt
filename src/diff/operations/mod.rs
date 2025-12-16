@@ -4,9 +4,23 @@
 //! using hierarchical enums and trait-based rendering.
 
 use crate::catalog::id::DbObjectId;
+use crate::render::Safety;
 
 // Re-export SqlRenderer from render module
 pub use crate::render::SqlRenderer;
+
+/// The kind of operation being performed, used for ordering migrations.
+/// This is separate from Safety - OperationKind is about ordering (drops before creates),
+/// while Safety is about data loss risk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationKind {
+    /// Creates a new database object
+    Create,
+    /// Drops an existing database object
+    Drop,
+    /// Modifies an existing database object (ALTER, COMMENT, GRANT, etc.)
+    Alter,
+}
 
 pub use aggregate::*;
 pub use comments::*;
@@ -62,29 +76,32 @@ impl MigrationStep {
         self.db_object_id()
     }
 
-    /// Returns true if this step is a destructive operation (drop)
-    pub fn is_drop(&self) -> bool {
-        self.is_destructive()
+    /// Returns the kind of operation (Create, Drop, or Alter).
+    /// Used for ordering migrations - drops should happen before creates for the same object.
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Schema(op) => op.operation_kind(),
+            Self::Table(op) => op.operation_kind(),
+            Self::View(op) => op.operation_kind(),
+            Self::Type(op) => op.operation_kind(),
+            Self::Domain(op) => op.operation_kind(),
+            Self::Sequence(op) => op.operation_kind(),
+            Self::Function(op) => op.operation_kind(),
+            Self::Aggregate(op) => op.operation_kind(),
+            Self::Index(op) => op.operation_kind(),
+            Self::Constraint(op) => op.operation_kind(),
+            Self::Trigger(op) => op.operation_kind(),
+            Self::Extension(op) => op.operation_kind(),
+            Self::Grant(op) => op.operation_kind(),
+        }
     }
 
-    /// Returns true if this step is a create operation
-    pub fn is_create(&self) -> bool {
-        matches!(
-            self,
-            MigrationStep::Schema(SchemaOperation::Create { .. })
-                | MigrationStep::Extension(ExtensionOperation::Create { .. })
-                | MigrationStep::Table(TableOperation::Create { .. })
-                | MigrationStep::View(ViewOperation::Create { .. })
-                | MigrationStep::Type(TypeOperation::Create { .. })
-                | MigrationStep::Domain(DomainOperation::Create { .. })
-                | MigrationStep::Sequence(SequenceOperation::Create { .. })
-                | MigrationStep::Function(FunctionOperation::Create { .. })
-                | MigrationStep::Aggregate(AggregateOperation::Create { .. })
-                | MigrationStep::Index(IndexOperation::Create { .. })
-                | MigrationStep::Constraint(ConstraintOperation::Create(_))
-                | MigrationStep::Trigger(TriggerOperation::Create { .. })
-                | MigrationStep::Grant(GrantOperation::Grant { .. })
-        )
+    /// Returns true if any of the rendered SQL statements are destructive (risk data loss).
+    /// This checks the Safety of each RenderedSql produced by to_sql().
+    pub fn has_destructive_sql(&self) -> bool {
+        self.to_sql()
+            .iter()
+            .any(|s| s.safety == Safety::Destructive)
     }
 
     /// Returns true if this step is a "relationship" step that creates circular dependencies

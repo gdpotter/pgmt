@@ -1,6 +1,6 @@
 //! Schema operations
 
-use super::{CommentOperation, CommentTarget};
+use super::{CommentOperation, CommentTarget, OperationKind};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
 
@@ -9,6 +9,16 @@ pub enum SchemaOperation {
     Create { name: String },
     Drop { name: String },
     Comment(CommentOperation<SchemaTarget>),
+}
+
+impl SchemaOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

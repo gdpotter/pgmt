@@ -1,4 +1,4 @@
-use super::{CommentOperation, CommentTarget};
+use super::{CommentOperation, CommentTarget, OperationKind};
 use crate::catalog::extension::Extension;
 use crate::catalog::id::DbObjectId;
 
@@ -40,4 +40,14 @@ pub enum ExtensionOperation {
     Create { extension: Extension },
     Drop { identifier: ExtensionIdentifier },
     Comment(CommentOperation<ExtensionIdentifier>),
+}
+
+impl ExtensionOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }

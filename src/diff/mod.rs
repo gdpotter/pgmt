@@ -23,7 +23,7 @@ use crate::catalog::{
     extension::Extension, function::Function, index::Index, sequence::Sequence, table::Table,
     view::View,
 };
-use crate::diff::operations::MigrationStep;
+use crate::diff::operations::{MigrationStep, OperationKind};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use std::collections::{BTreeMap, BTreeSet};
@@ -191,7 +191,7 @@ fn order_steps_by_dependencies(
     let mut missing_deps: Vec<(DbObjectId, DbObjectId)> = Vec::new();
 
     for (i, step) in steps.iter().enumerate() {
-        let is_drop = step.is_drop();
+        let is_drop = step.operation_kind() == OperationKind::Drop;
 
         if let DbObjectId::Comment { object_id } = &step.id() {
             if let Some(indices) = id_to_indices.get(object_id.as_ref()) {
@@ -272,12 +272,16 @@ fn order_steps_by_dependencies(
 
     for (i, step) in steps.iter().enumerate() {
         let id = step.id();
-        if step.is_drop() {
-            drop_indices.entry(id).or_insert_with(Vec::new).push(i);
-        } else if step.is_create() {
-            create_indices.entry(id).or_insert_with(Vec::new).push(i);
-        } else {
-            other_indices.entry(id).or_insert_with(Vec::new).push(i);
+        match step.operation_kind() {
+            OperationKind::Drop => {
+                drop_indices.entry(id).or_insert_with(Vec::new).push(i);
+            }
+            OperationKind::Create => {
+                create_indices.entry(id).or_insert_with(Vec::new).push(i);
+            }
+            OperationKind::Alter => {
+                other_indices.entry(id).or_insert_with(Vec::new).push(i);
+            }
         }
     }
 
@@ -312,7 +316,9 @@ fn order_steps_by_dependencies(
         .iter()
         .enumerate()
         .filter_map(|(i, step)| {
-            if matches!(step, MigrationStep::Extension(_)) && step.is_create() {
+            if matches!(step, MigrationStep::Extension(_))
+                && step.operation_kind() == OperationKind::Create
+            {
                 Some(i)
             } else {
                 None
@@ -326,7 +332,7 @@ fn order_steps_by_dependencies(
         .filter_map(|(i, step)| {
             // Exclude schemas from this rule - extensions can depend on schemas
             if !matches!(step, MigrationStep::Extension(_) | MigrationStep::Schema(_))
-                && step.is_create()
+                && step.operation_kind() == OperationKind::Create
             {
                 Some(i)
             } else {

@@ -1,5 +1,6 @@
 //! Type operations for schema migrations
 
+use super::OperationKind;
 use super::comments::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
@@ -23,6 +24,17 @@ pub enum TypeOperation {
         definition: String,
     },
     Comment(CommentOperation<TypeIdentifier>),
+}
+
+impl TypeOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Alter { .. } => OperationKind::Alter,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

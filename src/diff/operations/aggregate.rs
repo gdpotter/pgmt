@@ -1,4 +1,4 @@
-use super::{CommentOperation, CommentTarget};
+use super::{CommentOperation, CommentTarget, OperationKind};
 use crate::catalog::aggregate::Aggregate;
 use crate::catalog::id::DbObjectId;
 
@@ -58,4 +58,14 @@ pub enum AggregateOperation {
         new_aggregate: Box<Aggregate>,
     },
     Comment(CommentOperation<AggregateIdentifier>),
+}
+
+impl AggregateOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }

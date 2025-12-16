@@ -55,10 +55,6 @@ impl SqlRenderer for TableOperation {
             TableOperation::Comment(op) => op.db_object_id(),
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, TableOperation::Drop { .. })
-    }
 }
 
 fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> RenderedSql {
@@ -421,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let create = TableOperation::Create {
             schema: "s".to_string(),
             name: "t".to_string(),
@@ -438,9 +434,25 @@ mod tests {
             actions: vec![],
         };
 
-        assert!(!create.is_destructive());
-        assert!(drop.is_destructive());
-        assert!(!alter.is_destructive());
+        // DROP TABLE loses row data, so it's destructive
+        assert!(
+            !create
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            drop.to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        // ALTER with no actions is safe (but ALTER with DROP COLUMN would be destructive)
+        assert!(
+            !alter
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

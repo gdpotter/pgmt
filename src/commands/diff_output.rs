@@ -126,7 +126,7 @@ fn output_summary_format(steps: &[MigrationStep]) {
         println!("{:<15} {} changes", format!("{}:", type_name), count);
     }
 
-    let destructive_count = steps.iter().filter(|s| s.is_destructive()).count();
+    let destructive_count = steps.iter().filter(|s| s.has_destructive_sql()).count();
     let safe_count = steps.len() - destructive_count;
 
     println!("\nTotal changes: {}", steps.len());
@@ -154,7 +154,7 @@ fn output_detailed_format(
         println!("\n{}. {:?}", i + 1, step.id());
         println!(
             "Status: {}",
-            if step.is_destructive() {
+            if step.has_destructive_sql() {
                 "DESTRUCTIVE"
             } else {
                 "SAFE"
@@ -185,7 +185,7 @@ fn output_detailed_format(
         println!("\n{}", "━".repeat(70));
     }
 
-    let destructive_count = steps.iter().filter(|s| s.is_destructive()).count();
+    let destructive_count = steps.iter().filter(|s| s.has_destructive_sql()).count();
     let safe_count = steps.len() - destructive_count;
 
     println!("\nSummary:");
@@ -307,7 +307,7 @@ fn output_json_format(steps: &[MigrationStep], context: &DiffContext) -> Result<
         .map(|step| {
             json!({
                 "type": format!("{:?}", step.id()),
-                "destructive": step.is_destructive(),
+                "destructive": step.has_destructive_sql(),
                 "sql": step.to_sql().iter().map(|r| &r.sql).collect::<Vec<_>>(),
             })
         })
@@ -319,8 +319,8 @@ fn output_json_format(steps: &[MigrationStep], context: &DiffContext) -> Result<
         "to": context.to_description,
         "summary": {
             "total_changes": steps.len(),
-            "destructive_changes": steps.iter().filter(|s| s.is_destructive()).count(),
-            "safe_changes": steps.iter().filter(|s| !s.is_destructive()).count(),
+            "destructive_changes": steps.iter().filter(|s| s.has_destructive_sql()).count(),
+            "safe_changes": steps.iter().filter(|s| !s.has_destructive_sql()).count(),
         },
         "changes": changes,
     });

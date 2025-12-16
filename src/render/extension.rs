@@ -35,10 +35,6 @@ impl SqlRenderer for ExtensionOperation {
             },
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, ExtensionOperation::Drop { .. })
-    }
 }
 
 fn render_create_extension(extension: &Extension) -> RenderedSql {
@@ -59,7 +55,7 @@ fn render_create_extension(extension: &Extension) -> RenderedSql {
 
 fn render_drop_extension(identifier: &ExtensionIdentifier) -> RenderedSql {
     let sql = format!("DROP EXTENSION IF EXISTS \"{}\";", identifier.name);
-    RenderedSql::destructive(sql)
+    RenderedSql::new(sql)
 }
 
 #[cfg(test)]
@@ -105,7 +101,7 @@ mod tests {
         let rendered = render_drop_extension(&identifier);
 
         assert_eq!(rendered.sql, "DROP EXTENSION IF EXISTS \"uuid-ossp\";");
-        assert_eq!(rendered.safety, Safety::Destructive);
+        assert_eq!(rendered.safety, Safety::Safe);
     }
 
     #[test]

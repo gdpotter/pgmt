@@ -86,10 +86,6 @@ impl SqlRenderer for SequenceOperation {
             SequenceOperation::Comment(op) => op.db_object_id(),
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, SequenceOperation::Drop { .. })
-    }
 }
 
 #[cfg(test)]
@@ -175,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let create = SequenceOperation::Create {
             schema: "s".to_string(),
             name: "seq".to_string(),
@@ -196,9 +192,24 @@ mod tests {
             owned_by: "NONE".to_string(),
         };
 
-        assert!(!create.is_destructive());
-        assert!(drop.is_destructive());
-        assert!(!alter.is_destructive());
+        // DROP SEQUENCE loses the current sequence value, so it's destructive
+        assert!(
+            !create
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            drop.to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !alter
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

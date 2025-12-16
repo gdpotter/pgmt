@@ -87,8 +87,8 @@ async fn test_drop_domain_migration() -> Result<()> {
                     _ => panic!("Expected Drop Domain step"),
                 }
 
-                // Verify drop is destructive
-                assert!(drop_step.is_destructive());
+                // Domains can be recreated from schema, so DROP is not destructive
+                assert!(!drop_step.has_destructive_sql());
 
                 // Verify final state - no domains
                 assert_eq!(final_catalog.domains.len(), 0);
@@ -685,7 +685,8 @@ async fn test_domain_sql_rendering() {
     let sql = drop_op.to_sql();
     assert_eq!(sql.len(), 1);
     assert!(sql[0].sql.contains("DROP DOMAIN"));
-    assert_eq!(sql[0].safety, Safety::Destructive);
+    // Domains can be recreated from schema, so DROP is not destructive
+    assert_eq!(sql[0].safety, Safety::Safe);
 
     let set_not_null = DomainOperation::AlterSetNotNull {
         schema: "app".to_string(),

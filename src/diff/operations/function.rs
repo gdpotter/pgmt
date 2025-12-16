@@ -1,3 +1,4 @@
+use super::OperationKind;
 use super::comments::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
@@ -40,6 +41,16 @@ pub enum FunctionOperation {
         parameter_types: String,
     },
     Comment(CommentOperation<FunctionIdentifier>),
+}
+
+impl FunctionOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

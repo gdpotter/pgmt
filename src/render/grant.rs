@@ -26,16 +26,13 @@ impl SqlRenderer for GrantOperation {
             GrantOperation::Revoke { grant } => DbObjectId::Grant { id: grant.id() },
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, GrantOperation::Revoke { .. })
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+    use crate::render::Safety;
 
     fn create_table_grant() -> Grant {
         Grant {
@@ -94,15 +91,26 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let grant = create_table_grant();
         let grant_op = GrantOperation::Grant {
             grant: grant.clone(),
         };
         let revoke_op = GrantOperation::Revoke { grant };
 
-        assert!(!grant_op.is_destructive());
-        assert!(revoke_op.is_destructive());
+        // Grants/revokes don't destroy data - permissions can be re-granted
+        assert!(
+            !grant_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !revoke_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

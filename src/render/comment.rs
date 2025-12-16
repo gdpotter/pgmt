@@ -33,16 +33,13 @@ impl<T: CommentTarget> SqlRenderer for CommentOperation<T> {
             }
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, CommentOperation::Drop { .. })
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::operations::SchemaTarget;
+    use crate::render::Safety;
 
     #[test]
     fn test_render_set_comment() {
@@ -87,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let target = SchemaTarget {
             name: "test".to_string(),
         };
@@ -97,8 +94,19 @@ mod tests {
         };
         let drop_op: CommentOperation<SchemaTarget> = CommentOperation::Drop { target };
 
-        assert!(!set_op.is_destructive());
-        assert!(drop_op.is_destructive());
+        // Comments are just metadata, so no comment operations are destructive
+        assert!(
+            !set_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !drop_op
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

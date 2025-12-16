@@ -1,6 +1,6 @@
 use crate::catalog::id::DbObjectId;
 use crate::catalog::index::Index;
-use crate::diff::operations::{CommentOperation, CommentTarget};
+use crate::diff::operations::{CommentOperation, CommentTarget, OperationKind};
 use crate::render::quote_ident;
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,19 @@ pub enum IndexOperation {
         name: String,
         concurrently: bool,
     },
+}
+
+impl IndexOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create(_) => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Comment(_)
+            | Self::Cluster { .. }
+            | Self::SetWithoutCluster { .. }
+            | Self::Reindex { .. } => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

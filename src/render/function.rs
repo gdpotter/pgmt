@@ -43,7 +43,7 @@ impl SqlRenderer for FunctionOperation {
                     quote_ident(name),
                     parameter_types
                 ),
-                safety: Safety::Destructive,
+                safety: Safety::Safe,
             }],
             FunctionOperation::Comment(op) => op.to_sql(),
         }
@@ -75,10 +75,6 @@ impl SqlRenderer for FunctionOperation {
             },
             FunctionOperation::Comment(op) => op.db_object_id(),
         }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, FunctionOperation::Drop { .. })
     }
 }
 
@@ -157,7 +153,7 @@ mod tests {
             rendered[0].sql,
             "DROP FUNCTION \"public\".\"old_func\"(integer);"
         );
-        assert_eq!(rendered[0].safety, Safety::Destructive);
+        assert_eq!(rendered[0].safety, Safety::Safe);
     }
 
     #[test]
@@ -177,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let create = FunctionOperation::Create {
             schema: "s".to_string(),
             name: "f".to_string(),
@@ -207,9 +203,25 @@ mod tests {
             parameter_types: "".to_string(),
         };
 
-        assert!(!create.is_destructive());
-        assert!(!replace.is_destructive());
-        assert!(drop.is_destructive());
+        // Functions can be recreated from schema, so DROP FUNCTION is not destructive
+        assert!(
+            !create
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !replace
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !drop
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

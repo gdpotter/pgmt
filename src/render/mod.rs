@@ -21,9 +21,6 @@ use crate::diff::operations::MigrationStep;
 pub trait SqlRenderer {
     fn to_sql(&self) -> Vec<RenderedSql>;
     fn db_object_id(&self) -> DbObjectId;
-    fn is_destructive(&self) -> bool {
-        false
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,13 +40,6 @@ impl RenderedSql {
         Self {
             sql,
             safety: Safety::Safe,
-        }
-    }
-
-    pub fn destructive(sql: String) -> Self {
-        Self {
-            sql,
-            safety: Safety::Destructive,
         }
     }
 }
@@ -118,24 +108,6 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Trigger(op) => op.db_object_id(),
             MigrationStep::Extension(op) => op.db_object_id(),
             MigrationStep::Grant(op) => op.db_object_id(),
-        }
-    }
-
-    fn is_destructive(&self) -> bool {
-        match self {
-            MigrationStep::Schema(op) => op.is_destructive(),
-            MigrationStep::Table(op) => op.is_destructive(),
-            MigrationStep::View(op) => op.is_destructive(),
-            MigrationStep::Type(op) => op.is_destructive(),
-            MigrationStep::Domain(op) => op.is_destructive(),
-            MigrationStep::Sequence(op) => op.is_destructive(),
-            MigrationStep::Function(op) => op.is_destructive(),
-            MigrationStep::Aggregate(op) => op.is_destructive(),
-            MigrationStep::Index(op) => op.is_destructive(),
-            MigrationStep::Constraint(op) => op.is_destructive(),
-            MigrationStep::Trigger(op) => op.is_destructive(),
-            MigrationStep::Extension(op) => op.is_destructive(),
-            MigrationStep::Grant(op) => op.is_destructive(),
         }
     }
 }

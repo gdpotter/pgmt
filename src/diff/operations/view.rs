@@ -1,5 +1,6 @@
 //! View operations for schema migrations
 
+use super::OperationKind;
 use super::comments::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
@@ -21,6 +22,17 @@ pub enum ViewOperation {
         definition: String,
     },
     Comment(CommentOperation<ViewIdentifier>),
+}
+
+impl ViewOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Replace { .. } => OperationKind::Alter,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

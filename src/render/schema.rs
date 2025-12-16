@@ -13,7 +13,7 @@ impl SqlRenderer for SchemaOperation {
             }],
             SchemaOperation::Drop { name } => vec![RenderedSql {
                 sql: format!("DROP SCHEMA {};", quote_ident(name)),
-                safety: Safety::Destructive,
+                safety: Safety::Safe,
             }],
             SchemaOperation::Comment(op) => op.to_sql(),
         }
@@ -26,10 +26,6 @@ impl SqlRenderer for SchemaOperation {
             }
             SchemaOperation::Comment(op) => op.db_object_id(),
         }
-    }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, SchemaOperation::Drop { .. })
     }
 }
 
@@ -65,11 +61,11 @@ mod tests {
         let rendered = op.to_sql();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].sql, "DROP SCHEMA \"old_schema\";");
-        assert_eq!(rendered[0].safety, Safety::Destructive);
+        assert_eq!(rendered[0].safety, Safety::Safe);
     }
 
     #[test]
-    fn test_is_destructive() {
+    fn test_has_destructive_sql() {
         let create = SchemaOperation::Create {
             name: "test".to_string(),
         };
@@ -77,8 +73,19 @@ mod tests {
             name: "test".to_string(),
         };
 
-        assert!(!create.is_destructive());
-        assert!(drop.is_destructive());
+        // DROP SCHEMA (without CASCADE) is safe - will fail if schema contains objects
+        assert!(
+            !create
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
+        assert!(
+            !drop
+                .to_sql()
+                .iter()
+                .any(|s| s.safety == Safety::Destructive)
+        );
     }
 
     #[test]

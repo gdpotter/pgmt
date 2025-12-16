@@ -53,10 +53,6 @@ impl SqlRenderer for TriggerOperation {
             },
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, TriggerOperation::Drop { .. })
-    }
 }
 
 fn render_create_trigger(trigger: &Trigger) -> RenderedSql {
@@ -72,7 +68,7 @@ fn render_drop_trigger(identifier: &TriggerIdentifier) -> RenderedSql {
         "DROP TRIGGER \"{}\" ON \"{}\".\"{}\"",
         identifier.name, identifier.schema, identifier.table
     );
-    RenderedSql::destructive(sql)
+    RenderedSql::new(sql)
 }
 
 #[cfg(test)]
@@ -169,7 +165,7 @@ mod tests {
             rendered.sql,
             "DROP TRIGGER \"update_timestamp\" ON \"public\".\"users\""
         );
-        assert_eq!(rendered.safety, Safety::Destructive);
+        assert_eq!(rendered.safety, Safety::Safe);
     }
 
     #[test]

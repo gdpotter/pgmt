@@ -1,6 +1,6 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
-use pgmt::diff::operations::{AggregateOperation, MigrationStep, SqlRenderer};
+use pgmt::diff::operations::{AggregateOperation, MigrationStep};
 
 /// Helper SQL to create a state transition function for testing
 fn create_sfunc_sql(schema: &str, name: &str) -> String {
@@ -111,8 +111,8 @@ async fn test_drop_aggregate_migration() -> Result<()> {
                     _ => panic!("Expected Drop Aggregate step"),
                 }
 
-                // Verify drop is destructive
-                assert!(drop_step.is_destructive());
+                // Aggregates can be recreated from schema, so DROP is not destructive
+                assert!(!drop_step.has_destructive_sql());
 
                 // Verify final state - no aggregates
                 assert_eq!(final_catalog.aggregates.len(), 0);

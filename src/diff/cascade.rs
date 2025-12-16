@@ -1,5 +1,7 @@
 use crate::catalog::{Catalog, id::DbObjectId};
-use crate::diff::operations::{MigrationStep, SequenceOperation, TableOperation, ViewOperation};
+use crate::diff::operations::{
+    MigrationStep, OperationKind, SequenceOperation, TableOperation, ViewOperation,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
@@ -18,7 +20,7 @@ pub fn expand(
 
     for step in &steps {
         let id = step.id();
-        if step.is_drop() {
+        if step.operation_kind() == OperationKind::Drop {
             *drop_counts.entry(id).or_insert(0) += 1;
         } else {
             *create_counts.entry(id).or_insert(0) += 1;

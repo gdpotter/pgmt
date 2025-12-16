@@ -1,6 +1,6 @@
 //! Table operations
 
-use super::{CommentOperation, CommentTarget};
+use super::{CommentOperation, CommentTarget, OperationKind};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::table::{Column, PrimaryKey};
 use crate::render::quote_ident;
@@ -23,6 +23,17 @@ pub enum TableOperation {
         actions: Vec<ColumnAction>,
     },
     Comment(CommentOperation<TableTarget>),
+}
+
+impl TableOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::Alter { .. } => OperationKind::Alter,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

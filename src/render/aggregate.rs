@@ -53,10 +53,6 @@ impl SqlRenderer for AggregateOperation {
             },
         }
     }
-
-    fn is_destructive(&self) -> bool {
-        matches!(self, AggregateOperation::Drop { .. })
-    }
 }
 
 fn render_create_aggregate(aggregate: &Aggregate) -> RenderedSql {
@@ -70,7 +66,7 @@ fn render_drop_aggregate(identifier: &AggregateIdentifier) -> RenderedSql {
         "DROP AGGREGATE \"{}\".\"{}\"({})",
         identifier.schema, identifier.name, identifier.arguments
     );
-    RenderedSql::destructive(sql)
+    RenderedSql::new(sql)
 }
 
 #[cfg(test)]
@@ -135,7 +131,7 @@ mod tests {
             rendered.sql,
             "DROP AGGREGATE \"public\".\"group_concat\"(text)"
         );
-        assert_eq!(rendered.safety, Safety::Destructive);
+        assert_eq!(rendered.safety, Safety::Safe);
     }
 
     #[test]

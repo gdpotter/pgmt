@@ -1,7 +1,7 @@
 //! Constraint operations for migrations
 use crate::catalog::constraint::Constraint;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{CommentOperation, CommentTarget};
+use crate::diff::operations::{CommentOperation, CommentTarget, OperationKind};
 use crate::render::quote_ident;
 
 #[derive(Debug, Clone)]
@@ -51,4 +51,14 @@ pub enum ConstraintOperation {
     Create(Constraint),
     Drop(ConstraintIdentifier),
     Comment(CommentOperation<ConstraintIdentifier>),
+}
+
+impl ConstraintOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create(_) => OperationKind::Create,
+            Self::Drop(_) => OperationKind::Drop,
+            Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }

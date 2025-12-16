@@ -1,5 +1,6 @@
 //! Domain operations for schema migrations
 
+use super::OperationKind;
 use super::comments::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
@@ -44,6 +45,22 @@ pub enum DomainOperation {
         constraint_name: String,
     },
     Comment(CommentOperation<DomainIdentifier>),
+}
+
+impl DomainOperation {
+    pub fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::Create { .. } => OperationKind::Create,
+            Self::Drop { .. } => OperationKind::Drop,
+            Self::AlterSetNotNull { .. }
+            | Self::AlterDropNotNull { .. }
+            | Self::AlterSetDefault { .. }
+            | Self::AlterDropDefault { .. }
+            | Self::AddConstraint { .. }
+            | Self::DropConstraint { .. }
+            | Self::Comment(_) => OperationKind::Alter,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
