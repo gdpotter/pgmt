@@ -222,6 +222,7 @@ mod tests {
             primary_key: Some(PrimaryKey {
                 name: "users_pkey".to_string(),
                 columns: vec!["id".to_string()],
+                comment: None,
             }),
         };
         let rendered = op.to_sql();
@@ -374,6 +375,7 @@ mod tests {
                 constraint: PrimaryKey {
                     name: "users_pkey".to_string(),
                     columns: vec!["id".to_string()],
+                    comment: None,
                 },
             }],
         };

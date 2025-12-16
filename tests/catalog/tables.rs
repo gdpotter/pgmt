@@ -813,3 +813,33 @@ async fn test_fetch_table_with_underscore_prefixed_custom_type() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_fetch_primary_key_with_comment() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE TABLE users (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .await;
+        db.execute("COMMENT ON CONSTRAINT users_pkey ON users IS 'Primary key for users table'")
+            .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(tables.len(), 1);
+        let table = &tables[0];
+
+        assert_eq!(table.schema, "public");
+        assert_eq!(table.name, "users");
+
+        assert!(table.primary_key.is_some());
+        let pk = table.primary_key.as_ref().unwrap();
+        assert_eq!(pk.name, "users_pkey");
+        assert_eq!(pk.columns, vec!["id"]);
+        assert_eq!(pk.comment, Some("Primary key for users table".to_string()));
+    })
+    .await;
+}

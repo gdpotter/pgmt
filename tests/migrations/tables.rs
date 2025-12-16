@@ -2,7 +2,8 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::catalog::id::DependsOn;
 use pgmt::diff::operations::{
-    ColumnAction, CommentOperation, MigrationStep, TableOperation, TypeOperation, ViewOperation,
+    ColumnAction, CommentOperation, ConstraintOperation, MigrationStep, TableOperation,
+    TypeOperation, ViewOperation,
 };
 
 #[tokio::test]
@@ -707,6 +708,96 @@ async fn test_create_table_with_generated_columns_migration() -> Result<()> {
             Ok(())
         }
     ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_primary_key_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table with primary key
+            &["CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)"],
+            // Initial DB only: nothing extra (no comment)
+            &[],
+            // Target DB only: add primary key comment
+            &["COMMENT ON CONSTRAINT users_pkey ON users IS 'Primary key for users table'"],
+            // Verification closure
+            |steps, final_catalog| {
+                // Verify migration steps
+                assert!(!steps.is_empty());
+                let _comment_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                        )
+                    })
+                    .expect("Should have primary key comment step");
+
+                // Verify final state
+                let created_table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "users")
+                    .expect("Table should exist");
+
+                assert!(created_table.primary_key.is_some());
+                let pk = created_table.primary_key.as_ref().unwrap();
+                assert_eq!(pk.comment, Some("Primary key for users table".to_string()));
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_primary_key_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table with primary key
+            &["CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)"],
+            // Initial DB only: has primary key comment
+            &["COMMENT ON CONSTRAINT users_pkey ON users IS 'Primary key for users table'"],
+            // Target DB only: nothing extra (no comment)
+            &[],
+            // Verification closure
+            |steps, final_catalog| {
+                // Verify migration steps
+                assert!(!steps.is_empty());
+                let _comment_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                        )
+                    })
+                    .expect("Should have primary key comment drop step");
+
+                // Verify final state
+                let created_table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "users")
+                    .expect("Table should exist");
+
+                assert!(created_table.primary_key.is_some());
+                let pk = created_table.primary_key.as_ref().unwrap();
+                assert_eq!(pk.comment, None);
+
+                Ok(())
+            },
+        )
+        .await?;
 
     Ok(())
 }

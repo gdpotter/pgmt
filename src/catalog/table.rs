@@ -25,6 +25,7 @@ pub struct Column {
 pub struct PrimaryKey {
     pub name: String,
     pub columns: Vec<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -518,17 +519,19 @@ async fn populate_primary_keys(
             c.conname AS constraint_name,
             n.nspname AS schema_name,
             cl.relname AS table_name,
-            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS pk_columns
+            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS pk_columns,
+            d.description AS "constraint_comment?"
         FROM pg_constraint c
         JOIN pg_class cl ON c.conrelid = cl.oid
         JOIN pg_namespace n ON cl.relnamespace = n.oid
         JOIN pg_attribute a ON
             a.attrelid = c.conrelid AND
             a.attnum = ANY(c.conkey)
+        LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
         WHERE
             c.contype = 'p' AND
             n.nspname NOT IN ('pg_catalog', 'information_schema')
-        GROUP BY c.conname, n.nspname, cl.relname
+        GROUP BY c.conname, n.nspname, cl.relname, d.description
         "#
     )
     .fetch_all(&mut *conn)
@@ -549,6 +552,7 @@ async fn populate_primary_keys(
         tables[table_idx].primary_key = Some(PrimaryKey {
             name: pk.constraint_name,
             columns: pk_columns,
+            comment: pk.constraint_comment,
         });
     }
 
@@ -607,6 +611,7 @@ mod tests {
         let primary_key = pk.map(|(name, cols)| PrimaryKey {
             name: name.to_string(),
             columns: cols.into_iter().map(|s| s.to_string()).collect(),
+            comment: None,
         });
 
         Table::new(

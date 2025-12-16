@@ -152,6 +152,7 @@ mod tests {
             Some(PrimaryKey {
                 name: "users_pkey".to_string(),
                 columns: vec!["id".to_string()],
+                comment: None,
             }),
             None,
             vec![],
@@ -192,6 +193,7 @@ mod tests {
             Some(PrimaryKey {
                 name: "user_roles_pkey".to_string(),
                 columns: vec!["user_id".to_string(), "role_id".to_string()],
+                comment: None,
             }),
             None,
             vec![],
@@ -250,6 +252,7 @@ mod tests {
             Some(PrimaryKey {
                 name: "posts_pkey".to_string(),
                 columns: vec!["id".to_string()],
+                comment: None,
             }),
             None,
             vec![],

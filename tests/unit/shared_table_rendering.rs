@@ -54,6 +54,7 @@ fn test_shared_table_rendering_consistency() -> Result<()> {
         Some(PrimaryKey {
             name: "test_table_pkey".to_string(),
             columns: vec!["id".to_string()],
+            comment: None,
         }),
         None,
         vec![],
@@ -185,6 +186,7 @@ fn test_shared_table_rendering_compound_key() -> Result<()> {
         Some(PrimaryKey {
             name: "user_permissions_pkey".to_string(),
             columns: vec!["user_id".to_string(), "permission_id".to_string()],
+            comment: None,
         }),
         None,
         vec![],
