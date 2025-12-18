@@ -233,6 +233,12 @@ impl SchemaGenerator {
                 format!("{}tables/{}.sql", prefix, table_name)
             }
 
+            MigrationStep::Policy(op) => {
+                let (schema, table_name) = self.extract_table_info_from_policy_operation(op);
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}tables/{}.sql", prefix, table_name)
+            }
+
             MigrationStep::Grant(op) => match self.extract_grant_target(op) {
                 GrantTarget::Table { schema, name } => {
                     let prefix = self.schema_path_prefix(&schema);
@@ -637,6 +643,35 @@ impl SchemaGenerator {
                 (new_trigger.schema.clone(), new_trigger.table_name.clone())
             }
             TriggerOperation::Comment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.table.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.table.clone())
+                }
+            },
+        }
+    }
+
+    fn extract_table_info_from_policy_operation(
+        &self,
+        op: &crate::diff::operations::PolicyOperation,
+    ) -> (String, String) {
+        use crate::diff::operations::PolicyOperation;
+        match op {
+            PolicyOperation::Create { policy } => {
+                (policy.schema.clone(), policy.table_name.clone())
+            }
+            PolicyOperation::Drop { identifier } => {
+                (identifier.schema.clone(), identifier.table.clone())
+            }
+            PolicyOperation::Alter { identifier, .. } => {
+                (identifier.schema.clone(), identifier.table.clone())
+            }
+            PolicyOperation::Replace { new_policy, .. } => {
+                (new_policy.schema.clone(), new_policy.table_name.clone())
+            }
+            PolicyOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
                     (target.schema.clone(), target.table.clone())
                 }

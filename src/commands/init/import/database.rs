@@ -61,6 +61,7 @@ fn count_catalog_objects(catalog: &Catalog) -> usize {
         + catalog.indexes.len()
         + catalog.constraints.len()
         + catalog.triggers.len()
+        + catalog.policies.len()
         + catalog.extensions.len()
         + catalog.grants.len()
 }
@@ -115,6 +116,11 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
             .iter()
             .filter(|t| t.schema == schema.name)
             .count();
+        let policies_count = catalog
+            .policies
+            .iter()
+            .filter(|p| p.schema == schema.name)
+            .count();
 
         // Extensions are handled separately as they may not have schema association
         let extensions_count = catalog
@@ -167,6 +173,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
             + indexes_count
             + constraints_count
             + triggers_count
+            + policies_count
             + extensions_count
             + grants_count;
 
@@ -181,6 +188,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
             indexes_count,
             constraints_count,
             triggers_count,
+            policies_count,
             extensions_count,
             grants_count,
         ));
@@ -206,6 +214,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
                 indexes,
                 constraints,
                 triggers,
+                policies,
                 extensions,
                 grants,
             )| {
@@ -269,6 +278,13 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
                             if *triggers == 1 { "" } else { "s" }
                         ));
                     }
+                    if *policies > 0 {
+                        parts.push(format!(
+                            "{} polic{}",
+                            policies,
+                            if *policies == 1 { "y" } else { "ies" }
+                        ));
+                    }
                     if *extensions > 0 {
                         parts.push(format!(
                             "{} extension{}",
@@ -297,7 +313,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
     // Default to selecting non-empty schemas
     let defaults: Vec<bool> = schema_info
         .iter()
-        .map(|(_, total, _, _, _, _, _, _, _, _, _, _)| *total > 0)
+        .map(|(_, total, _, _, _, _, _, _, _, _, _, _, _)| *total > 0)
         .collect();
 
     println!("\n🎯 Select schemas to import (use Space to toggle, Enter to confirm):");
@@ -351,6 +367,7 @@ fn display_schema_table(
         usize,
         usize,
         usize,
+        usize,
     )],
 ) {
     println!("\n📊 Available schemas in database:");
@@ -358,7 +375,7 @@ fn display_schema_table(
         "┌──────────────────────────────────────────────────────────────────────────────────────────────────┐"
     );
     println!(
-        "│ Schema            Tables Views Funcs Types Seqs Idxs Cnsts Trigs Exts Grants Total               │"
+        "│ Schema            Tables Views Funcs Types Seqs Idxs Cnsts Trigs Pols Exts Grants Total          │"
     );
     println!(
         "├──────────────────────────────────────────────────────────────────────────────────────────────────┤"
@@ -375,12 +392,13 @@ fn display_schema_table(
         indexes,
         constraints,
         triggers,
+        policies,
         extensions,
         grants,
     ) in schema_info
     {
         println!(
-            "│ {:16} {:6} {:5} {:5} {:5} {:4} {:4} {:5} {:5} {:4} {:6} {:5}              │",
+            "│ {:16} {:6} {:5} {:5} {:5} {:4} {:4} {:5} {:5} {:4} {:4} {:6} {:5}         │",
             name,
             tables,
             views,
@@ -390,6 +408,7 @@ fn display_schema_table(
             indexes,
             constraints,
             triggers,
+            policies,
             extensions,
             grants,
             total
@@ -423,6 +442,7 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
         .constraints
         .retain(|c| schema_set.contains(&c.schema));
     catalog.triggers.retain(|t| schema_set.contains(&t.schema));
+    catalog.policies.retain(|p| schema_set.contains(&p.schema));
     catalog
         .extensions
         .retain(|e| schema_set.contains(&e.schema));
@@ -500,6 +520,11 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
     );
     insert_deps(
         &catalog.triggers,
+        &mut catalog.forward_deps,
+        &mut catalog.reverse_deps,
+    );
+    insert_deps(
+        &catalog.policies,
         &mut catalog.forward_deps,
         &mut catalog.reverse_deps,
     );

@@ -70,6 +70,10 @@ pub enum ColumnAction {
     AlterType { name: String, new_type: String },
     AddPrimaryKey { constraint: PrimaryKey },
     DropPrimaryKey { name: String },
+    EnableRls,
+    DisableRls,
+    ForceRls,
+    NoForceRls,
     Comment(CommentOperation<ColumnIdentifier>),
 }
 

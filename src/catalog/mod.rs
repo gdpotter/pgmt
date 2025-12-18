@@ -15,6 +15,7 @@ pub mod grant;
 pub mod id;
 pub mod identity;
 pub mod index;
+pub mod policy;
 pub mod schema;
 pub mod sequence;
 pub mod table;
@@ -35,6 +36,7 @@ pub struct Catalog {
     pub indexes: Vec<index::Index>,
     pub constraints: Vec<constraint::Constraint>,
     pub triggers: Vec<triggers::Trigger>,
+    pub policies: Vec<policy::Policy>,
     pub extensions: Vec<extension::Extension>,
     pub grants: Vec<grant::Grant>,
 
@@ -74,6 +76,7 @@ impl Catalog {
         let indexes = index::fetch(&mut *conn).await?;
         let constraints = constraint::fetch(&mut *conn).await?;
         let triggers = triggers::fetch(&mut *conn).await?;
+        let policies = policy::fetch(&mut *conn).await?;
         let extensions = extension::fetch(&mut *conn).await?;
         let grants = grant::fetch(&mut *conn).await?;
 
@@ -106,6 +109,7 @@ impl Catalog {
         insert_deps(&indexes, &mut forward, &mut reverse);
         insert_deps(&constraints, &mut forward, &mut reverse);
         insert_deps(&triggers, &mut forward, &mut reverse);
+        insert_deps(&policies, &mut forward, &mut reverse);
         insert_deps(&extensions, &mut forward, &mut reverse);
         insert_deps(&grants, &mut forward, &mut reverse);
 
@@ -121,6 +125,7 @@ impl Catalog {
             indexes,
             constraints,
             triggers,
+            policies,
             extensions,
             grants,
             forward_deps: forward,
@@ -207,6 +212,7 @@ impl Catalog {
             indexes: Vec::new(),
             constraints: Vec::new(),
             triggers: Vec::new(),
+            policies: Vec::new(),
             extensions: Vec::new(),
             grants: Vec::new(),
             forward_deps: BTreeMap::new(),
@@ -274,6 +280,14 @@ impl Catalog {
                 .triggers
                 .iter()
                 .any(|t| &t.schema == schema && &t.table_name == table && &t.name == name),
+            DbObjectId::Policy {
+                schema,
+                table,
+                name,
+            } => self
+                .policies
+                .iter()
+                .any(|p| &p.schema == schema && &p.table_name == table && &p.name == name),
             DbObjectId::Extension { name } => self.extensions.iter().any(|e| &e.name == name),
             DbObjectId::Grant { id } => self.grants.iter().any(|g| &g.id() == id),
             DbObjectId::Comment { object_id } => self.contains_id(object_id),

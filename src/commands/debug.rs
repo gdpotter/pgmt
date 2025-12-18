@@ -70,6 +70,11 @@ pub enum ObjectIdJson {
         table: String,
         name: String,
     },
+    Policy {
+        schema: String,
+        table: String,
+        name: String,
+    },
     Extension {
         name: String,
     },
@@ -137,6 +142,15 @@ impl From<&DbObjectId> for ObjectIdJson {
                 table,
                 name,
             } => ObjectIdJson::Trigger {
+                schema: schema.clone(),
+                table: table.clone(),
+                name: name.clone(),
+            },
+            DbObjectId::Policy {
+                schema,
+                table,
+                name,
+            } => ObjectIdJson::Policy {
                 schema: schema.clone(),
                 table: table.clone(),
                 name: name.clone(),
@@ -401,6 +415,13 @@ fn format_object_id(obj: &ObjectIdJson) -> String {
             name,
         } => {
             format!("Trigger: {}.{}.{}", schema, table, name)
+        }
+        ObjectIdJson::Policy {
+            schema,
+            table,
+            name,
+        } => {
+            format!("Policy: {}.{}.{}", schema, table, name)
         }
         ObjectIdJson::Extension { name } => format!("Extension: {}", name),
         ObjectIdJson::Aggregate {

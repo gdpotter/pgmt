@@ -10,6 +10,7 @@ pub mod functions;
 pub mod grants;
 pub mod indexes;
 pub mod operations;
+pub mod policies;
 pub mod schemas;
 pub mod sequences;
 pub mod tables;
@@ -91,6 +92,17 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
         &new.triggers,
         |t| t.id(),
         triggers::diff,
+    ));
+
+    out.extend(diff_list(
+        &old.policies,
+        &new.policies,
+        |p| DbObjectId::Policy {
+            schema: p.schema.clone(),
+            table: p.table_name.clone(),
+            name: p.name.clone(),
+        },
+        policies::diff,
     ));
 
     out.extend(diff_list(&old.views, &new.views, View::id, views::diff));
@@ -372,6 +384,7 @@ fn order_steps_by_dependencies(
                     MigrationStep::Index(_) => "Index",
                     MigrationStep::Constraint(_) => "Constraint",
                     MigrationStep::Trigger(_) => "Trigger",
+                    MigrationStep::Policy(_) => "Policy",
                     MigrationStep::Extension(_) => "Extension",
                     MigrationStep::Grant(_) => "Grant",
                 };

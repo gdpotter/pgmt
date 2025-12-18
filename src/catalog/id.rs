@@ -49,6 +49,11 @@ pub enum DbObjectId {
         table: String,
         name: String,
     },
+    Policy {
+        schema: String,
+        table: String,
+        name: String,
+    },
     Comment {
         object_id: Box<DbObjectId>, // The object being commented on
     },
@@ -78,6 +83,7 @@ impl DbObjectId {
             | DbObjectId::Index { schema, .. }
             | DbObjectId::Constraint { schema, .. }
             | DbObjectId::Trigger { schema, .. }
+            | DbObjectId::Policy { schema, .. }
             | DbObjectId::Aggregate { schema, .. } => Some(schema.as_str()),
             DbObjectId::Grant { .. } | DbObjectId::Extension { .. } => None,
             DbObjectId::Comment { object_id } => object_id.schema(),

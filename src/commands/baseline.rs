@@ -59,6 +59,7 @@ pub async fn cmd_baseline_create(
                     crate::diff::operations::MigrationStep::Index(_) => "Index",
                     crate::diff::operations::MigrationStep::Constraint(_) => "Constraint",
                     crate::diff::operations::MigrationStep::Trigger(_) => "Trigger",
+                    crate::diff::operations::MigrationStep::Policy(_) => "Policy",
                     crate::diff::operations::MigrationStep::Extension(_) => "Extension",
                     crate::diff::operations::MigrationStep::Grant(_) => "Grant",
                 };

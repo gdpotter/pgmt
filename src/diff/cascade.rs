@@ -1,12 +1,12 @@
 use crate::catalog::{Catalog, id::DbObjectId};
 use crate::diff::operations::{
-    MigrationStep, OperationKind, SequenceOperation, TableOperation, ViewOperation,
+    MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation, ViewOperation,
 };
 use std::collections::{HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
 /// Also filters out redundant steps (e.g., DROP SEQUENCE for owned sequences when the owning
-/// table is also being dropped).
+/// table is also being dropped, DROP POLICY when the owning table is being dropped).
 pub fn expand(
     steps: Vec<MigrationStep>,
     old_catalog: &Catalog,
@@ -55,7 +55,10 @@ pub fn expand(
     all.extend(extra_steps);
 
     // Filter out redundant owned sequence drops
-    filter_owned_sequence_drops(all, old_catalog)
+    let filtered = filter_owned_sequence_drops(all, old_catalog);
+
+    // Filter out redundant policy drops when table is being dropped
+    filter_policy_drops(filtered, old_catalog)
 }
 
 /// Recursively collect all dependents of a given object
@@ -164,6 +167,43 @@ fn filter_owned_sequence_drops(
                 && tables_being_dropped.contains(&(owner_schema.clone(), owner_table.clone()))
             {
                 // If the owning table is being dropped, filter out this sequence drop
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+/// Filter out DROP POLICY steps for policies on tables that are also being dropped.
+/// When a table is dropped, PostgreSQL automatically drops all its policies,
+/// so an explicit DROP POLICY would fail.
+fn filter_policy_drops(steps: Vec<MigrationStep>, _old_catalog: &Catalog) -> Vec<MigrationStep> {
+    // Collect all tables being dropped
+    let tables_being_dropped: HashSet<(String, String)> = steps
+        .iter()
+        .filter_map(|step| {
+            if let MigrationStep::Table(TableOperation::Drop { schema, name }) = step {
+                Some((schema.clone(), name.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // If no tables are being dropped, no filtering needed
+    if tables_being_dropped.is_empty() {
+        return steps;
+    }
+
+    // Filter out DROP POLICY for policies whose tables are also being dropped
+    steps
+        .into_iter()
+        .filter(|step| {
+            if let MigrationStep::Policy(PolicyOperation::Drop { identifier }) = step
+                && tables_being_dropped
+                    .contains(&(identifier.schema.clone(), identifier.table.clone()))
+            {
+                // If the owning table is being dropped, filter out this policy drop
                 return false;
             }
             true

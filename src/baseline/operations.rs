@@ -107,6 +107,7 @@ pub fn display_baseline_summary(result: &BaselineCreationResult) {
                 MigrationStep::Index(_) => "Index",
                 MigrationStep::Constraint(_) => "Constraint",
                 MigrationStep::Trigger(_) => "Trigger",
+                MigrationStep::Policy(_) => "Policy",
                 MigrationStep::Extension(_) => "Extension",
                 MigrationStep::Grant(_) => "Grant",
             };

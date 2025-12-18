@@ -36,6 +36,12 @@ pub struct Table {
     pub primary_key: Option<PrimaryKey>,
     pub comment: Option<String>,
 
+    /// Row-level security is enabled on this table
+    pub rls_enabled: bool,
+
+    /// Row-level security is forced even for table owners
+    pub rls_forced: bool,
+
     table_dependencies: Vec<DbObjectId>,
 
     all_dependencies: Vec<DbObjectId>,
@@ -85,6 +91,8 @@ impl Table {
             columns,
             primary_key,
             comment,
+            rls_enabled: false,
+            rls_forced: false,
             table_dependencies: table_dependencies.clone(),
             all_dependencies: table_dependencies,
         };
@@ -111,13 +119,15 @@ impl Commentable for Table {
 
 async fn fetch_all_tables(
     conn: &mut PgConnection,
-) -> Result<Vec<(String, String, Option<String>)>> {
+) -> Result<Vec<(String, String, Option<String>, bool, bool)>> {
     let rows = sqlx::query!(
         r#"
         SELECT
             n.nspname AS table_schema,
             c.relname AS table_name,
-            d.description AS "table_comment?"
+            d.description AS "table_comment?",
+            c.relrowsecurity AS "rls_enabled!",
+            c.relforcerowsecurity AS "rls_forced!"
         FROM pg_class c
         JOIN pg_namespace n ON c.relnamespace = n.oid
         LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
@@ -136,7 +146,15 @@ async fn fetch_all_tables(
 
     Ok(rows
         .into_iter()
-        .map(|r| (r.table_schema, r.table_name, r.table_comment))
+        .map(|r| {
+            (
+                r.table_schema,
+                r.table_name,
+                r.table_comment,
+                r.rls_enabled,
+                r.rls_forced,
+            )
+        })
         .collect())
 }
 
@@ -382,7 +400,7 @@ async fn fetch_function_dependencies(
 }
 
 fn initialize_tables(
-    all_tables: Vec<(String, String, Option<String>)>,
+    all_tables: Vec<(String, String, Option<String>, bool, bool)>,
 ) -> (
     Vec<Table>,
     std::collections::BTreeMap<(String, String), usize>,
@@ -390,7 +408,9 @@ fn initialize_tables(
     let mut tables = Vec::new();
     let mut table_index_map = std::collections::BTreeMap::new();
 
-    for (idx, (schema, name, comment)) in all_tables.into_iter().enumerate() {
+    for (idx, (schema, name, comment, rls_enabled, rls_forced)) in
+        all_tables.into_iter().enumerate()
+    {
         table_index_map.insert((schema.clone(), name.clone()), idx);
         let table_deps = vec![DbObjectId::Schema {
             name: schema.clone(),
@@ -401,6 +421,8 @@ fn initialize_tables(
             columns: Vec::new(),
             primary_key: None,
             comment,
+            rls_enabled,
+            rls_forced,
             table_dependencies: table_deps.clone(),
             all_dependencies: table_deps, // Initially same as table_dependencies
         });

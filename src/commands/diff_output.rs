@@ -112,6 +112,7 @@ fn output_summary_format(steps: &[MigrationStep]) {
             MigrationStep::Schema(_) => "Schemas",
             MigrationStep::Extension(_) => "Extensions",
             MigrationStep::Trigger(_) => "Triggers",
+            MigrationStep::Policy(_) => "Policies",
             MigrationStep::Type(_) => "Custom Types",
             MigrationStep::Domain(_) => "Domains",
             MigrationStep::Grant(_) => "Grants",

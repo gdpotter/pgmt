@@ -108,6 +108,23 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                 }
             }
 
+            // Check RLS settings changes
+            if o.rls_enabled != n.rls_enabled {
+                if n.rls_enabled {
+                    actions.push(ColumnAction::EnableRls);
+                } else {
+                    actions.push(ColumnAction::DisableRls);
+                }
+            }
+
+            if o.rls_forced != n.rls_forced {
+                if n.rls_forced {
+                    actions.push(ColumnAction::ForceRls);
+                } else {
+                    actions.push(ColumnAction::NoForceRls);
+                }
+            }
+
             let mut steps = Vec::new();
 
             if !actions.is_empty() {

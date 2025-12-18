@@ -179,6 +179,40 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
             ),
             safety: Safety::Destructive,
         },
+        ColumnAction::EnableRls => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} ENABLE ROW LEVEL SECURITY;",
+                quote_ident(schema),
+                quote_ident(table)
+            ),
+            safety: Safety::Safe,
+        },
+        ColumnAction::DisableRls => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} DISABLE ROW LEVEL SECURITY;",
+                quote_ident(schema),
+                quote_ident(table)
+            ),
+            // Disabling RLS is destructive because it removes security restrictions,
+            // potentially exposing data that was previously protected by policies
+            safety: Safety::Destructive,
+        },
+        ColumnAction::ForceRls => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} FORCE ROW LEVEL SECURITY;",
+                quote_ident(schema),
+                quote_ident(table)
+            ),
+            safety: Safety::Safe,
+        },
+        ColumnAction::NoForceRls => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} NO FORCE ROW LEVEL SECURITY;",
+                quote_ident(schema),
+                quote_ident(table)
+            ),
+            safety: Safety::Safe,
+        },
         ColumnAction::Comment(op) => op.to_sql()[0].clone(),
     }
 }

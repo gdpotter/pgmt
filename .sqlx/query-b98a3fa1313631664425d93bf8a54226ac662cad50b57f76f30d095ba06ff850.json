@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS table_schema,\n            c.relname AS table_name,\n            d.description AS \"table_comment?\",\n            c.relrowsecurity AS \"rls_enabled!\",\n            c.relforcerowsecurity AS \"rls_forced!\"\n        FROM pg_class c\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0\n        WHERE c.relkind = 'r'\n          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND NOT EXISTS (\n              SELECT 1 FROM pg_depend dep\n              WHERE dep.objid = c.oid\n              AND dep.deptype = 'e'\n          )\n        ORDER BY n.nspname, c.relname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "table_schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "table_comment?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "rls_enabled!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "rls_forced!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b98a3fa1313631664425d93bf8a54226ac662cad50b57f76f30d095ba06ff850"
+}

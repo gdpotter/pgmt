@@ -6,6 +6,7 @@ pub mod extension;
 pub mod function;
 pub mod grant;
 pub mod index;
+pub mod policy;
 pub mod schema;
 pub mod sequence;
 pub mod sql;
@@ -88,6 +89,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Index(op) => op.to_sql(),
             MigrationStep::Constraint(op) => op.to_sql(),
             MigrationStep::Trigger(op) => op.to_sql(),
+            MigrationStep::Policy(op) => op.to_sql(),
             MigrationStep::Extension(op) => op.to_sql(),
             MigrationStep::Grant(op) => op.to_sql(),
         }
@@ -106,6 +108,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Index(op) => op.db_object_id(),
             MigrationStep::Constraint(op) => op.db_object_id(),
             MigrationStep::Trigger(op) => op.db_object_id(),
+            MigrationStep::Policy(op) => op.db_object_id(),
             MigrationStep::Extension(op) => op.db_object_id(),
             MigrationStep::Grant(op) => op.db_object_id(),
         }
