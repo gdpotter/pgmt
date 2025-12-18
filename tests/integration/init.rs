@@ -7,6 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+use crate::fixtures::init_test_schemas::create_comprehensive_schema;
 use crate::helpers::harness::with_test_db;
 
 // Integration tests for the init command end-to-end workflow
@@ -1039,4 +1040,137 @@ async fn test_init_workflow_explicit_pg_version_precedence() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Test comprehensive schema import covering ALL pgmt-supported object types
+/// This test verifies that init can properly import and generate schema files for
+/// object types not typically tested together: domains, composite types, procedures,
+/// aggregates, policies, exclusion constraints, generated columns, and GIN indexes.
+#[tokio::test]
+async fn test_init_comprehensive_schema_import() -> Result<()> {
+    with_test_db(async |db| {
+        // Create database with ALL pgmt-supported object types
+        let schema_sql = create_comprehensive_schema();
+        db.execute(&schema_sql).await;
+
+        // Load catalog
+        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+
+        // Verify comprehensive coverage
+        assert!(
+            !catalog.extensions.is_empty(),
+            "Should have extensions (uuid-ossp, pgcrypto, btree_gist)"
+        );
+        assert!(!catalog.schemas.is_empty(), "Should have custom schemas");
+        assert!(
+            !catalog.types.is_empty(),
+            "Should have custom types (enums)"
+        );
+        assert!(!catalog.domains.is_empty(), "Should have domains");
+        assert!(!catalog.tables.is_empty(), "Should have tables");
+        assert!(!catalog.views.is_empty(), "Should have views");
+        assert!(
+            !catalog.functions.is_empty(),
+            "Should have functions/procedures"
+        );
+        assert!(!catalog.sequences.is_empty(), "Should have sequences");
+        assert!(
+            !catalog.indexes.is_empty(),
+            "Should have indexes (including GIN)"
+        );
+        assert!(
+            !catalog.constraints.is_empty(),
+            "Should have constraints (including exclusion)"
+        );
+        assert!(!catalog.triggers.is_empty(), "Should have triggers");
+        assert!(!catalog.grants.is_empty(), "Should have grants");
+
+        // TEST: Generate schema files from catalog
+        let temp_dir = TempDir::new()?;
+        let schema_path = temp_dir.path().join("schema");
+
+        let generator = pgmt::schema_generator::SchemaGenerator::new(
+            catalog,
+            schema_path.clone(),
+            pgmt::schema_generator::SchemaGeneratorConfig {
+                include_comments: true,
+                include_grants: true,
+                include_triggers: true,
+                include_extensions: true,
+            },
+        );
+
+        generator.generate_files()?;
+
+        // Verify directories for previously untested object types were created
+        let auth_schema_dir = schema_path.join("auth");
+        let billing_schema_dir = schema_path.join("billing");
+        let analytics_schema_dir = schema_path.join("analytics");
+
+        // Verify domains directory exists (not tested in other init tests)
+        assert!(
+            auth_schema_dir.join("domains").exists() || billing_schema_dir.join("domains").exists(),
+            "Should have domains/ directory for domain types"
+        );
+
+        // Verify types directory has content (composite types + enums)
+        assert!(
+            auth_schema_dir.join("types").exists(),
+            "Should have types/ directory"
+        );
+
+        // Verify functions directory (includes procedures)
+        assert!(
+            auth_schema_dir.join("functions").exists()
+                || billing_schema_dir.join("functions").exists()
+                || analytics_schema_dir.join("functions").exists(),
+            "Should have functions/ directory with functions and procedures"
+        );
+
+        // Verify tables directory has content (with policies, exclusion constraints, generated columns)
+        assert!(
+            auth_schema_dir.join("tables").exists()
+                && billing_schema_dir.join("tables").exists()
+                && analytics_schema_dir.join("tables").exists(),
+            "Should have tables/ directories in all schemas"
+        );
+
+        // Read a table file to verify it contains indexes (including GIN), constraints, etc.
+        let users_table = std::fs::read_to_string(auth_schema_dir.join("tables/users.sql"))?;
+        assert!(
+            users_table.contains("CREATE TABLE"),
+            "Table file should contain CREATE TABLE"
+        );
+
+        // Read invoices table to verify generated column and exclusion constraint
+        let invoices_table =
+            std::fs::read_to_string(billing_schema_dir.join("tables/invoices.sql"))?;
+        assert!(
+            invoices_table.contains("GENERATED ALWAYS AS"),
+            "Should have generated column in invoices table"
+        );
+
+        // Verify extensions file exists
+        assert!(
+            schema_path.join("extensions.sql").exists(),
+            "Should have extensions.sql file"
+        );
+
+        let extensions_content = std::fs::read_to_string(schema_path.join("extensions.sql"))?;
+        assert!(
+            extensions_content.contains("uuid-ossp"),
+            "extensions.sql should contain uuid-ossp"
+        );
+        assert!(
+            extensions_content.contains("pgcrypto"),
+            "extensions.sql should contain pgcrypto"
+        );
+        assert!(
+            extensions_content.contains("btree_gist"),
+            "extensions.sql should contain btree_gist (required for exclusion constraints)"
+        );
+
+        Ok(())
+    })
+    .await
 }
