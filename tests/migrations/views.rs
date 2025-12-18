@@ -708,6 +708,11 @@ async fn test_drop_view_comment_migration() -> Result<()> {
 async fn test_enable_security_invoker() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
+    // security_invoker option requires PostgreSQL 15+
+    if helper.pg_major_version().await < 15 {
+        return Ok(());
+    }
+
     helper.run_migration_test(
         &[
             "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)",
@@ -737,6 +742,11 @@ async fn test_enable_security_invoker() -> Result<()> {
 #[tokio::test]
 async fn test_disable_security_invoker() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
+
+    // security_invoker option requires PostgreSQL 15+
+    if helper.pg_major_version().await < 15 {
+        return Ok(());
+    }
 
     helper.run_migration_test(
         &[

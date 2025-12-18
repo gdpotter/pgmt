@@ -515,6 +515,11 @@ async fn test_fetch_view_with_array_type_cast_dependency() {
 #[tokio::test]
 async fn test_fetch_view_with_security_invoker() {
     with_test_db(async |db| {
+        // security_invoker option requires PostgreSQL 15+
+        if db.pg_major_version().await < 15 {
+            return;
+        }
+
         db.execute(
             "CREATE TABLE users (
                 id SERIAL PRIMARY KEY,

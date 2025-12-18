@@ -81,6 +81,20 @@ impl TestDatabase {
             let _ = sqlx::query(create_sql).execute(&self.pool).await;
         }
     }
+
+    /// Get the PostgreSQL major version number (e.g., 13, 14, 15, 16, 17, 18)
+    pub async fn pg_major_version(&self) -> u32 {
+        let version: (String,) = sqlx::query_as("SHOW server_version")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
+        version
+            .0
+            .split('.')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
 }
 
 impl PgTestInstance {
