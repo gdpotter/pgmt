@@ -22,6 +22,8 @@ pub struct View {
     pub definition: String, // raw `SELECT …`
     pub columns: Vec<ViewColumn>,
     pub comment: Option<String>,     // comment on the view
+    pub security_invoker: bool,      // PG 15+: execute with invoker's permissions (default: false)
+    pub security_barrier: bool,      // prevent predicate pushdown for security (default: false)
     pub depends_on: Vec<DbObjectId>, // populated from pg_depend
 }
 
@@ -60,6 +62,7 @@ struct RawView {
     name: String,
     definition: String,
     comment: Option<String>,
+    reloptions: Option<Vec<String>>,
 }
 
 fn normalize_type(data_type: &str, udt_name: &str) -> String {
@@ -76,6 +79,24 @@ fn normalize_type(data_type: &str, udt_name: &str) -> String {
     }
 }
 
+/// Parse reloptions to extract security_invoker and security_barrier
+fn parse_view_options(reloptions: &Option<Vec<String>>) -> (bool, bool) {
+    let mut security_invoker = false;
+    let mut security_barrier = false;
+
+    if let Some(opts) = reloptions {
+        for opt in opts {
+            if opt == "security_invoker=true" || opt == "security_invoker=on" {
+                security_invoker = true;
+            } else if opt == "security_barrier=true" || opt == "security_barrier=on" {
+                security_barrier = true;
+            }
+        }
+    }
+
+    (security_invoker, security_barrier)
+}
+
 /// Fetch all non-system views, then populate `depends_on` via pg_depend.
 pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
     // 1. Fetch view OIDs + definitions
@@ -88,7 +109,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
           n.nspname                AS "schema!",
           c.relname                AS "name!",
           pg_catalog.pg_get_viewdef(c.oid, true) AS "definition!",
-          d.description            AS "comment?"
+          d.description            AS "comment?",
+          c.reloptions             AS "reloptions?"
         FROM pg_class c
         JOIN pg_namespace n
           ON c.relnamespace = n.oid
@@ -145,6 +167,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
         .map(|r| {
             let key = (r.schema.clone(), r.name.clone());
             let columns = columns_by_view.remove(&key).unwrap_or_default();
+            let (security_invoker, security_barrier) = parse_view_options(&r.reloptions);
 
             View {
                 schema: r.schema.clone(),
@@ -152,6 +175,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                 definition: r.definition.clone(),
                 columns,
                 comment: r.comment.clone(),
+                security_invoker,
+                security_barrier,
                 depends_on: Vec::new(),
             }
         })

@@ -1,6 +1,6 @@
 use crate::catalog::view::View;
 use crate::diff::comment_utils;
-use crate::diff::operations::{MigrationStep, ViewIdentifier, ViewOperation};
+use crate::diff::operations::{MigrationStep, ViewIdentifier, ViewOperation, ViewOption};
 
 /// Diff a single view
 pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
@@ -11,6 +11,8 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 schema: n.schema.clone(),
                 name: n.name.clone(),
                 definition: n.definition.clone(),
+                security_invoker: n.security_invoker,
+                security_barrier: n.security_barrier,
             })];
 
             // Add view comment if present
@@ -46,6 +48,8 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                         schema: n.schema.clone(),
                         name: n.name.clone(),
                         definition: n.definition.clone(),
+                        security_invoker: n.security_invoker,
+                        security_barrier: n.security_barrier,
                     }),
                 ]);
 
@@ -66,6 +70,24 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                     definition: n.definition.clone(),
                 }));
 
+                // Handle security option changes for replaced views
+                if o.security_invoker != n.security_invoker {
+                    steps.push(MigrationStep::View(ViewOperation::SetOption {
+                        schema: n.schema.clone(),
+                        name: n.name.clone(),
+                        option: ViewOption::SecurityInvoker,
+                        enabled: n.security_invoker,
+                    }));
+                }
+                if o.security_barrier != n.security_barrier {
+                    steps.push(MigrationStep::View(ViewOperation::SetOption {
+                        schema: n.schema.clone(),
+                        name: n.name.clone(),
+                        option: ViewOption::SecurityBarrier,
+                        enabled: n.security_barrier,
+                    }));
+                }
+
                 // Handle comment changes for replaced views
                 let comment_ops =
                     comment_utils::handle_comment_diff(Some(o), Some(n), || ViewIdentifier {
@@ -76,7 +98,25 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
             } else {
-                // Only comment changes
+                // Check for security option changes even when definition is unchanged
+                if o.security_invoker != n.security_invoker {
+                    steps.push(MigrationStep::View(ViewOperation::SetOption {
+                        schema: n.schema.clone(),
+                        name: n.name.clone(),
+                        option: ViewOption::SecurityInvoker,
+                        enabled: n.security_invoker,
+                    }));
+                }
+                if o.security_barrier != n.security_barrier {
+                    steps.push(MigrationStep::View(ViewOperation::SetOption {
+                        schema: n.schema.clone(),
+                        name: n.name.clone(),
+                        option: ViewOption::SecurityBarrier,
+                        enabled: n.security_barrier,
+                    }));
+                }
+
+                // Handle comment changes
                 let comment_ops =
                     comment_utils::handle_comment_diff(Some(o), Some(n), || ViewIdentifier {
                         schema: n.schema.clone(),

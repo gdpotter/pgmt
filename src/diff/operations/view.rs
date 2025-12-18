@@ -5,12 +5,29 @@ use super::comments::{CommentOperation, CommentTarget};
 use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewOption {
+    SecurityInvoker,
+    SecurityBarrier,
+}
+
+impl ViewOption {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ViewOption::SecurityInvoker => "security_invoker",
+            ViewOption::SecurityBarrier => "security_barrier",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ViewOperation {
     Create {
         schema: String,
         name: String,
         definition: String,
+        security_invoker: bool,
+        security_barrier: bool,
     },
     Drop {
         schema: String,
@@ -21,6 +38,12 @@ pub enum ViewOperation {
         name: String,
         definition: String,
     },
+    SetOption {
+        schema: String,
+        name: String,
+        option: ViewOption,
+        enabled: bool,
+    },
     Comment(CommentOperation<ViewIdentifier>),
 }
 
@@ -30,6 +53,7 @@ impl ViewOperation {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
             Self::Replace { .. } => OperationKind::Alter,
+            Self::SetOption { .. } => OperationKind::Alter,
             Self::Comment(_) => OperationKind::Alter,
         }
     }

@@ -107,6 +107,8 @@ fn test_file_organization_by_object_type() {
         definition: "SELECT * FROM products WHERE active = true".to_string(),
         columns: vec![], // Empty for test
         comment: None,
+        security_invoker: false,
+        security_barrier: false,
         depends_on: vec![DbObjectId::Table {
             schema: "public".to_string(),
             name: "products".to_string(),

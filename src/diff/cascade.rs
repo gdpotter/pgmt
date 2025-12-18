@@ -90,6 +90,8 @@ fn synthesize_drop_create(
                 schema: view.schema.clone(),
                 name: view.name.clone(),
                 definition: view.definition.clone(),
+                security_invoker: view.security_invoker,
+                security_barrier: view.security_barrier,
             });
 
             Some((drop, create))

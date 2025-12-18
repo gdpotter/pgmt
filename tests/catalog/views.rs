@@ -511,3 +511,64 @@ async fn test_fetch_view_with_array_type_cast_dependency() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_fetch_view_with_security_invoker() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE TABLE users (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .await;
+
+        db.execute(
+            "CREATE VIEW secure_users WITH (security_invoker = true) AS
+             SELECT id, name FROM users",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+
+        assert_eq!(view.schema, "public");
+        assert_eq!(view.name, "secure_users");
+        assert!(view.security_invoker);
+        assert!(!view.security_barrier);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_view_with_security_barrier() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE TABLE sensitive_data (
+                id SERIAL PRIMARY KEY,
+                user_id INT,
+                data TEXT
+            )",
+        )
+        .await;
+
+        db.execute(
+            "CREATE VIEW user_data WITH (security_barrier = true) AS
+             SELECT id, data FROM sensitive_data WHERE user_id = current_setting('app.user_id')::INT",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+
+        assert_eq!(view.schema, "public");
+        assert_eq!(view.name, "user_data");
+        assert!(!view.security_invoker);
+        assert!(view.security_barrier);
+    })
+    .await;
+}

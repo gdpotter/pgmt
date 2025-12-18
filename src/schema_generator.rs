@@ -419,6 +419,7 @@ impl SchemaGenerator {
             ViewOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
             ViewOperation::Drop { schema, name } => (schema.clone(), name.clone()),
             ViewOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
+            ViewOperation::SetOption { schema, name, .. } => (schema.clone(), name.clone()),
             ViewOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
                     (target.schema.clone(), target.name.clone())

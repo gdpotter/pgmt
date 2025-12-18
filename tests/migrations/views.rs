@@ -28,7 +28,7 @@ async fn test_create_view_migration() -> Result<()> {
             }).expect("Should have CreateView step");
 
             match create_step {
-                MigrationStep::View(ViewOperation::Create { schema, name, definition }) => {
+                MigrationStep::View(ViewOperation::Create { schema, name, definition, .. }) => {
                     assert_eq!(schema, "test_schema");
                     assert_eq!(name, "active_users");
                     assert!(definition.contains("SELECT"));
@@ -702,4 +702,124 @@ async fn test_drop_view_comment_migration() -> Result<()> {
             Ok(())
         }).await
     }).await
+}
+
+#[tokio::test]
+async fn test_enable_security_invoker() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)",
+        ],
+        &["CREATE VIEW user_view AS SELECT id, name FROM users"],
+        &["CREATE VIEW user_view WITH (security_invoker = true) AS SELECT id, name FROM users"],
+        |steps, _final_catalog| {
+            assert!(!steps.is_empty());
+
+            // Should have a SetOption step for security_invoker
+            let set_option_step = steps.iter().find(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::SetOption { option, enabled, .. })
+                    if matches!(option, pgmt::diff::operations::ViewOption::SecurityInvoker) && *enabled)
+            }).expect("Should have SetOption step for security_invoker");
+
+            let sql = set_option_step.to_sql();
+            assert!(sql[0].sql.contains("ALTER VIEW"));
+            assert!(sql[0].sql.contains("SET (security_invoker = on)"));
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_disable_security_invoker() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)",
+        ],
+        &["CREATE VIEW user_view WITH (security_invoker = true) AS SELECT id, name FROM users"],
+        &["CREATE VIEW user_view AS SELECT id, name FROM users"],
+        |steps, _final_catalog| {
+            assert!(!steps.is_empty());
+
+            // Should have a SetOption step to disable security_invoker
+            let set_option_step = steps.iter().find(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::SetOption { option, enabled, .. })
+                    if matches!(option, pgmt::diff::operations::ViewOption::SecurityInvoker) && !*enabled)
+            }).expect("Should have SetOption step to disable security_invoker");
+
+            let sql = set_option_step.to_sql();
+            assert!(sql[0].sql.contains("ALTER VIEW"));
+            assert!(sql[0].sql.contains("RESET (security_invoker)"));
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_enable_security_barrier() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE TABLE sensitive_data (id SERIAL PRIMARY KEY, user_id INT, data TEXT)",
+        ],
+        &["CREATE VIEW user_data AS SELECT id, data FROM sensitive_data WHERE user_id = current_setting('app.user_id')::INT"],
+        &["CREATE VIEW user_data WITH (security_barrier = true) AS SELECT id, data FROM sensitive_data WHERE user_id = current_setting('app.user_id')::INT"],
+        |steps, _final_catalog| {
+            assert!(!steps.is_empty());
+
+            // Should have a SetOption step for security_barrier
+            let set_option_step = steps.iter().find(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::SetOption { option, enabled, .. })
+                    if matches!(option, pgmt::diff::operations::ViewOption::SecurityBarrier) && *enabled)
+            }).expect("Should have SetOption step for security_barrier");
+
+            let sql = set_option_step.to_sql();
+            assert!(sql[0].sql.contains("ALTER VIEW"));
+            assert!(sql[0].sql.contains("SET (security_barrier = on)"));
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_disable_security_barrier() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE TABLE sensitive_data (id SERIAL PRIMARY KEY, user_id INT, data TEXT)",
+        ],
+        &["CREATE VIEW user_data WITH (security_barrier = true) AS SELECT id, data FROM sensitive_data WHERE user_id = current_setting('app.user_id')::INT"],
+        &["CREATE VIEW user_data AS SELECT id, data FROM sensitive_data WHERE user_id = current_setting('app.user_id')::INT"],
+        |steps, _final_catalog| {
+            assert!(!steps.is_empty());
+
+            // Should have a SetOption step to disable security_barrier
+            let set_option_step = steps.iter().find(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::SetOption { option, enabled, .. })
+                    if matches!(option, pgmt::diff::operations::ViewOption::SecurityBarrier) && !*enabled)
+            }).expect("Should have SetOption step to disable security_barrier");
+
+            let sql = set_option_step.to_sql();
+            assert!(sql[0].sql.contains("ALTER VIEW"));
+            assert!(sql[0].sql.contains("RESET (security_barrier)"));
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
 }

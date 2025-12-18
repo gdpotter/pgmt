@@ -11,15 +11,34 @@ impl SqlRenderer for ViewOperation {
                 schema,
                 name,
                 definition,
-            } => vec![RenderedSql {
-                sql: format!(
-                    "CREATE VIEW {}.{} AS\n{};",
-                    quote_ident(schema),
-                    quote_ident(name),
-                    definition.trim_end_matches(';'),
-                ),
-                safety: Safety::Safe,
-            }],
+                security_invoker,
+                security_barrier,
+            } => {
+                let mut with_options = Vec::new();
+                if *security_invoker {
+                    with_options.push("security_invoker = true");
+                }
+                if *security_barrier {
+                    with_options.push("security_barrier = true");
+                }
+
+                let with_clause = if !with_options.is_empty() {
+                    format!(" WITH ({})", with_options.join(", "))
+                } else {
+                    String::new()
+                };
+
+                vec![RenderedSql {
+                    sql: format!(
+                        "CREATE VIEW {}.{}{} AS\n{};",
+                        quote_ident(schema),
+                        quote_ident(name),
+                        with_clause,
+                        definition.trim_end_matches(';'),
+                    ),
+                    safety: Safety::Safe,
+                }]
+            }
             ViewOperation::Drop { schema, name } => vec![RenderedSql {
                 sql: format!("DROP VIEW {}.{};", quote_ident(schema), quote_ident(name)),
                 safety: Safety::Safe,
@@ -37,6 +56,32 @@ impl SqlRenderer for ViewOperation {
                 ),
                 safety: Safety::Safe,
             }],
+            ViewOperation::SetOption {
+                schema,
+                name,
+                option,
+                enabled,
+            } => {
+                let sql = if *enabled {
+                    format!(
+                        "ALTER VIEW {}.{} SET ({} = on);",
+                        quote_ident(schema),
+                        quote_ident(name),
+                        option.as_str()
+                    )
+                } else {
+                    format!(
+                        "ALTER VIEW {}.{} RESET ({});",
+                        quote_ident(schema),
+                        quote_ident(name),
+                        option.as_str()
+                    )
+                };
+                vec![RenderedSql {
+                    sql,
+                    safety: Safety::Safe,
+                }]
+            }
             ViewOperation::Comment(op) => op.to_sql(),
         }
     }
@@ -45,7 +90,8 @@ impl SqlRenderer for ViewOperation {
         match self {
             ViewOperation::Create { schema, name, .. }
             | ViewOperation::Drop { schema, name }
-            | ViewOperation::Replace { schema, name, .. } => DbObjectId::View {
+            | ViewOperation::Replace { schema, name, .. }
+            | ViewOperation::SetOption { schema, name, .. } => DbObjectId::View {
                 schema: schema.clone(),
                 name: name.clone(),
             },
@@ -64,6 +110,8 @@ mod tests {
             schema: "public".to_string(),
             name: "active_users".to_string(),
             definition: "SELECT * FROM users WHERE active = true".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
         let rendered = op.to_sql();
         assert_eq!(rendered.len(), 1);
@@ -80,6 +128,8 @@ mod tests {
             schema: "app".to_string(),
             name: "v".to_string(),
             definition: "SELECT 1;".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
         let rendered = op.to_sql();
         assert_eq!(rendered[0].sql, "CREATE VIEW \"app\".\"v\" AS\nSELECT 1;");
@@ -119,6 +169,8 @@ mod tests {
             schema: "s".to_string(),
             name: "v".to_string(),
             definition: "SELECT 1".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
         let drop = ViewOperation::Drop {
             schema: "s".to_string(),
@@ -157,6 +209,8 @@ mod tests {
             schema: "app".to_string(),
             name: "myview".to_string(),
             definition: "SELECT 1".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
         assert_eq!(
             op.db_object_id(),
