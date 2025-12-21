@@ -543,3 +543,126 @@ async fn test_policy_ordering_after_table() -> Result<()> {
         .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_create_table_with_rls_enabled() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: empty
+            &[],
+            // Initial DB: no table
+            &[],
+            // Target DB: table with RLS enabled
+            &[
+                "CREATE TABLE secure_users (id SERIAL PRIMARY KEY, name TEXT)",
+                "ALTER TABLE secure_users ENABLE ROW LEVEL SECURITY",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                // Should have CreateTable step
+                let create_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Create { name, .. })
+                        if name == "secure_users")
+                });
+                assert!(create_step.is_some(), "Should have CreateTable step");
+
+                // Should have EnableRls step
+                let enable_rls_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { name, actions, .. })
+                        if name == "secure_users" && actions.iter().any(|a| matches!(a, ColumnAction::EnableRls)))
+                });
+                assert!(enable_rls_step.is_some(), "Should have EnableRls step");
+
+                // Verify SQL rendering
+                let sql = enable_rls_step.unwrap().to_sql();
+                assert!(
+                    sql.iter()
+                        .any(|s| s.sql.contains("ENABLE ROW LEVEL SECURITY"))
+                );
+
+                // Verify final state
+                let table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "secure_users")
+                    .unwrap();
+                assert!(table.rls_enabled, "RLS should be enabled");
+                assert!(!table.rls_forced, "RLS should not be forced");
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_table_with_rls_forced() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: empty
+            &[],
+            // Initial DB: no table
+            &[],
+            // Target DB: table with RLS enabled and forced
+            &[
+                "CREATE TABLE admin_data (id SERIAL PRIMARY KEY, value TEXT)",
+                "ALTER TABLE admin_data ENABLE ROW LEVEL SECURITY",
+                "ALTER TABLE admin_data FORCE ROW LEVEL SECURITY",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                // Should have CreateTable step
+                let create_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Create { name, .. })
+                        if name == "admin_data")
+                });
+                assert!(create_step.is_some(), "Should have CreateTable step");
+
+                // Should have EnableRls step
+                let enable_rls_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { name, actions, .. })
+                        if name == "admin_data" && actions.iter().any(|a| matches!(a, ColumnAction::EnableRls)))
+                });
+                assert!(enable_rls_step.is_some(), "Should have EnableRls step");
+
+                // Should have ForceRls step
+                let force_rls_step = steps.iter().find(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { name, actions, .. })
+                        if name == "admin_data" && actions.iter().any(|a| matches!(a, ColumnAction::ForceRls)))
+                });
+                assert!(force_rls_step.is_some(), "Should have ForceRls step");
+
+                // Verify SQL rendering for EnableRls
+                let enable_sql = enable_rls_step.unwrap().to_sql();
+                assert!(
+                    enable_sql
+                        .iter()
+                        .any(|s| s.sql.contains("ENABLE ROW LEVEL SECURITY"))
+                );
+
+                // Verify SQL rendering for ForceRls
+                let force_sql = force_rls_step.unwrap().to_sql();
+                assert!(
+                    force_sql
+                        .iter()
+                        .any(|s| s.sql.contains("FORCE ROW LEVEL SECURITY"))
+                );
+
+                // Verify final state
+                let table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "admin_data")
+                    .unwrap();
+                assert!(table.rls_enabled, "RLS should be enabled");
+                assert!(table.rls_forced, "RLS should be forced");
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}

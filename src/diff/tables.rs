@@ -60,6 +60,23 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                 )));
             }
 
+            // Add RLS settings if enabled
+            if n.rls_enabled {
+                steps.push(MigrationStep::Table(TableOperation::Alter {
+                    schema: n.schema.clone(),
+                    name: n.name.clone(),
+                    actions: vec![ColumnAction::EnableRls],
+                }));
+            }
+
+            if n.rls_forced {
+                steps.push(MigrationStep::Table(TableOperation::Alter {
+                    schema: n.schema.clone(),
+                    name: n.name.clone(),
+                    actions: vec![ColumnAction::ForceRls],
+                }));
+            }
+
             steps
         }
         (Some(o), None) => {
