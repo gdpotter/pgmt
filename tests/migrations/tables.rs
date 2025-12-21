@@ -1,6 +1,6 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
-use pgmt::catalog::id::DependsOn;
+use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::diff::operations::{
     ColumnAction, CommentOperation, ConstraintOperation, MigrationStep, TableOperation,
     TypeOperation, ViewOperation,
@@ -793,6 +793,70 @@ async fn test_drop_primary_key_comment_migration() -> Result<()> {
                 assert!(created_table.primary_key.is_some());
                 let pk = created_table.primary_key.as_ref().unwrap();
                 assert_eq!(pk.comment, None);
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_primary_key_comment_ordering() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: empty
+            &[],
+            // Initial DB only: nothing
+            &[],
+            // Target DB only: table with PK and comment
+            &[
+                "CREATE TABLE work_orders (id SERIAL PRIMARY KEY, description TEXT)",
+                "COMMENT ON CONSTRAINT work_orders_pkey ON work_orders IS '@omit'",
+            ],
+            // Verification closure
+            |steps, final_catalog| {
+                // Find the CREATE TABLE step
+                let table_step_index = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Table(TableOperation::Create { .. }))
+                            && matches!(s.id(), DbObjectId::Table { name, .. } if name == "work_orders")
+                    })
+                    .expect("Should have CREATE TABLE step");
+
+                // Find the COMMENT step
+                let comment_step_index = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                        )
+                    })
+                    .expect("Should have primary key comment step");
+
+                // Verify CREATE TABLE comes before COMMENT
+                assert!(
+                    table_step_index < comment_step_index,
+                    "CREATE TABLE (step {}) must come before COMMENT ON CONSTRAINT (step {})",
+                    table_step_index,
+                    comment_step_index
+                );
+
+                // Verify final state
+                let created_table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "work_orders")
+                    .expect("Table should exist");
+
+                assert!(created_table.primary_key.is_some());
+                let pk = created_table.primary_key.as_ref().unwrap();
+                assert_eq!(pk.comment, Some("@omit".to_string()));
 
                 Ok(())
             },

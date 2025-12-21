@@ -206,6 +206,7 @@ fn order_steps_by_dependencies(
         let is_drop = step.operation_kind() == OperationKind::Drop;
 
         if let DbObjectId::Comment { object_id } = &step.id() {
+            // Try exact match on the inner object
             if let Some(indices) = id_to_indices.get(object_id.as_ref()) {
                 for &dep_i in indices {
                     let from = node_indices[dep_i];
@@ -213,6 +214,23 @@ fn order_steps_by_dependencies(
                     graph.add_edge(from, to, ());
                 }
             }
+
+            // For constraint comments, also depend on the parent table
+            // (since PK constraints can be inline in CREATE TABLE)
+            if let DbObjectId::Constraint { schema, table, .. } = object_id.as_ref() {
+                let table_id = DbObjectId::Table {
+                    schema: schema.clone(),
+                    name: table.clone(),
+                };
+                if let Some(indices) = id_to_indices.get(&table_id) {
+                    for &dep_i in indices {
+                        let from = node_indices[dep_i];
+                        let to = node_indices[i];
+                        graph.add_edge(from, to, ());
+                    }
+                }
+            }
+
             continue;
         }
 
