@@ -56,7 +56,7 @@ pgmt migrate apply --target-url $PROD_DATABASE_URL
 ## PostgreSQL Support
 
 **Core Objects:** Tables, Views, Functions, Triggers, Indexes, Constraints, Custom Types, Sequences, Schemas, Extensions
-**Advanced Features:** Grants & Privileges, Comments, Complex Constraints, All Index Types, Function Overloading
+**Advanced Features:** Grants & Privileges, Row-Level Security, Comments, Complex Constraints, All Index Types, Function Overloading
 **PostgreSQL-Specific:** ENUMs, Arrays, JSON/JSONB, Exclusion Constraints, Partial Indexes, Expression Indexes
 
 See the [complete feature matrix](https://gdpotter.github.io/pgmt/docs/reference/supported-features) for details.
@@ -69,7 +69,7 @@ See the [Roles & Permissions Guide](https://gdpotter.github.io/pgmt/docs/guides/
 
 ## Roadmap
 
-**Near-term:** Row-level security, advanced function features, smart rename detection
+**Near-term:** Advanced function features, smart rename detection, materialized views
 **Long-term:** Schema visualization, migration templates
 
 See the [complete roadmap](https://gdpotter.github.io/pgmt/docs/project/roadmap).

@@ -15,7 +15,7 @@ pgmt supports most PostgreSQL schema objects: tables, views, functions, triggers
 
 These are areas being explored based on community feedback:
 
-- **Additional PostgreSQL objects** - Materialized views, partitioned tables, row-level security policies
+- **Additional PostgreSQL objects** - Materialized views, partitioned tables
 - **Developer experience** - Improved error messages, performance optimizations for large schemas
 - **Distribution** - Native platform packages (Homebrew, APT, etc.)
 - **Migration tooling** - Enhanced conflict resolution, rename detection

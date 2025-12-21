@@ -72,6 +72,37 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA analytics
     GRANT SELECT ON TABLES TO analytics_team;
 ```
 
+## Row-Level Security
+
+pgmt tracks RLS policies and table-level RLS settings. Define them in your schema files:
+
+```sql
+-- schema/tables/documents.sql
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    owner_id INTEGER NOT NULL,
+    content TEXT
+);
+
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY documents_owner_access
+    ON documents
+    FOR ALL
+    USING (owner_id = current_user_id());
+```
+
+**What pgmt tracks:**
+
+- `ENABLE/DISABLE ROW LEVEL SECURITY` on tables
+- `FORCE/NO FORCE ROW LEVEL SECURITY` on tables
+- CREATE/DROP/ALTER POLICY statements
+- Policy comments
+
+**File organization:** Put policies in the same file as their table, or in a separate `policies/` directory.
+
+For RLS concepts (USING vs WITH CHECK, PERMISSIVE vs RESTRICTIVE), see the [PostgreSQL RLS documentation](https://www.postgresql.org/docs/current/ddl-rowsecurity.html).
+
 ## Troubleshooting
 
 **"role does not exist" in shadow database:**

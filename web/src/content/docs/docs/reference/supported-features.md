@@ -41,6 +41,13 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 - ❌ **Materialized views** - Not yet supported (CREATE MATERIALIZED VIEW)
 - ❌ **Materialized view refresh** - Planned for future releases
 
+#### View Security Options
+
+- ✅ **security_barrier** - Prevent predicate pushdown for security-sensitive views
+- ✅ **security_invoker** - PostgreSQL 15+: Execute view with invoker's permissions
+- ✅ **Security option tracking** - Detects changes to view security settings
+- ✅ **ALTER VIEW SET/RESET** - Modify security options on existing views
+
 ### Custom Types
 
 #### ENUM Types
@@ -148,7 +155,7 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 
 - ✅ **Single-column primary keys** - Standard primary key support
 - ✅ **Compound primary keys** - Multi-column primary keys
-- ✅ **Primary key comments** - Managed via table catalog
+- ✅ **Primary key comments** - SET/DROP COMMENT ON CONSTRAINT support
 
 #### Unique Constraints
 
@@ -266,8 +273,26 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 
 ### Row-Level Security
 
-- ❌ **RLS policies** - Planned for future releases
-- ❌ **ENABLE/DISABLE RLS** - Planned for future releases
+#### RLS Policies
+
+- ✅ **CREATE POLICY** - Full policy creation support
+- ✅ **DROP POLICY** - Safe policy removal
+- ✅ **ALTER POLICY** - Modify existing policies
+- ✅ **Command types** - SELECT, INSERT, UPDATE, DELETE, ALL
+- ✅ **Policy types** - PERMISSIVE and RESTRICTIVE
+- ✅ **USING expressions** - Row visibility conditions
+- ✅ **WITH CHECK expressions** - Row modification conditions
+- ✅ **Role targeting** - Policies for specific roles or PUBLIC
+- ✅ **Policy comments** - SET/DROP COMMENT ON POLICY
+- ✅ **Dependency tracking** - Policies depend on their tables
+
+#### Table RLS Settings
+
+- ✅ **ENABLE ROW LEVEL SECURITY** - Enable RLS on tables
+- ✅ **DISABLE ROW LEVEL SECURITY** - Disable RLS on tables
+- ✅ **FORCE ROW LEVEL SECURITY** - Force RLS even for table owners
+- ✅ **NO FORCE ROW LEVEL SECURITY** - Disable forced RLS
+- ✅ **RLS state tracking** - Detects changes to RLS settings
 
 ## Migration Features
 
