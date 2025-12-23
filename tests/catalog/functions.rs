@@ -791,3 +791,117 @@ async fn test_fetch_function_with_custom_type_array_parameter() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_function_returns_table_type() {
+    with_test_db(async |db| {
+        // Create a table
+        db.execute(
+            "CREATE TABLE policies (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL
+             )",
+        )
+        .await;
+
+        // Create a function that returns the table type
+        db.execute(
+            "CREATE OR REPLACE FUNCTION get_policy(p_id INTEGER)
+             RETURNS policies AS $$
+             BEGIN
+                 RETURN (SELECT p FROM policies p WHERE p.id = p_id);
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "get_policy");
+        assert_eq!(func.return_type, Some("policies".to_string()));
+
+        assert!(
+            func.depends_on().contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "policies".to_string()
+            }),
+            "Function should depend on Table 'policies', not Type. Got: {:?}",
+            func.depends_on()
+        );
+
+        assert!(
+            !func.depends_on().contains(&DbObjectId::Type {
+                schema: "public".to_string(),
+                name: "policies".to_string()
+            }),
+            "Function should NOT depend on Type 'policies'. Got: {:?}",
+            func.depends_on()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_function_returns_view_type() {
+    with_test_db(async |db| {
+        // Create a table and view
+        db.execute(
+            "CREATE TABLE items (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL
+             )",
+        )
+        .await;
+
+        db.execute(
+            "CREATE VIEW active_items AS
+             SELECT * FROM items WHERE id > 0",
+        )
+        .await;
+
+        // Create a function that returns the view type
+        db.execute(
+            "CREATE OR REPLACE FUNCTION get_active_item(p_id INTEGER)
+             RETURNS active_items AS $$
+             BEGIN
+                 RETURN (SELECT v FROM active_items v WHERE v.id = p_id);
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "get_active_item");
+        assert_eq!(func.return_type, Some("active_items".to_string()));
+
+        // Critical: Should depend on the View, NOT a Type
+        assert!(
+            func.depends_on().contains(&DbObjectId::View {
+                schema: "public".to_string(),
+                name: "active_items".to_string()
+            }),
+            "Function should depend on View 'active_items', not Type. Got: {:?}",
+            func.depends_on()
+        );
+
+        // Should NOT depend on a Type with the same name
+        assert!(
+            !func.depends_on().contains(&DbObjectId::Type {
+                schema: "public".to_string(),
+                name: "active_items".to_string()
+            }),
+            "Function should NOT depend on Type 'active_items'. Got: {:?}",
+            func.depends_on()
+        );
+    })
+    .await;
+}

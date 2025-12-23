@@ -255,6 +255,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                     attr.type_schema.clone(),
                     attr.raw_type_name.clone(),
                     typtype.clone(),
+                    None, // relkind not available for composite type attributes (rare to reference table types)
                     *is_extension,
                     extension_name.clone(),
                 );

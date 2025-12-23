@@ -1,0 +1,134 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS schema,\n            p.proname AS name,\n            p.oid AS \"func_oid!\",\n            p.prokind::text AS \"kind!\",\n            pg_catalog.pg_get_function_result(p.oid) AS return_type,\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"arguments!\",\n            pg_catalog.pg_get_functiondef(p.oid) AS \"definition!\",\n            l.lanname AS language,\n            p.provolatile::text AS \"volatility!\",\n            p.proisstrict AS is_strict,\n            p.prosecdef AS security_definer,\n            p.proretset AS returns_set,\n            p.pronargs AS num_args,\n            -- Resolve array element type for return type\n            CASE\n                WHEN ret_type.typelem != 0 THEN elem_ret.typname\n                ELSE ret_type.typname\n            END AS \"return_type_name?\",\n            CASE\n                WHEN ret_type.typelem != 0 THEN elem_ret_ns.nspname\n                ELSE ret_ns.nspname\n            END AS \"return_type_schema?\",\n            -- Get typtype for return type to distinguish domains ('d') from other custom types\n            CASE\n                WHEN ret_type.typelem != 0 THEN elem_ret.typtype::text\n                ELSE ret_type.typtype::text\n            END AS \"return_type_typtype?\",\n            -- Get relkind for composite types to distinguish table/view from explicit composite\n            CASE\n                WHEN ret_type.typelem != 0 THEN elem_ret_rel.relkind::text\n                ELSE ret_rel.relkind::text\n            END AS \"return_type_relkind?\",\n            d.description AS \"comment?\",\n            -- Check if return type (or element type for arrays) is from an extension\n            ext_ret_types.extname IS NOT NULL AS \"is_return_type_extension!: bool\",\n            ext_ret_types.extname AS \"return_type_extension_name?\"\n        FROM pg_proc p\n        JOIN pg_namespace n ON p.pronamespace = n.oid\n        JOIN pg_language l ON p.prolang = l.oid\n        LEFT JOIN pg_type ret_type ON p.prorettype = ret_type.oid\n        LEFT JOIN pg_namespace ret_ns ON ret_type.typnamespace = ret_ns.oid\n        -- Element type for array return types\n        LEFT JOIN pg_type elem_ret ON ret_type.typelem = elem_ret.oid AND ret_type.typelem != 0\n        LEFT JOIN pg_namespace elem_ret_ns ON elem_ret.typnamespace = elem_ret_ns.oid\n        -- Get relkind for composite types (to distinguish table/view from explicit composite)\n        LEFT JOIN pg_class ret_rel ON ret_type.typrelid = ret_rel.oid AND ret_type.typrelid != 0\n        LEFT JOIN pg_class elem_ret_rel ON elem_ret.typrelid = elem_ret_rel.oid AND elem_ret.typrelid != 0\n        LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0\n        -- Extension return type lookup: compute once as derived table, then hash join\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_ret_types ON ext_ret_types.type_oid = COALESCE(NULLIF(ret_type.typelem, 0::oid), ret_type.oid)\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        AND p.prokind != 'a'  -- Exclude aggregates, they're handled separately\n        -- Exclude functions that belong to extensions\n        AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = p.oid\n            AND dep.deptype = 'e'\n        )\n        ORDER BY n.nspname, p.proname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "func_oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "return_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "arguments!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "definition!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "language",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 8,
+        "name": "volatility!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_strict",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "security_definer",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "returns_set",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "num_args",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 13,
+        "name": "return_type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 14,
+        "name": "return_type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 15,
+        "name": "return_type_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "return_type_relkind?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "comment?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
+        "name": "is_return_type_extension!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 19,
+        "name": "return_type_extension_name?",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "ab099780ee07569febdda031f631fc6ceea4342cc3d00c7754e3342c420f4a11"
+}

@@ -69,11 +69,14 @@ impl DependencyBuilder {
         }
     }
 
-    /// Add a type dependency with proper distinction between domains and other custom types.
+    /// Add a type dependency with proper distinction between domains, tables, views, and custom types.
     ///
-    /// This method uses `typtype` from pg_type to correctly categorize:
+    /// This method uses `typtype` and `relkind` from pg_type/pg_class to correctly categorize:
     /// - 'd' = domain → `DbObjectId::Domain`
-    /// - 'e' = enum, 'c' = composite, 'r' = range → `DbObjectId::Type`
+    /// - 'c' + relkind 'r'/'p' = table composite type → `DbObjectId::Table`
+    /// - 'c' + relkind 'v'/'m' = view composite type → `DbObjectId::View`
+    /// - 'c' + no relkind = explicit composite → `DbObjectId::Type`
+    /// - 'e' = enum, 'r' = range, etc. → `DbObjectId::Type`
     ///
     /// Use this method when you have access to `typtype` information (e.g., for function
     /// parameters and return types). Falls back to `DbObjectId::Type` if typtype is unknown.
@@ -82,6 +85,7 @@ impl DependencyBuilder {
         type_schema: Option<String>,
         type_name: Option<String>,
         typtype: Option<String>,
+        relkind: Option<String>,
         is_extension: bool,
         extension_name: Option<String>,
     ) {
@@ -94,7 +98,22 @@ impl DependencyBuilder {
         {
             if typtype.as_deref() == Some("d") {
                 self.deps.push(DbObjectId::Domain { schema, name });
+            } else if typtype.as_deref() == Some("c") {
+                // Composite type - check if from table/view
+                match relkind.as_deref() {
+                    Some("r") | Some("p") => {
+                        self.deps.push(DbObjectId::Table { schema, name });
+                    }
+                    Some("v") | Some("m") => {
+                        self.deps.push(DbObjectId::View { schema, name });
+                    }
+                    _ => {
+                        // Explicit composite type (CREATE TYPE ... AS)
+                        self.deps.push(DbObjectId::Type { schema, name });
+                    }
+                }
             } else {
+                // Enum, range, or other custom types
                 self.deps.push(DbObjectId::Type { schema, name });
             }
         }
@@ -241,6 +260,7 @@ mod tests {
             Some("app".to_string()),
             Some("positive_int".to_string()),
             Some("d".to_string()), // domain
+            None,                  // relkind doesn't matter for domains
             false,
             None,
         );
@@ -263,6 +283,7 @@ mod tests {
             Some("app".to_string()),
             Some("status".to_string()),
             Some("e".to_string()), // enum
+            None,                  // no relkind for enum types
             false,
             None,
         );
@@ -285,6 +306,7 @@ mod tests {
             Some("public".to_string()),
             Some("citext".to_string()),
             Some("d".to_string()), // typtype doesn't matter when is_extension=true
+            None,                  // relkind doesn't matter for extensions
             true,
             Some("citext".to_string()),
         );
@@ -295,6 +317,75 @@ mod tests {
             deps[1],
             DbObjectId::Extension {
                 name: "citext".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_add_type_dependency_with_table_composite() {
+        let mut builder = DependencyBuilder::new("test_schema".to_string());
+        builder.add_type_dependency(
+            Some("app".to_string()),
+            Some("policies".to_string()),
+            Some("c".to_string()), // composite
+            Some("r".to_string()), // table
+            false,
+            None,
+        );
+
+        let deps = builder.build();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(
+            deps[1],
+            DbObjectId::Table {
+                schema: "app".to_string(),
+                name: "policies".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_add_type_dependency_with_view_composite() {
+        let mut builder = DependencyBuilder::new("test_schema".to_string());
+        builder.add_type_dependency(
+            Some("app".to_string()),
+            Some("policy_view".to_string()),
+            Some("c".to_string()), // composite
+            Some("v".to_string()), // view
+            false,
+            None,
+        );
+
+        let deps = builder.build();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(
+            deps[1],
+            DbObjectId::View {
+                schema: "app".to_string(),
+                name: "policy_view".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_add_type_dependency_with_explicit_composite() {
+        let mut builder = DependencyBuilder::new("test_schema".to_string());
+        builder.add_type_dependency(
+            Some("app".to_string()),
+            Some("address".to_string()),
+            Some("c".to_string()), // composite
+            None,                  // no relkind = explicit CREATE TYPE ... AS
+            false,
+            None,
+        );
+
+        let deps = builder.build();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(
+            deps[1],
+            DbObjectId::Type {
+                schema: "app".to_string(),
+                name: "address".to_string()
             }
         );
     }

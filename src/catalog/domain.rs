@@ -167,6 +167,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
             row.base_type_schema.clone(),
             row.base_type_name.clone(),
             row.base_type_typtype.clone(),
+            None, // relkind not available for domain base types (rarely table/view types)
             row.is_base_type_extension,
             row.base_type_extension_name.clone(),
         );

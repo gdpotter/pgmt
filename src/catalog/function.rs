@@ -77,6 +77,7 @@ struct FunctionDependencyRow {
     typ_name: Option<String>,
     typ_schema: Option<String>,
     typ_typtype: Option<String>,
+    typ_relkind: Option<String>,
     typ_extension_name: Option<String>,
     proc_name: Option<String>,
     proc_schema: Option<String>,
@@ -114,6 +115,10 @@ async fn fetch_all_function_dependencies(
                 WHEN typ.typelem != 0 THEN elem_typ.typtype::text
                 ELSE typ.typtype::text
             END AS "typ_typtype?",
+            CASE
+                WHEN typ.typelem != 0 THEN elem_typ_rel.relkind::text
+                ELSE typ_rel.relkind::text
+            END AS "typ_relkind?",
             ext_dep_types.extname AS "typ_extension_name?",
 
             -- Function reference
@@ -144,6 +149,9 @@ async fn fetch_all_function_dependencies(
         -- Element type for array types (typelem != 0 means it's an array type)
         LEFT JOIN pg_type elem_typ ON typ.typelem = elem_typ.oid AND typ.typelem != 0
         LEFT JOIN pg_namespace elem_typ_n ON elem_typ.typnamespace = elem_typ_n.oid
+        -- Get relkind for composite types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class typ_rel ON typ.typrelid = typ_rel.oid AND typ.typrelid != 0
+        LEFT JOIN pg_class elem_typ_rel ON elem_typ.typrelid = elem_typ_rel.oid AND elem_typ.typrelid != 0
         -- Extension type lookup for pg_depend type references
         LEFT JOIN (
             SELECT DISTINCT dep.objid AS type_oid, e.extname
@@ -198,6 +206,7 @@ async fn fetch_all_function_dependencies(
                 typ_name: row.typ_name,
                 typ_schema: row.typ_schema,
                 typ_typtype: row.typ_typtype,
+                typ_relkind: row.typ_relkind,
                 typ_extension_name: row.typ_extension_name,
                 proc_name: row.proc_name,
                 proc_schema: row.proc_schema,
@@ -266,7 +275,7 @@ fn populate_function_dependencies(
             }
 
             // Type dependency (beyond what DependencyBuilder already added)
-            // Check for extension types first, then use typtype to distinguish domains from other types
+            // Check for extension types first, then use typtype and relkind to distinguish between types
             if let (Some(typ_schema), Some(typ_name)) = (&dep.typ_schema, &dep.typ_name) {
                 if !is_system_schema(typ_schema) {
                     let dep_id = if let Some(ext_name) = &dep.typ_extension_name {
@@ -278,6 +287,22 @@ fn populate_function_dependencies(
                         DbObjectId::Domain {
                             schema: typ_schema.clone(),
                             name: typ_name.clone(),
+                        }
+                    } else if dep.typ_typtype.as_deref() == Some("c") {
+                        // Composite type - check if from table/view
+                        match dep.typ_relkind.as_deref() {
+                            Some("r") | Some("p") => DbObjectId::Table {
+                                schema: typ_schema.clone(),
+                                name: typ_name.clone(),
+                            },
+                            Some("v") | Some("m") => DbObjectId::View {
+                                schema: typ_schema.clone(),
+                                name: typ_name.clone(),
+                            },
+                            _ => DbObjectId::Type {
+                                schema: typ_schema.clone(),
+                                name: typ_name.clone(),
+                            },
                         }
                     } else {
                         DbObjectId::Type {
@@ -357,6 +382,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
                 WHEN ret_type.typelem != 0 THEN elem_ret.typtype::text
                 ELSE ret_type.typtype::text
             END AS "return_type_typtype?",
+            -- Get relkind for composite types to distinguish table/view from explicit composite
+            CASE
+                WHEN ret_type.typelem != 0 THEN elem_ret_rel.relkind::text
+                ELSE ret_rel.relkind::text
+            END AS "return_type_relkind?",
             d.description AS "comment?",
             -- Check if return type (or element type for arrays) is from an extension
             ext_ret_types.extname IS NOT NULL AS "is_return_type_extension!: bool",
@@ -369,6 +399,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         -- Element type for array return types
         LEFT JOIN pg_type elem_ret ON ret_type.typelem = elem_ret.oid AND ret_type.typelem != 0
         LEFT JOIN pg_namespace elem_ret_ns ON elem_ret.typnamespace = elem_ret_ns.oid
+        -- Get relkind for composite types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class ret_rel ON ret_type.typrelid = ret_rel.oid AND ret_type.typrelid != 0
+        LEFT JOIN pg_class elem_ret_rel ON elem_ret.typrelid = elem_ret_rel.oid AND elem_ret.typrelid != 0
         LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0
         -- Extension return type lookup: compute once as derived table, then hash join
         LEFT JOIN (
@@ -411,6 +444,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
                 WHEN t.typelem != 0 THEN elem_t.typtype::text
                 ELSE t.typtype::text
             END AS "typtype!",
+            -- Get relkind for composite types to distinguish table/view from explicit composite
+            CASE
+                WHEN t.typelem != 0 THEN elem_param_rel.relkind::text
+                ELSE param_rel.relkind::text
+            END AS "param_relkind?",
             pg_catalog.format_type(t.oid, NULL) AS "formatted_type!",
             COALESCE(p.proargnames[param_num], '') AS "param_name!",
             p.proargmodes[param_num - 1] AS "param_mode",
@@ -425,6 +463,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         -- Element type for array parameters
         LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0
         LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid
+        -- Get relkind for composite types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class param_rel ON t.typrelid = param_rel.oid AND t.typrelid != 0
+        LEFT JOIN pg_class elem_param_rel ON elem_t.typrelid = elem_param_rel.oid AND elem_t.typrelid != 0
         -- Extension type lookup: compute once as derived table, then hash join
         LEFT JOIN (
             SELECT DISTINCT dep.objid AS type_oid, e.extname
@@ -447,8 +488,16 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
     .await?;
 
     // Group parameters by function OID (with extension info for dependency building)
-    // Tuple: (FunctionParam, type_schema, type_name, typtype, is_extension_type, extension_name)
-    type ParamWithExtInfo = (FunctionParam, String, String, String, bool, Option<String>);
+    // Tuple: (FunctionParam, type_schema, type_name, typtype, relkind, is_extension_type, extension_name)
+    type ParamWithExtInfo = (
+        FunctionParam,
+        String,
+        String,
+        String,
+        Option<String>,
+        bool,
+        Option<String>,
+    );
     let mut params_by_function: HashMap<Oid, Vec<ParamWithExtInfo>> = HashMap::new();
     for param in param_rows {
         let param_name = if param.param_name.is_empty() {
@@ -480,6 +529,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
             param.type_schema,
             param.type_name,
             param.typtype,
+            param.param_relkind,
             param.is_extension_type,
             param.extension_name,
         ));
@@ -495,7 +545,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         // Separate parameters from extension info
         let parameters: Vec<FunctionParam> = params_with_ext_info
             .iter()
-            .map(|(param, _, _, _, _, _)| param.clone())
+            .map(|(param, _, _, _, _, _, _)| param.clone())
             .collect();
 
         // Check if this function has OUT/INOUT parameters that we don't support yet
@@ -527,26 +577,28 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         // Build basic dependencies using DependencyBuilder (schema + custom types)
         let mut builder = DependencyBuilder::new(row.schema.clone());
 
-        // Add dependencies for parameter types (extension or custom type)
-        // Use add_type_dependency to properly distinguish domains from other custom types
-        for (_, type_schema, type_name, typtype, is_extension, extension_name) in
+        // Add dependencies for parameter types (extension, table, view, domain, or custom type)
+        // Use add_type_dependency to properly distinguish between all types
+        for (_, type_schema, type_name, typtype, relkind, is_extension, extension_name) in
             &params_with_ext_info
         {
             builder.add_type_dependency(
                 Some(type_schema.clone()),
                 Some(type_name.clone()),
                 Some(typtype.clone()),
+                relkind.clone(),
                 *is_extension,
                 extension_name.clone(),
             );
         }
 
-        // Add dependency for return type (extension or custom type)
-        // Use add_type_dependency to properly distinguish domains from other custom types
+        // Add dependency for return type (extension, table, view, domain, or custom type)
+        // Use add_type_dependency to properly distinguish between all types
         builder.add_type_dependency(
             row.return_type_schema.clone(),
             row.return_type_name.clone(),
             row.return_type_typtype.clone(),
+            row.return_type_relkind.clone(),
             row.is_return_type_extension,
             row.return_type_extension_name.clone(),
         );
