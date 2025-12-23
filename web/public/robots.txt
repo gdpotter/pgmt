@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://pgmt.dev/sitemap-index.xml

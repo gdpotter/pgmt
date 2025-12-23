@@ -1,0 +1,36 @@
+# pgmt - PostgreSQL Migration Tool
+
+> Schema-first migration tool for PostgreSQL. Edit schema files like code, automatically track dependencies, generate explicit migrations.
+
+## Quick Start
+
+- Install: `cargo install pgmt`
+- Docs: https://pgmt.dev/docs/getting-started/quick-start
+
+## Key Concepts
+
+- Schema-as-code: Organize PostgreSQL objects in SQL files
+- Shadow database: Safe testing environment for migrations
+- Dependency tracking: Automatic handling for views/functions
+- Explicit migrations: Review generated SQL before deploying
+
+## Documentation Sections
+
+- /docs/concepts/ - Core concepts and philosophy
+- /docs/guides/ - How-to tutorials
+- /docs/cli/ - CLI command reference
+- /docs/reference/configuration - Configuration options
+- /docs/reference/supported-features - Feature support matrix
+
+## Common Tasks
+
+- Quick start: /docs/getting-started/quick-start
+- Adopt existing database: /docs/guides/existing-database
+- CI/CD setup: /docs/guides/ci-cd
+- Troubleshooting: /docs/guides/troubleshooting
+
+## Links
+
+- GitHub: https://github.com/gdpotter/pgmt
+- Issues: https://github.com/gdpotter/pgmt/issues
+- Discussions: https://github.com/gdpotter/pgmt/discussions

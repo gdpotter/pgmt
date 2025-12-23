@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import { links } from './src/config/links.ts';
@@ -12,6 +13,7 @@ export default defineConfig({
     rehypePlugins: [[rehypeMermaid, { strategy: 'img-svg' }]],
   },
   integrations: [
+    sitemap(),
     starlight({
       title: 'pgmt Documentation',
       description:
