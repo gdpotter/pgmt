@@ -75,6 +75,7 @@ mod tests {
             arguments: "text".to_string(),
             state_type: "text".to_string(),
             state_type_schema: "pg_catalog".to_string(),
+            state_type_formatted: "text".to_string(),
             state_func: "group_concat_state".to_string(),
             state_func_schema: "public".to_string(),
             final_func: None,

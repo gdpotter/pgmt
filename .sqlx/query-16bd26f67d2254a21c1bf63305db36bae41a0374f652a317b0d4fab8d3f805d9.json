@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            c.relname AS \"view_name!\",\n            a.attname AS \"column_name!\",\n            pg_catalog.format_type(a.atttypid, a.atttypmod) AS \"data_type!\",\n            COALESCE(a.attndims, 0)::int AS \"attndims!: i32\",\n            -- Resolve array element type schema/name for custom type handling\n            CASE\n                WHEN t.typelem != 0 THEN elem_tn.nspname\n                ELSE tn.nspname\n            END AS \"type_schema?\",\n            CASE\n                WHEN t.typelem != 0 THEN elem_t.typname\n                ELSE t.typname\n            END AS \"type_name?\",\n            -- Check if type (or element type for arrays) is from an extension\n            ext_types.extname IS NOT NULL AS \"is_extension_type!: bool\"\n        FROM pg_attribute a\n        JOIN pg_class c ON a.attrelid = c.oid\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        LEFT JOIN pg_type t ON a.atttypid = t.oid\n        LEFT JOIN pg_namespace tn ON t.typnamespace = tn.oid\n        -- Element type for array attributes\n        LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0\n        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid\n        -- Extension type lookup\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(t.typelem, 0::oid), t.oid)\n        WHERE c.relkind = 'v'\n          AND a.attnum > 0\n          AND NOT a.attisdropped\n          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ORDER BY n.nspname, c.relname, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "view_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "column_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "data_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "attndims!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 7,
+        "name": "is_extension_type!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "16bd26f67d2254a21c1bf63305db36bae41a0374f652a317b0d4fab8d3f805d9"
+}

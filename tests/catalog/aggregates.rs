@@ -327,6 +327,7 @@ async fn test_aggregate_id_method() {
         arguments: "integer".to_string(),
         state_type: "integer".to_string(),
         state_type_schema: "pg_catalog".to_string(),
+        state_type_formatted: "integer".to_string(),
         state_func: "int4pl".to_string(),
         state_func_schema: "pg_catalog".to_string(),
         final_func: None,
@@ -347,4 +348,97 @@ async fn test_aggregate_id_method() {
             arguments: "integer".to_string(),
         }
     );
+}
+
+#[tokio::test]
+async fn test_aggregate_with_array_argument_type() {
+    with_test_db(async |db| {
+        // Create custom type
+        db.execute("CREATE TYPE item_status AS ENUM ('pending', 'active', 'completed')")
+            .await;
+
+        // Create state function that takes array of custom type
+        db.execute(
+            "CREATE FUNCTION count_statuses_sfunc(state integer, statuses item_status[]) RETURNS integer AS $$
+             BEGIN RETURN COALESCE(state, 0) + COALESCE(array_length(statuses, 1), 0); END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        // Create aggregate with array argument
+        db.execute(
+            "CREATE AGGREGATE count_all_statuses(item_status[]) (
+                SFUNC = count_statuses_sfunc,
+                STYPE = integer,
+                INITCOND = '0'
+            )",
+        )
+        .await;
+
+        let aggregates = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0];
+
+        assert_eq!(agg.name, "count_all_statuses");
+        // Arguments should include array notation
+        assert!(
+            agg.arguments.contains("[]"),
+            "arguments should contain array notation, got: {}",
+            agg.arguments
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_aggregate_with_custom_array_state_type() -> Result<()> {
+    with_test_db(async |db| {
+        // Create custom type
+        db.execute("CREATE TYPE item AS (id integer, name text)")
+            .await;
+
+        // Create state function that uses array of custom type
+        db.execute(
+            "CREATE FUNCTION item_collect_sfunc(state item[], val item) RETURNS item[] AS $$
+             BEGIN RETURN COALESCE(state, ARRAY[]::item[]) || val; END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        // Create aggregate with array state type
+        db.execute(
+            "CREATE AGGREGATE collect_items(item) (
+                SFUNC = item_collect_sfunc,
+                STYPE = item[]
+            )",
+        )
+        .await;
+
+        let aggregates = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0];
+
+        assert_eq!(agg.name, "collect_items");
+
+        // state_type is element type for dependency tracking
+        assert_eq!(agg.state_type, "item");
+        // state_type_formatted preserves array brackets
+        assert!(agg.state_type_formatted.contains("item[]"));
+
+        // Should depend on base type "item", not internal "_item"
+        let deps = agg.depends_on();
+        assert!(deps.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "item".to_string()
+        }));
+        assert!(!deps.contains(&DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "_item".to_string()
+        }));
+
+        Ok(())
+    })
+    .await
 }

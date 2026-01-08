@@ -13,9 +13,11 @@ pub struct Aggregate {
     pub name: String,
     /// Formatted argument types (e.g., "integer, text")
     pub arguments: String,
-    /// State transition type (STYPE)
+    /// State type element name for dependency tracking (arrays resolve to base type)
     pub state_type: String,
     pub state_type_schema: String,
+    /// Full formatted state type for SQL rendering (preserves array brackets)
+    pub state_type_formatted: String,
     /// State transition function (SFUNC)
     pub state_func: String,
     pub state_func_schema: String,
@@ -73,7 +75,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
             p.proname AS "name!",
             pg_catalog.pg_get_function_identity_arguments(p.oid) AS "arguments!",
 
-            -- State type (STYPE) - resolve array element type if applicable
+            -- State type (STYPE) - resolve array element type for dependency tracking
             CASE
                 WHEN st.typelem != 0 THEN elem_st.typname
                 ELSE st.typname
@@ -82,6 +84,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
                 WHEN st.typelem != 0 THEN elem_stn.nspname
                 ELSE stn.nspname
             END AS "state_type_schema!",
+            -- Full formatted state type for SQL rendering (preserves array brackets)
+            format_type(agg.aggtranstype, NULL) AS "state_type_formatted!",
 
             -- State transition function (SFUNC)
             tfunc.proname AS "state_func!",
@@ -208,7 +212,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
             &row.state_func_schema,
             &row.state_func,
             &row.state_type_schema,
-            &row.state_type,
+            &row.state_type_formatted,
             row.final_func.as_deref(),
             row.final_func_schema.as_deref(),
             row.combine_func.as_deref(),
@@ -222,6 +226,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
             arguments: row.arguments,
             state_type: row.state_type,
             state_type_schema: row.state_type_schema,
+            state_type_formatted: row.state_type_formatted,
             state_func: row.state_func,
             state_func_schema: row.state_func_schema,
             final_func: row.final_func,
@@ -247,7 +252,7 @@ fn build_aggregate_definition(
     state_func_schema: &str,
     state_func: &str,
     state_type_schema: &str,
-    state_type: &str,
+    state_type_formatted: &str,
     final_func: Option<&str>,
     final_func_schema: Option<&str>,
     combine_func: Option<&str>,
@@ -264,11 +269,24 @@ fn build_aggregate_definition(
     };
     parts.push(format!("SFUNC = {}", sfunc_qualified));
 
-    // STYPE - state type
+    // STYPE - schema-qualify custom types, preserve array brackets
     let stype_qualified = if is_system_schema(state_type_schema) {
-        state_type.to_string()
+        state_type_formatted.to_string()
     } else {
-        format!("{}.{}", state_type_schema, state_type)
+        // Extract array suffix to reattach after schema qualification
+        let (base_type, array_suffix) = if state_type_formatted.ends_with("[]") {
+            let suffix_start = state_type_formatted
+                .rfind('[')
+                .unwrap_or(state_type_formatted.len());
+            (
+                &state_type_formatted[..suffix_start],
+                &state_type_formatted[suffix_start..],
+            )
+        } else {
+            (state_type_formatted, "")
+        };
+        let unqualified = base_type.split('.').next_back().unwrap_or(base_type);
+        format!("{}.{}{}", state_type_schema, unqualified, array_suffix)
     };
     parts.push(format!("STYPE = {}", stype_qualified));
 

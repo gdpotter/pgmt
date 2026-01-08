@@ -577,3 +577,100 @@ async fn test_fetch_view_with_security_barrier() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_fetch_view_with_multi_dimensional_array_column() {
+    with_test_db(async |db| {
+        // Create a custom type for testing
+        db.execute("CREATE TYPE cell_state AS ENUM ('empty', 'filled', 'blocked')")
+            .await;
+
+        // Create table with multi-dimensional arrays
+        db.execute(
+            "CREATE TABLE game_boards (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                board_2d cell_state[][] NOT NULL,
+                board_3d cell_state[][][] NOT NULL,
+                matrix INTEGER[][]
+            )",
+        )
+        .await;
+
+        // Create view that exposes these columns
+        db.execute(
+            "CREATE VIEW board_view AS
+             SELECT id, name, board_2d, board_3d, matrix FROM game_boards",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+
+        assert_eq!(view.schema, "public");
+        assert_eq!(view.name, "board_view");
+        assert_eq!(view.columns.len(), 5);
+
+        // PostgreSQL doesn't track attndims for view columns, so multi-dimensional
+        // arrays appear as single-dimension (integer[][] becomes integer[])
+        let board_2d_col = view.columns.iter().find(|c| c.name == "board_2d").unwrap();
+        assert!(
+            board_2d_col
+                .type_
+                .as_deref()
+                .unwrap()
+                .contains("cell_state")
+        );
+        assert!(board_2d_col.type_.as_deref().unwrap().contains("[]"));
+
+        let board_3d_col = view.columns.iter().find(|c| c.name == "board_3d").unwrap();
+        assert!(
+            board_3d_col
+                .type_
+                .as_deref()
+                .unwrap()
+                .contains("cell_state")
+        );
+
+        let matrix_col = view.columns.iter().find(|c| c.name == "matrix").unwrap();
+        assert!(matrix_col.type_.as_deref().unwrap().contains("integer"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_view_with_underscore_prefixed_type() {
+    with_test_db(async |db| {
+        // Type legitimately starting with underscore (not an array indicator)
+        db.execute("CREATE TYPE _internal_status AS ENUM ('pending', 'processing', 'done')")
+            .await;
+
+        db.execute(
+            "CREATE TABLE tasks (
+                id SERIAL PRIMARY KEY,
+                status _internal_status NOT NULL
+            )",
+        )
+        .await;
+
+        db.execute("CREATE VIEW task_view AS SELECT id, status FROM tasks")
+            .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+
+        let status_col = view.columns.iter().find(|c| c.name == "status").unwrap();
+        assert!(
+            status_col
+                .type_
+                .as_deref()
+                .unwrap()
+                .contains("_internal_status")
+        );
+    })
+    .await;
+}

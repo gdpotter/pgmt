@@ -339,3 +339,49 @@ async fn test_aggregate_dependency_ordering() -> Result<()> {
         .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_aggregate_with_array_state_type_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE SCHEMA test_schema"],
+            &[],
+            &[
+                "CREATE TYPE test_schema.item AS (id integer, name text)",
+                "CREATE FUNCTION test_schema.item_collect_sfunc(state test_schema.item[], val test_schema.item) RETURNS test_schema.item[] AS $$
+                 BEGIN RETURN COALESCE(state, ARRAY[]::test_schema.item[]) || val; END;
+                 $$ LANGUAGE plpgsql",
+                "CREATE AGGREGATE test_schema.collect_items(test_schema.item) (
+                    SFUNC = test_schema.item_collect_sfunc,
+                    STYPE = test_schema.item[]
+                )",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                let agg_create = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(s, MigrationStep::Aggregate(AggregateOperation::Create { aggregate })
+                            if aggregate.name == "collect_items")
+                    })
+                    .expect("Should have Create Aggregate step");
+
+                match agg_create {
+                    MigrationStep::Aggregate(AggregateOperation::Create { aggregate }) => {
+                        assert!(aggregate.definition.contains("STYPE = test_schema.item[]"));
+                    }
+                    _ => panic!("Expected Create Aggregate step"),
+                }
+
+                assert_eq!(final_catalog.aggregates.len(), 1);
+                let agg = &final_catalog.aggregates[0];
+                assert_eq!(agg.state_type, "item");
+                assert!(agg.state_type_formatted.contains("item[]"));
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}

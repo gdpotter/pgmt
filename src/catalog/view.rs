@@ -65,17 +65,38 @@ struct RawView {
     reloptions: Option<Vec<String>>,
 }
 
-fn normalize_type(data_type: &str, udt_name: &str) -> String {
-    if data_type == "ARRAY" {
-        match udt_name {
-            "_int4" => "integer[]".to_string(),
-            "_text" => "text[]".to_string(),
-            "_varchar" => "character varying[]".to_string(),
-            "_bool" => "boolean[]".to_string(),
-            _ => format!("{}[]", udt_name.trim_start_matches('_')),
+/// Build column type string, schema-qualifying custom types and preserving array brackets
+fn build_column_type(
+    formatted_type: &str,
+    type_schema: &Option<String>,
+    type_name: &Option<String>,
+    attndims: i32,
+    is_extension_type: bool,
+) -> String {
+    // Extension and system types use format_type directly
+    if is_extension_type {
+        return formatted_type.to_string();
+    }
+    if type_schema.as_ref().is_some_and(|s| is_system_schema(s)) || type_schema.is_none() {
+        return formatted_type.to_string();
+    }
+
+    // Custom types need schema qualification
+    if let (Some(schema), Some(name)) = (type_schema, type_name) {
+        if attndims > 0 {
+            format!(
+                "\"{}\".\"{}\"{}",
+                schema,
+                name,
+                "[]".repeat(attndims as usize)
+            )
+        } else if formatted_type.ends_with("[]") {
+            format!("\"{}\".\"{}\"{}", schema, name, "[]")
+        } else {
+            format!("\"{}\".\"{}\"", schema, name)
         }
     } else {
-        data_type.to_string()
+        formatted_type.to_string()
     }
 }
 
@@ -130,23 +151,46 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
     .await?;
 
     info!("Fetching view columns...");
+    // Use pg_attribute + pg_type for consistent array handling with other catalog types
     let column_rows = sqlx::query!(
         r#"
         SELECT
-            table_schema AS "schema!",
-            table_name AS "table_name!",
-            column_name AS "name!",
-            data_type AS "data_type!",
-            udt_name AS "udt_name!"
-        FROM information_schema.columns
-        WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-          AND table_schema NOT LIKE 'pg_temp_%'
-          AND table_name IN (
-              SELECT table_name FROM information_schema.views
-              WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-                AND table_schema NOT LIKE 'pg_temp_%'
-          )
-        ORDER BY ordinal_position
+            n.nspname AS "schema!",
+            c.relname AS "view_name!",
+            a.attname AS "column_name!",
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS "data_type!",
+            COALESCE(a.attndims, 0)::int AS "attndims!: i32",
+            -- Resolve array element type schema/name for custom type handling
+            CASE
+                WHEN t.typelem != 0 THEN elem_tn.nspname
+                ELSE tn.nspname
+            END AS "type_schema?",
+            CASE
+                WHEN t.typelem != 0 THEN elem_t.typname
+                ELSE t.typname
+            END AS "type_name?",
+            -- Check if type (or element type for arrays) is from an extension
+            ext_types.extname IS NOT NULL AS "is_extension_type!: bool"
+        FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_type t ON a.atttypid = t.oid
+        LEFT JOIN pg_namespace tn ON t.typnamespace = tn.oid
+        -- Element type for array attributes
+        LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0
+        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid
+        -- Extension type lookup
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS type_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(t.typelem, 0::oid), t.oid)
+        WHERE c.relkind = 'v'
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        ORDER BY n.nspname, c.relname, a.attnum
         "#
     )
     .fetch_all(&mut *conn)
@@ -154,10 +198,17 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
 
     let mut columns_by_view: HashMap<(String, String), Vec<ViewColumn>> = HashMap::new();
     for col in column_rows {
-        let key = (col.schema.clone(), col.table_name.clone());
+        let key = (col.schema.clone(), col.view_name.clone());
+        let type_str = build_column_type(
+            &col.data_type,
+            &col.type_schema,
+            &col.type_name,
+            col.attndims,
+            col.is_extension_type,
+        );
         columns_by_view.entry(key).or_default().push(ViewColumn {
-            name: col.name,
-            type_: Some(normalize_type(&col.data_type, &col.udt_name)),
+            name: col.column_name,
+            type_: Some(type_str),
         });
     }
 

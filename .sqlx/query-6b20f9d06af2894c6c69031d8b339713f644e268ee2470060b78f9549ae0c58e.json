@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            p.proname AS \"name!\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"arguments!\",\n\n            -- State type (STYPE) - resolve array element type for dependency tracking\n            CASE\n                WHEN st.typelem != 0 THEN elem_st.typname\n                ELSE st.typname\n            END AS \"state_type!\",\n            CASE\n                WHEN st.typelem != 0 THEN elem_stn.nspname\n                ELSE stn.nspname\n            END AS \"state_type_schema!\",\n            -- Full formatted state type for SQL rendering (preserves array brackets)\n            format_type(agg.aggtranstype, NULL) AS \"state_type_formatted!\",\n\n            -- State transition function (SFUNC)\n            tfunc.proname AS \"state_func!\",\n            tfns.nspname AS \"state_func_schema!\",\n            pg_catalog.pg_get_function_identity_arguments(tfunc.oid) AS \"state_func_args!\",\n\n            -- Final function (FINALFUNC) - optional\n            ffunc.proname AS \"final_func?\",\n            ffns.nspname AS \"final_func_schema?\",\n            pg_catalog.pg_get_function_identity_arguments(ffunc.oid) AS \"final_func_args?\",\n\n            -- Combine function for parallel aggregation (COMBINEFUNC) - optional\n            cfunc.proname AS \"combine_func?\",\n            cfns.nspname AS \"combine_func_schema?\",\n            pg_catalog.pg_get_function_identity_arguments(cfunc.oid) AS \"combine_func_args?\",\n\n            -- Initial value (INITCOND) - optional\n            agg.agginitval AS \"initial_value?\",\n\n            -- Comment\n            d.description AS \"comment?\"\n\n        FROM pg_aggregate agg\n        JOIN pg_proc p ON agg.aggfnoid = p.oid\n        JOIN pg_namespace n ON p.pronamespace = n.oid\n\n        -- State type\n        JOIN pg_type st ON agg.aggtranstype = st.oid\n        JOIN pg_namespace stn ON st.typnamespace = stn.oid\n        -- Element type for array state types\n        LEFT JOIN pg_type elem_st ON st.typelem = elem_st.oid AND st.typelem != 0\n        LEFT JOIN pg_namespace elem_stn ON elem_st.typnamespace = elem_stn.oid\n\n        -- State transition function\n        JOIN pg_proc tfunc ON agg.aggtransfn = tfunc.oid\n        JOIN pg_namespace tfns ON tfunc.pronamespace = tfns.oid\n\n        -- Final function (optional)\n        LEFT JOIN pg_proc ffunc ON agg.aggfinalfn = ffunc.oid AND agg.aggfinalfn != 0\n        LEFT JOIN pg_namespace ffns ON ffunc.pronamespace = ffns.oid\n\n        -- Combine function (optional)\n        LEFT JOIN pg_proc cfunc ON agg.aggcombinefn = cfunc.oid AND agg.aggcombinefn != 0\n        LEFT JOIN pg_namespace cfns ON cfunc.pronamespace = cfns.oid\n\n        -- Comment\n        LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0\n\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        -- Exclude aggregates that belong to extensions\n        AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = p.oid\n            AND dep.deptype = 'e'\n        )\n\n        ORDER BY n.nspname, p.proname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "arguments!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "state_type!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 4,
+        "name": "state_type_schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "state_type_formatted!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "state_func!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 7,
+        "name": "state_func_schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 8,
+        "name": "state_func_args!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "final_func?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 10,
+        "name": "final_func_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 11,
+        "name": "final_func_args?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "combine_func?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 13,
+        "name": "combine_func_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 14,
+        "name": "combine_func_args?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "initial_value?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "6b20f9d06af2894c6c69031d8b339713f644e268ee2470060b78f9549ae0c58e"
+}
