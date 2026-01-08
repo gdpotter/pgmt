@@ -450,6 +450,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
                 ELSE param_rel.relkind::text
             END AS "param_relkind?",
             pg_catalog.format_type(t.oid, NULL) AS "formatted_type!",
+            t.typelem != 0 AS "is_array!: bool",
             COALESCE(p.proargnames[param_num], '') AS "param_name!",
             p.proargmodes[param_num - 1] AS "param_mode",
             -- Check if parameter type (or element type for arrays) is from an extension
@@ -507,10 +508,17 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         };
 
         // Build qualified type name for custom types
-        let data_type = if is_system_schema(&param.type_schema) {
+        // System types and extension types: use formatted_type directly (no schema qualification)
+        // Custom types: schema-qualify and preserve array notation
+        let data_type = if is_system_schema(&param.type_schema) || param.is_extension_type {
             param.formatted_type.clone()
         } else {
-            format!("{}.{}", param.type_schema, param.type_name)
+            let base = format!("{}.{}", param.type_schema, param.type_name);
+            if param.is_array {
+                format!("{}[]", base)
+            } else {
+                base
+            }
         };
 
         params_by_function.entry(param.func_oid).or_default().push((

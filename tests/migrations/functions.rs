@@ -115,6 +115,58 @@ async fn test_drop_function_migration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_drop_function_with_array_parameter() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: schema and custom type
+        &[
+            "CREATE TYPE item_status AS ENUM ('pending', 'active', 'completed')",
+        ],
+        // Initial DB only: function with array parameter
+        &[
+            "CREATE OR REPLACE FUNCTION process_items(statuses item_status[]) RETURNS INTEGER AS $$ BEGIN RETURN array_length(statuses, 1); END; $$ LANGUAGE plpgsql",
+        ],
+        // Target DB only: nothing extra (function removed)
+        &[],
+        // Verification closure
+        |steps, final_catalog| {
+            // Should have DROP FUNCTION step
+            let drop_step = steps
+                .iter()
+                .find(|s| matches!(s, MigrationStep::Function(FunctionOperation::Drop { name, .. }) if name == "process_items"))
+                .expect("Should have DROP FUNCTION step");
+
+            match drop_step {
+                MigrationStep::Function(FunctionOperation::Drop {
+                    parameter_types, ..
+                }) => {
+                    // Critical: parameter_types should include array brackets
+                    assert!(
+                        parameter_types.contains("[]"),
+                        "parameter_types should include array brackets, got: {}",
+                        parameter_types
+                    );
+                    assert!(
+                        parameter_types.contains("item_status"),
+                        "parameter_types should include type name, got: {}",
+                        parameter_types
+                    );
+                }
+                _ => panic!("Expected DROP FUNCTION step"),
+            }
+
+            // Verify function is gone
+            assert!(final_catalog.functions.is_empty());
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_replace_function_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
