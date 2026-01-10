@@ -215,6 +215,15 @@ Each database object type has its own file with consistent patterns:
 - [ ] Dependencies properly tracked and ordered
 - [ ] Follow existing patterns and style guidelines
 
+### 8. Cascade Support (if object can depend on tables/columns)
+Objects that depend on table columns (via composite types, column references, etc.) need cascade support for column type changes. PostgreSQL blocks `ALTER COLUMN TYPE` when dependent objects exist.
+
+- [ ] Add match arm in `Catalog::synthesize_drop_create()` for the new type
+- [ ] Add `find_{object}()` helper to Catalog if not already present
+- [ ] Test that column type changes properly cascade DROP+CREATE for the object
+
+**Note:** The generic cascade loop in `cascade.rs` uses `Catalog::synthesize_drop_create()` to handle all supported object types. Adding your type there makes cascading work automatically.
+
 ## Testing Patterns
 
 **Setup:** Run `./scripts/test-setup.sh` once to start PostgreSQL containers (versions 13-18).

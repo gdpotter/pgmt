@@ -1,5 +1,10 @@
 use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
+use crate::diff::functions::{format_attributes, format_parameter_list, format_return_clause};
+use crate::diff::operations::{
+    ConstraintIdentifier, ConstraintOperation, FunctionOperation, MigrationStep, PolicyIdentifier,
+    PolicyOperation, TableOperation, TriggerIdentifier, TriggerOperation, ViewOperation,
+};
 use sqlx::PgPool;
 use std::collections::BTreeMap;
 
@@ -196,6 +201,203 @@ impl Catalog {
         self.tables
             .iter()
             .find(|t| t.schema == schema && t.name == name)
+    }
+
+    pub fn find_policy(&self, schema: &str, table: &str, name: &str) -> Option<&policy::Policy> {
+        self.policies
+            .iter()
+            .find(|p| p.schema == schema && p.table_name == table && p.name == name)
+    }
+
+    pub fn find_constraint(
+        &self,
+        schema: &str,
+        table: &str,
+        name: &str,
+    ) -> Option<&constraint::Constraint> {
+        self.constraints
+            .iter()
+            .find(|c| c.schema == schema && c.table == table && c.name == name)
+    }
+
+    pub fn find_function(
+        &self,
+        schema: &str,
+        name: &str,
+        arguments: &str,
+    ) -> Option<&function::Function> {
+        self.functions
+            .iter()
+            .find(|f| f.schema == schema && f.name == name && f.arguments == arguments)
+    }
+
+    pub fn find_trigger(
+        &self,
+        schema: &str,
+        table: &str,
+        name: &str,
+    ) -> Option<&triggers::Trigger> {
+        self.triggers
+            .iter()
+            .find(|t| t.schema == schema && t.table_name == table && t.name == name)
+    }
+
+    /// Synthesize DROP and CREATE operations for cascading an object.
+    ///
+    /// This method is used when column type changes require dependent objects to be
+    /// dropped and recreated. Returns None if the object type doesn't support cascading
+    /// or if the object doesn't exist in the new catalog.
+    ///
+    /// When adding a new database object type to pgmt, add a match arm here if the object
+    /// can depend on table columns (e.g., views, functions, triggers, policies).
+    pub fn synthesize_drop_create(
+        &self,
+        id: &DbObjectId,
+        new_catalog: &Catalog,
+    ) -> Option<(MigrationStep, MigrationStep)> {
+        match id {
+            DbObjectId::View { schema, name } => {
+                let drop = MigrationStep::View(ViewOperation::Drop {
+                    schema: schema.clone(),
+                    name: name.clone(),
+                });
+
+                let view = new_catalog.find_view(schema, name)?;
+                let create = MigrationStep::View(ViewOperation::Create {
+                    schema: view.schema.clone(),
+                    name: view.name.clone(),
+                    definition: view.definition.clone(),
+                    security_invoker: view.security_invoker,
+                    security_barrier: view.security_barrier,
+                });
+
+                Some((drop, create))
+            }
+
+            DbObjectId::Table { schema, name } => {
+                let drop = MigrationStep::Table(TableOperation::Drop {
+                    schema: schema.clone(),
+                    name: name.clone(),
+                });
+
+                let table = new_catalog.find_table(schema, name)?;
+                let create = MigrationStep::Table(TableOperation::Create {
+                    schema: table.schema.clone(),
+                    name: table.name.clone(),
+                    columns: table.columns.clone(),
+                    primary_key: table.primary_key.clone(),
+                });
+
+                Some((drop, create))
+            }
+
+            DbObjectId::Policy {
+                schema,
+                table,
+                name,
+            } => {
+                let drop = MigrationStep::Policy(PolicyOperation::Drop {
+                    identifier: PolicyIdentifier {
+                        schema: schema.clone(),
+                        table: table.clone(),
+                        name: name.clone(),
+                    },
+                });
+
+                let policy = new_catalog.find_policy(schema, table, name)?;
+                let create = MigrationStep::Policy(PolicyOperation::Create {
+                    policy: Box::new(policy.clone()),
+                });
+
+                Some((drop, create))
+            }
+
+            DbObjectId::Constraint {
+                schema,
+                table,
+                name,
+            } => {
+                let drop =
+                    MigrationStep::Constraint(ConstraintOperation::Drop(ConstraintIdentifier {
+                        schema: schema.clone(),
+                        table: table.clone(),
+                        name: name.clone(),
+                    }));
+
+                let constraint = new_catalog.find_constraint(schema, table, name)?;
+                let create =
+                    MigrationStep::Constraint(ConstraintOperation::Create(constraint.clone()));
+
+                Some((drop, create))
+            }
+
+            DbObjectId::Function {
+                schema,
+                name,
+                arguments,
+            } => {
+                let func = self.find_function(schema, name, arguments)?;
+                let new_func = new_catalog.find_function(schema, name, arguments)?;
+
+                let kind_str = match func.kind {
+                    function::FunctionKind::Function => "FUNCTION",
+                    function::FunctionKind::Procedure => "PROCEDURE",
+                    function::FunctionKind::Aggregate => "AGGREGATE FUNCTION",
+                };
+
+                let param_types: Vec<String> = func
+                    .parameters
+                    .iter()
+                    .map(|p| p.data_type.clone())
+                    .collect();
+
+                let drop = MigrationStep::Function(FunctionOperation::Drop {
+                    schema: schema.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    kind: kind_str.to_string(),
+                    parameter_types: param_types.join(", "),
+                });
+
+                let create = MigrationStep::Function(FunctionOperation::Create {
+                    schema: new_func.schema.clone(),
+                    name: new_func.name.clone(),
+                    arguments: new_func.arguments.clone(),
+                    kind: kind_str.to_string(),
+                    parameters: format_parameter_list(&new_func.parameters),
+                    returns: format_return_clause(new_func),
+                    attributes: format_attributes(new_func),
+                    definition: new_func.definition.clone(),
+                });
+
+                Some((drop, create))
+            }
+
+            DbObjectId::Trigger {
+                schema,
+                table,
+                name,
+            } => {
+                let drop = MigrationStep::Trigger(TriggerOperation::Drop {
+                    identifier: TriggerIdentifier {
+                        schema: schema.clone(),
+                        table: table.clone(),
+                        name: name.clone(),
+                    },
+                });
+
+                let trigger = new_catalog.find_trigger(schema, table, name)?;
+                let create = MigrationStep::Trigger(TriggerOperation::Create {
+                    trigger: Box::new(trigger.clone()),
+                });
+
+                Some((drop, create))
+            }
+
+            // Other types don't need cascade support - they either don't depend on
+            // table columns or are handled by regular diff logic
+            _ => None,
+        }
     }
 
     /// Create an empty catalog for baseline generation

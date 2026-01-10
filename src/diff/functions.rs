@@ -28,7 +28,7 @@ fn same_signature(old: &Function, new: &Function) -> bool {
 }
 
 /// Generate a parameter list string for use in function/procedure creation
-fn format_parameter_list(params: &[FunctionParam]) -> String {
+pub fn format_parameter_list(params: &[FunctionParam]) -> String {
     let param_strs: Vec<String> = params
         .iter()
         .map(|p| {
@@ -50,7 +50,7 @@ fn format_parameter_list(params: &[FunctionParam]) -> String {
 }
 
 /// Generate a return type clause for functions
-fn format_return_clause(func: &Function) -> String {
+pub fn format_return_clause(func: &Function) -> String {
     match &func.return_type {
         Some(rt) => format!(" RETURNS {}", rt),
         None => "".to_string(),
@@ -58,7 +58,7 @@ fn format_return_clause(func: &Function) -> String {
 }
 
 /// Format function/procedure attributes for creation
-fn format_attributes(func: &Function) -> String {
+pub fn format_attributes(func: &Function) -> String {
     let mut attrs = Vec::new();
 
     // Language

@@ -868,3 +868,123 @@ async fn test_add_new_overload() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_function_cascade_on_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table and function that returns table composite type
+            &[
+                "CREATE TABLE app.users (id SERIAL PRIMARY KEY, tenant_id SMALLINT NOT NULL)",
+                "CREATE OR REPLACE FUNCTION app.get_user(user_id INTEGER) RETURNS app.users AS $$ SELECT * FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+            ],
+            // Target DB: column type changed
+            &[
+                "CREATE TABLE app.users (id SERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL)",
+                "CREATE OR REPLACE FUNCTION app.get_user(user_id INTEGER) RETURNS app.users AS $$ SELECT * FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+            ],
+            |steps, final_catalog| {
+                // Should have: Drop function → Alter column → Create function
+                let drop_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                        if schema == "app" && name == "get_user")
+                });
+                let create_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                        if schema == "app" && name == "get_user")
+                });
+                let has_alter_type = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, pgmt::diff::operations::ColumnAction::AlterType { .. })))
+                });
+
+                assert!(drop_func, "Should have DROP FUNCTION");
+                assert!(create_func, "Should have CREATE FUNCTION");
+                assert!(has_alter_type, "Should have ALTER COLUMN TYPE");
+
+                // Verify ordering: DROP FUNCTION → ALTER → CREATE FUNCTION
+                let drop_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                            if schema == "app" && name == "get_user")
+                    })
+                    .unwrap();
+                let create_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                            if schema == "app" && name == "get_user")
+                    })
+                    .unwrap();
+
+                assert!(drop_pos < create_pos, "DROP FUNCTION should come before CREATE FUNCTION");
+
+                // Verify final state
+                let function = final_catalog
+                    .functions
+                    .iter()
+                    .find(|f| f.name == "get_user")
+                    .expect("Function should exist");
+                assert_eq!(function.name, "get_user");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_no_function_cascade_without_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table and function
+            &[
+                "CREATE TABLE app.users (id SERIAL PRIMARY KEY, name TEXT)",
+                "CREATE OR REPLACE FUNCTION app.get_user(user_id INTEGER) RETURNS app.users AS $$ SELECT * FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+            ],
+            // Target DB: add a column (not type change)
+            &[
+                "CREATE TABLE app.users (id SERIAL PRIMARY KEY, name TEXT, email TEXT)",
+                "CREATE OR REPLACE FUNCTION app.get_user(user_id INTEGER) RETURNS app.users AS $$ SELECT * FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+            ],
+            |steps, final_catalog| {
+                // Should NOT cascade the function - only adding a column
+                let drop_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                        if schema == "app" && name == "get_user")
+                });
+                let create_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                        if schema == "app" && name == "get_user")
+                });
+
+                assert!(!drop_func, "Should NOT drop function when only adding columns");
+                assert!(!create_func, "Should NOT create function when only adding columns");
+
+                // Verify function still exists
+                assert!(
+                    final_catalog
+                        .functions
+                        .iter()
+                        .any(|f| f.name == "get_user"),
+                    "Function should still exist"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

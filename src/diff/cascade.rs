@@ -1,6 +1,7 @@
+use crate::catalog::constraint::ConstraintType;
 use crate::catalog::{Catalog, id::DbObjectId};
 use crate::diff::operations::{
-    MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation, ViewOperation,
+    ColumnAction, MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -40,19 +41,81 @@ pub fn expand(
     }
 
     for id in visited {
-        if seen_ids.contains(&id) {
+        // Skip if there's already a DROP for this object. We check drop_counts (not
+        // seen_ids) because CREATE OR REPLACE doesn't drop - we need an explicit DROP.
+        if drop_counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
         }
 
-        if let Some((drop, create)) = synthesize_drop_create(&id, old_catalog, new_catalog) {
+        if let Some((drop, create)) = old_catalog.synthesize_drop_create(&id, new_catalog) {
             extra_steps.push(drop);
             extra_steps.push(create);
             seen_ids.insert(id);
         }
     }
 
+    // Cascade dependents for tables with column type changes.
+    // PostgreSQL limitation: ALTER COLUMN TYPE fails if the column is referenced by
+    // dependent objects.
+    //
+    // We selectively cascade based on object type:
+    // - Policies: Cascade ALL on the table (expressions are opaque, can't tell which columns)
+    // - Functions: Cascade if they depend on table (composite type definition changes)
+    // - Triggers: Cascade if they depend on table
+    // - Constraints: DON'T cascade here - FK constraints have special handling below
+    //   that checks which specific columns are affected
+    // - Views: DON'T cascade here - views might only reference unchanged columns,
+    //   and will be handled by regular diff if they need updating
+    let tables_with_type_changes = tables_with_column_type_changes(&steps);
+    let mut cascaded_ids: HashSet<DbObjectId> = HashSet::new();
+    for table_id in &tables_with_type_changes {
+        if let Some(deps) = old_catalog.reverse_deps.get(table_id) {
+            for dep in deps {
+                let should_cascade = match dep {
+                    // Policies: Always cascade (opaque expressions, filter ALTERs later)
+                    DbObjectId::Policy { .. } => true,
+                    // Functions/Triggers: Cascade if no DROP already exists
+                    DbObjectId::Function { .. } | DbObjectId::Trigger { .. } => {
+                        drop_counts.get(dep).copied().unwrap_or(0) == 0
+                    }
+                    // Constraints/Views: Don't cascade here - handled separately
+                    _ => false,
+                };
+
+                if should_cascade
+                    && !cascaded_ids.contains(dep)
+                    && let Some((drop, create)) =
+                        old_catalog.synthesize_drop_create(dep, new_catalog)
+                {
+                    extra_steps.push(drop);
+                    extra_steps.push(create);
+                    cascaded_ids.insert(dep.clone());
+                    seen_ids.insert(dep.clone());
+                }
+            }
+        }
+    }
+
+    // Cascade FK constraints for tables with column type changes
+    // FK constraints need special handling because they can reference columns in OTHER tables
+    // (cross-table references aren't captured by simple reverse_deps lookup on one table)
+    let fk_constraints_to_cascade = fk_constraints_affected_by_type_changes(&steps, old_catalog);
+    for constraint_id in &fk_constraints_to_cascade {
+        if !cascaded_ids.contains(constraint_id)
+            && let Some((drop, create)) =
+                old_catalog.synthesize_drop_create(constraint_id, new_catalog)
+        {
+            extra_steps.push(drop);
+            extra_steps.push(create);
+            cascaded_ids.insert(constraint_id.clone());
+        }
+    }
+
     let mut all = steps;
     all.extend(extra_steps);
+
+    // Filter out ALTER operations for objects that we're cascading with DROP+CREATE
+    let all = filter_cascaded_alters(all, &cascaded_ids);
 
     // Filter out redundant owned sequence drops
     let filtered = filter_owned_sequence_drops(all, old_catalog);
@@ -69,52 +132,6 @@ fn collect_dependents(id: &DbObjectId, catalog: &Catalog, out: &mut HashSet<DbOb
         for dep in deps {
             collect_dependents(dep, catalog, out);
         }
-    }
-}
-
-/// Given a DbObjectId, emit synthetic drop and create steps (if supported)
-fn synthesize_drop_create(
-    id: &DbObjectId,
-    _old: &Catalog,
-    new: &Catalog,
-) -> Option<(MigrationStep, MigrationStep)> {
-    match id {
-        DbObjectId::View { schema, name } => {
-            let drop = MigrationStep::View(ViewOperation::Drop {
-                schema: schema.clone(),
-                name: name.clone(),
-            });
-
-            let view = new.find_view(schema, name)?;
-            let create = MigrationStep::View(ViewOperation::Create {
-                schema: view.schema.clone(),
-                name: view.name.clone(),
-                definition: view.definition.clone(),
-                security_invoker: view.security_invoker,
-                security_barrier: view.security_barrier,
-            });
-
-            Some((drop, create))
-        }
-
-        DbObjectId::Table { schema, name } => {
-            let drop = MigrationStep::Table(TableOperation::Drop {
-                schema: schema.clone(),
-                name: name.clone(),
-            });
-
-            let table = new.find_table(schema, name)?;
-            let create = MigrationStep::Table(TableOperation::Create {
-                schema: table.schema.clone(),
-                name: table.name.clone(),
-                columns: table.columns.clone(),
-                primary_key: table.primary_key.clone(),
-            });
-
-            Some((drop, create))
-        }
-
-        _ => None,
     }
 }
 
@@ -211,4 +228,148 @@ fn filter_policy_drops(steps: Vec<MigrationStep>, _old_catalog: &Catalog) -> Vec
             true
         })
         .collect()
+}
+
+/// Filter out ALTER operations for objects that are being cascaded with DROP+CREATE.
+/// When a column type changes, ALTER operations on dependent objects may fail,
+/// so we replace them with a full DROP+CREATE cycle.
+fn filter_cascaded_alters(
+    steps: Vec<MigrationStep>,
+    cascaded_ids: &HashSet<DbObjectId>,
+) -> Vec<MigrationStep> {
+    if cascaded_ids.is_empty() {
+        return steps;
+    }
+
+    steps
+        .into_iter()
+        .filter(|step| {
+            // Filter out ALTER operations for objects being cascaded with DROP+CREATE
+            if step.operation_kind() == OperationKind::Alter {
+                let step_id = step.id();
+                if cascaded_ids.contains(&step_id) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+/// Finds tables that have column type changes (AlterType actions).
+///
+/// PostgreSQL limitation: ALTER COLUMN TYPE fails if the column is referenced
+/// in an RLS policy expression. Since policy expressions are opaque strings
+/// (PostgreSQL doesn't expose column-level dependencies in pg_depend), we
+/// cannot determine which specific columns a policy references.
+///
+/// We conservatively cascade ALL policies on a table when ANY column type
+/// changes. This is safe because policy recreation is non-destructive.
+///
+/// See: https://www.postgresql.org/docs/current/sql-altertable.html
+fn tables_with_column_type_changes(steps: &[MigrationStep]) -> HashSet<DbObjectId> {
+    steps
+        .iter()
+        .filter_map(|step| {
+            if let MigrationStep::Table(TableOperation::Alter {
+                schema,
+                name,
+                actions,
+            }) = step
+            {
+                let has_type_change = actions
+                    .iter()
+                    .any(|a| matches!(a, ColumnAction::AlterType { .. }));
+                if has_type_change {
+                    return Some(DbObjectId::Table {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                    });
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Returns a map of (schema, table) -> set of column names being type-changed.
+/// Used to determine which FK constraints are affected by column type changes.
+fn columns_with_type_changes(
+    steps: &[MigrationStep],
+) -> HashMap<(String, String), HashSet<String>> {
+    let mut result: HashMap<(String, String), HashSet<String>> = HashMap::new();
+
+    for step in steps {
+        if let MigrationStep::Table(TableOperation::Alter {
+            schema,
+            name,
+            actions,
+        }) = step
+        {
+            for action in actions {
+                if let ColumnAction::AlterType { name: col_name, .. } = action {
+                    result
+                        .entry((schema.clone(), name.clone()))
+                        .or_default()
+                        .insert(col_name.clone());
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Finds FK constraints that need to be cascaded due to column type changes.
+///
+/// PostgreSQL limitation: ALTER COLUMN TYPE fails if the column is part of a
+/// foreign key constraint. This applies to both the referencing column AND
+/// the referenced column - both must have compatible types.
+///
+/// We check both sides of the FK constraint:
+/// 1. If any column in the FK's column list is being type-changed
+/// 2. If any column in the FK's referenced column list is being type-changed
+fn fk_constraints_affected_by_type_changes(
+    steps: &[MigrationStep],
+    old_catalog: &Catalog,
+) -> HashSet<DbObjectId> {
+    let columns_changing = columns_with_type_changes(steps);
+
+    if columns_changing.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut affected = HashSet::new();
+
+    for constraint in &old_catalog.constraints {
+        if let ConstraintType::ForeignKey {
+            columns,
+            referenced_schema,
+            referenced_table,
+            referenced_columns,
+            ..
+        } = &constraint.constraint_type
+        {
+            // Check if any referencing column is being type-changed
+            let table_key = (constraint.schema.clone(), constraint.table.clone());
+            if let Some(changing_cols) = columns_changing.get(&table_key)
+                && columns.iter().any(|col| changing_cols.contains(col))
+            {
+                affected.insert(constraint.id());
+                continue;
+            }
+
+            // Check if any referenced column is being type-changed
+            let ref_table_key = (referenced_schema.clone(), referenced_table.clone());
+            if let Some(changing_cols) = columns_changing.get(&ref_table_key)
+                && referenced_columns
+                    .iter()
+                    .any(|col| changing_cols.contains(col))
+            {
+                affected.insert(constraint.id());
+            }
+        }
+    }
+
+    affected
 }

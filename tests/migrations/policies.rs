@@ -666,3 +666,251 @@ async fn test_create_table_with_rls_forced() -> Result<()> {
         .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_policy_cascade_on_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with SMALLINT, RLS enabled, policy referencing column
+            &[
+                "CREATE TABLE app.users (id INTEGER, status SMALLINT)",
+                "ALTER TABLE app.users ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY user_status ON app.users FOR SELECT USING (status > 0)",
+            ],
+            // Target DB: table with BIGINT (column type changed), same policy
+            &[
+                "CREATE TABLE app.users (id INTEGER, status BIGINT)",
+                "ALTER TABLE app.users ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY user_status ON app.users FOR SELECT USING (status > 0)",
+            ],
+            |steps, final_catalog| {
+                // Should have: Drop policy → Alter table → Create policy
+                assert!(steps.len() >= 3);
+
+                let drop_policy_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
+                        if identifier.table == "users" && identifier.name == "user_status")
+                    })
+                    .expect("Should have DropPolicy step");
+
+                let alter_table_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Table(TableOperation::Alter { schema, name, actions })
+                        if schema == "app" && name == "users"
+                        && actions.iter().any(|a| matches!(a, ColumnAction::AlterType { .. })))
+                    })
+                    .expect("Should have AlterTable step");
+
+                let create_policy_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Policy(PolicyOperation::Create { policy })
+                        if policy.table_name == "users" && policy.name == "user_status")
+                    })
+                    .expect("Should have CreatePolicy step");
+
+                assert!(
+                    drop_policy_pos < alter_table_pos,
+                    "Policy should be dropped before table is altered"
+                );
+                assert!(
+                    alter_table_pos < create_policy_pos,
+                    "Table should be altered before policy is recreated"
+                );
+
+                // Verify final state
+                assert_eq!(final_catalog.policies.len(), 1);
+                let policy = &final_catalog.policies[0];
+                assert_eq!(policy.name, "user_status");
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multiple_policies_cascade_on_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with two policies
+            &[
+                "CREATE TABLE app.items (id INTEGER, priority SMALLINT, owner_id INTEGER)",
+                "ALTER TABLE app.items ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY priority_policy ON app.items FOR SELECT USING (priority > 0)",
+                "CREATE POLICY owner_policy ON app.items FOR UPDATE USING (owner_id = 1)",
+            ],
+            // Target DB: column type changed
+            &[
+                "CREATE TABLE app.items (id INTEGER, priority BIGINT, owner_id INTEGER)",
+                "ALTER TABLE app.items ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY priority_policy ON app.items FOR SELECT USING (priority > 0)",
+                "CREATE POLICY owner_policy ON app.items FOR UPDATE USING (owner_id = 1)",
+            ],
+            |steps, final_catalog| {
+                // Both policies should be dropped and recreated
+                let drop_priority = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
+                        if identifier.name == "priority_policy")
+                });
+                let drop_owner = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
+                        if identifier.name == "owner_policy")
+                });
+                let create_priority = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Create { policy })
+                        if policy.name == "priority_policy")
+                });
+                let create_owner = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Create { policy })
+                        if policy.name == "owner_policy")
+                });
+
+                assert!(drop_priority, "Should drop priority_policy");
+                assert!(drop_owner, "Should drop owner_policy");
+                assert!(create_priority, "Should create priority_policy");
+                assert!(create_owner, "Should create owner_policy");
+
+                // Verify final state
+                assert_eq!(final_catalog.policies.len(), 2);
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_no_policy_cascade_without_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with policy
+            &[
+                "CREATE TABLE app.data (id INTEGER, value INTEGER)",
+                "ALTER TABLE app.data ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY data_policy ON app.data FOR SELECT USING (value > 0)",
+            ],
+            // Target DB: only default value changed (not type)
+            &[
+                "CREATE TABLE app.data (id INTEGER, value INTEGER DEFAULT 42)",
+                "ALTER TABLE app.data ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY data_policy ON app.data FOR SELECT USING (value > 0)",
+            ],
+            |steps, final_catalog| {
+                // Should NOT have policy drop/create - only the default change
+                let has_policy_drop = steps
+                    .iter()
+                    .any(|s| matches!(s, MigrationStep::Policy(PolicyOperation::Drop { .. })));
+                let has_policy_create = steps
+                    .iter()
+                    .any(|s| matches!(s, MigrationStep::Policy(PolicyOperation::Create { .. })));
+
+                assert!(
+                    !has_policy_drop,
+                    "Should NOT drop policy when only default changes"
+                );
+                assert!(
+                    !has_policy_create,
+                    "Should NOT create policy when only default changes"
+                );
+
+                // Verify final state - policy unchanged
+                assert_eq!(final_catalog.policies.len(), 1);
+                assert_eq!(final_catalog.policies[0].name, "data_policy");
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_policy_cascade_replaces_alter_on_column_type_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with policy
+            &[
+                "CREATE TABLE app.users (id INTEGER, tenant_id SMALLINT)",
+                "ALTER TABLE app.users ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY tenant_isolation ON app.users FOR ALL USING (tenant_id = 1)",
+            ],
+            // Target DB: column type changed AND policy expression changed
+            // This would normally generate ALTER POLICY, but that also fails on type change
+            &[
+                "CREATE TABLE app.users (id INTEGER, tenant_id BIGINT)",
+                "ALTER TABLE app.users ENABLE ROW LEVEL SECURITY",
+                "CREATE POLICY tenant_isolation ON app.users FOR ALL USING (tenant_id = 2)",
+            ],
+            |steps, final_catalog| {
+                // Should have DROP+CREATE policy, NOT ALTER POLICY
+                let has_policy_alter = steps
+                    .iter()
+                    .any(|s| matches!(s, MigrationStep::Policy(PolicyOperation::Alter { .. })));
+                let has_policy_drop = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
+                        if identifier.name == "tenant_isolation")
+                });
+                let has_policy_create = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Policy(PolicyOperation::Create { policy })
+                        if policy.name == "tenant_isolation")
+                });
+
+                assert!(
+                    !has_policy_alter,
+                    "Should NOT have ALTER POLICY when column type is changing"
+                );
+                assert!(has_policy_drop, "Should have DROP POLICY");
+                assert!(has_policy_create, "Should have CREATE POLICY");
+
+                // Verify ordering: DROP policy → ALTER table → CREATE policy
+                let drop_pos = steps
+                    .iter()
+                    .position(|s| matches!(s, MigrationStep::Policy(PolicyOperation::Drop { .. })))
+                    .unwrap();
+                let alter_pos = steps
+                    .iter()
+                    .position(|s| matches!(s, MigrationStep::Table(TableOperation::Alter { .. })))
+                    .unwrap();
+                let create_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Policy(PolicyOperation::Create { .. }))
+                    })
+                    .unwrap();
+
+                assert!(drop_pos < alter_pos, "DROP POLICY before ALTER TABLE");
+                assert!(alter_pos < create_pos, "ALTER TABLE before CREATE POLICY");
+
+                // Verify final state has the new expression
+                assert_eq!(final_catalog.policies.len(), 1);
+                let policy = &final_catalog.policies[0];
+                assert!(policy.using_expr.as_ref().unwrap().contains("2"));
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
