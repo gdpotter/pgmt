@@ -161,8 +161,8 @@ async fn test_missing_schema_directory() -> Result<()> {
         fs::remove_dir_all(helper.project_root.join("schema"))?;
 
         // Should handle gracefully (either error or empty result)
-        helper.command().args(["diff"]).assert();
         // Test passes as long as it doesn't panic
+        let _ = helper.command().args(["diff"]).assert();
 
         Ok(())
     })
@@ -188,7 +188,7 @@ async fn test_duplicate_migration_name_error() -> Result<()> {
 
         // Try to create migration with same description in same second
         // This may or may not fail depending on timing, but shouldn't panic
-        helper
+        let _ = helper
             .command()
             .args(["migrate", "new", "add_users"])
             .assert();
