@@ -1,9 +1,10 @@
 use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
-use crate::diff::functions::{format_attributes, format_parameter_list, format_return_clause};
-use crate::diff::operations::{
-    ConstraintIdentifier, ConstraintOperation, FunctionOperation, MigrationStep, PolicyIdentifier,
-    PolicyOperation, TableOperation, TriggerIdentifier, TriggerOperation, ViewOperation,
+use crate::diff::grants::is_owner_grant;
+use crate::diff::operations::{GrantOperation, MigrationStep};
+use crate::diff::{
+    constraints as constraints_diff, functions as functions_diff, policies as policies_diff,
+    tables as tables_diff, triggers as triggers_diff, views as views_diff,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -248,47 +249,35 @@ impl Catalog {
     /// dropped and recreated. Returns None if the object type doesn't support cascading
     /// or if the object doesn't exist in the new catalog.
     ///
+    /// This leverages the existing per-object diff functions to ensure all associated
+    /// operations (comments, etc.) are included. Grants are also re-applied since
+    /// DROP implicitly revokes them.
+    ///
     /// When adding a new database object type to pgmt, add a match arm here if the object
     /// can depend on table columns (e.g., views, functions, triggers, policies).
     pub fn synthesize_drop_create(
         &self,
         id: &DbObjectId,
         new_catalog: &Catalog,
-    ) -> Option<(MigrationStep, MigrationStep)> {
+    ) -> Option<Vec<MigrationStep>> {
+        let mut steps = Vec::new();
+
         match id {
             DbObjectId::View { schema, name } => {
-                let drop = MigrationStep::View(ViewOperation::Drop {
-                    schema: schema.clone(),
-                    name: name.clone(),
-                });
+                let old_view = self.find_view(schema, name)?;
+                let new_view = new_catalog.find_view(schema, name)?;
 
-                let view = new_catalog.find_view(schema, name)?;
-                let create = MigrationStep::View(ViewOperation::Create {
-                    schema: view.schema.clone(),
-                    name: view.name.clone(),
-                    definition: view.definition.clone(),
-                    security_invoker: view.security_invoker,
-                    security_barrier: view.security_barrier,
-                });
-
-                Some((drop, create))
+                // Use diff functions for DROP and CREATE+COMMENT
+                steps.extend(views_diff::diff(Some(old_view), None));
+                steps.extend(views_diff::diff(None, Some(new_view)));
             }
 
             DbObjectId::Table { schema, name } => {
-                let drop = MigrationStep::Table(TableOperation::Drop {
-                    schema: schema.clone(),
-                    name: name.clone(),
-                });
+                let old_table = self.find_table(schema, name)?;
+                let new_table = new_catalog.find_table(schema, name)?;
 
-                let table = new_catalog.find_table(schema, name)?;
-                let create = MigrationStep::Table(TableOperation::Create {
-                    schema: table.schema.clone(),
-                    name: table.name.clone(),
-                    columns: table.columns.clone(),
-                    primary_key: table.primary_key.clone(),
-                });
-
-                Some((drop, create))
+                steps.extend(tables_diff::diff(Some(old_table), None));
+                steps.extend(tables_diff::diff(None, Some(new_table)));
             }
 
             DbObjectId::Policy {
@@ -296,20 +285,11 @@ impl Catalog {
                 table,
                 name,
             } => {
-                let drop = MigrationStep::Policy(PolicyOperation::Drop {
-                    identifier: PolicyIdentifier {
-                        schema: schema.clone(),
-                        table: table.clone(),
-                        name: name.clone(),
-                    },
-                });
+                let old_policy = self.find_policy(schema, table, name)?;
+                let new_policy = new_catalog.find_policy(schema, table, name)?;
 
-                let policy = new_catalog.find_policy(schema, table, name)?;
-                let create = MigrationStep::Policy(PolicyOperation::Create {
-                    policy: Box::new(policy.clone()),
-                });
-
-                Some((drop, create))
+                steps.extend(policies_diff::diff(Some(old_policy), None));
+                steps.extend(policies_diff::diff(None, Some(new_policy)));
             }
 
             DbObjectId::Constraint {
@@ -317,18 +297,11 @@ impl Catalog {
                 table,
                 name,
             } => {
-                let drop =
-                    MigrationStep::Constraint(ConstraintOperation::Drop(ConstraintIdentifier {
-                        schema: schema.clone(),
-                        table: table.clone(),
-                        name: name.clone(),
-                    }));
+                let old_constraint = self.find_constraint(schema, table, name)?;
+                let new_constraint = new_catalog.find_constraint(schema, table, name)?;
 
-                let constraint = new_catalog.find_constraint(schema, table, name)?;
-                let create =
-                    MigrationStep::Constraint(ConstraintOperation::Create(constraint.clone()));
-
-                Some((drop, create))
+                steps.extend(constraints_diff::diff(Some(old_constraint), None));
+                steps.extend(constraints_diff::diff(None, Some(new_constraint)));
             }
 
             DbObjectId::Function {
@@ -336,41 +309,11 @@ impl Catalog {
                 name,
                 arguments,
             } => {
-                let func = self.find_function(schema, name, arguments)?;
+                let old_func = self.find_function(schema, name, arguments)?;
                 let new_func = new_catalog.find_function(schema, name, arguments)?;
 
-                let kind_str = match func.kind {
-                    function::FunctionKind::Function => "FUNCTION",
-                    function::FunctionKind::Procedure => "PROCEDURE",
-                    function::FunctionKind::Aggregate => "AGGREGATE FUNCTION",
-                };
-
-                let param_types: Vec<String> = func
-                    .parameters
-                    .iter()
-                    .map(|p| p.data_type.clone())
-                    .collect();
-
-                let drop = MigrationStep::Function(FunctionOperation::Drop {
-                    schema: schema.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                    kind: kind_str.to_string(),
-                    parameter_types: param_types.join(", "),
-                });
-
-                let create = MigrationStep::Function(FunctionOperation::Create {
-                    schema: new_func.schema.clone(),
-                    name: new_func.name.clone(),
-                    arguments: new_func.arguments.clone(),
-                    kind: kind_str.to_string(),
-                    parameters: format_parameter_list(&new_func.parameters),
-                    returns: format_return_clause(new_func),
-                    attributes: format_attributes(new_func),
-                    definition: new_func.definition.clone(),
-                });
-
-                Some((drop, create))
+                steps.extend(functions_diff::diff(Some(old_func), None));
+                steps.extend(functions_diff::diff(None, Some(new_func)));
             }
 
             DbObjectId::Trigger {
@@ -378,26 +321,30 @@ impl Catalog {
                 table,
                 name,
             } => {
-                let drop = MigrationStep::Trigger(TriggerOperation::Drop {
-                    identifier: TriggerIdentifier {
-                        schema: schema.clone(),
-                        table: table.clone(),
-                        name: name.clone(),
-                    },
-                });
+                let old_trigger = self.find_trigger(schema, table, name)?;
+                let new_trigger = new_catalog.find_trigger(schema, table, name)?;
 
-                let trigger = new_catalog.find_trigger(schema, table, name)?;
-                let create = MigrationStep::Trigger(TriggerOperation::Create {
-                    trigger: Box::new(trigger.clone()),
-                });
-
-                Some((drop, create))
+                steps.extend(triggers_diff::diff(Some(old_trigger), None));
+                steps.extend(triggers_diff::diff(None, Some(new_trigger)));
             }
 
             // Other types don't need cascade support - they either don't depend on
             // table columns or are handled by regular diff logic
-            _ => None,
+            _ => return None,
         }
+
+        // Re-grant permissions for the cascaded object.
+        // DROP implicitly revokes all grants, so we need to re-apply them.
+        // Filter to grants on this specific object, skipping owner grants (implicit in PostgreSQL).
+        for grant in &new_catalog.grants {
+            if &grant.object.db_object_id() == id && !is_owner_grant(grant) {
+                steps.push(MigrationStep::Grant(GrantOperation::Grant {
+                    grant: grant.clone(),
+                }));
+            }
+        }
+
+        Some(steps)
     }
 
     /// Create an empty catalog for baseline generation

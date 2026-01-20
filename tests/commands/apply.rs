@@ -14,10 +14,10 @@ fn test_execution_mode_variants() {
     // Verify ExecutionMode enum variants exist and can be cloned
     let modes = vec![
         ExecutionMode::DryRun,
-        ExecutionMode::ForceAll,
-        ExecutionMode::ConfirmAll,
+        ExecutionMode::Force,
         ExecutionMode::SafeOnly,
-        ExecutionMode::AutoSafe,
+        ExecutionMode::RequireApproval,
+        ExecutionMode::Interactive,
     ];
 
     // Test cloning capability

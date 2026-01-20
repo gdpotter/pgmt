@@ -5,7 +5,7 @@ use crate::diff::operations::{GrantOperation, MigrationStep};
 use std::collections::BTreeMap;
 
 /// Check if a grant is to the owner of the object (owner grants are implicit in PostgreSQL)
-fn is_owner_grant(grant: &Grant) -> bool {
+pub fn is_owner_grant(grant: &Grant) -> bool {
     match &grant.grantee {
         GranteeType::Role(role_name) => role_name == &grant.object_owner,
         GranteeType::Public => false, // PUBLIC grants are never owner grants

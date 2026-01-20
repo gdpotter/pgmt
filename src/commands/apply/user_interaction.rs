@@ -7,6 +7,7 @@ use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::render::{RenderedSql, Safety};
 
+use super::ApplyOutcome;
 use super::execute_sql_with_context;
 use super::execution_helpers;
 use super::verification::verify_final_state;
@@ -17,7 +18,7 @@ pub async fn execute_with_user_control(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     loop {
         // Show current migration overview
         println!("\n📋 {}", style("Migration Overview").bold().underlined());
@@ -112,7 +113,7 @@ pub async fn execute_with_user_control(
             4 => {
                 // Cancel
                 println!("❌ Migration cancelled by user");
-                return Ok(());
+                return Ok(ApplyOutcome::Cancelled);
             }
             _ => unreachable!(),
         }
@@ -125,8 +126,9 @@ async fn review_steps_individually(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let mut applied_any = false;
+    let mut skipped_any = false;
 
     for (i, step) in rendered.iter().enumerate() {
         let (icon, safety_label) = match step.safety {
@@ -169,6 +171,7 @@ async fn review_steps_individually(
             1 => {
                 // Skip this step
                 println!("⏭️  Skipped step {}", i + 1);
+                skipped_any = true;
                 continue;
             }
             2 => {
@@ -201,7 +204,7 @@ async fn review_steps_individually(
                 if applied_any {
                     println!("⚠️  Some steps were already applied");
                 }
-                return Ok(());
+                return Ok(ApplyOutcome::Cancelled);
             }
             _ => unreachable!(),
         }
@@ -215,5 +218,11 @@ async fn review_steps_individually(
         println!("ℹ️  No steps were applied");
     }
 
-    Ok(())
+    if skipped_any && applied_any {
+        Ok(ApplyOutcome::Skipped)
+    } else if applied_any {
+        Ok(ApplyOutcome::Applied)
+    } else {
+        Ok(ApplyOutcome::Cancelled)
+    }
 }

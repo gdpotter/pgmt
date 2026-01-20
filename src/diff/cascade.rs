@@ -47,9 +47,8 @@ pub fn expand(
             continue;
         }
 
-        if let Some((drop, create)) = old_catalog.synthesize_drop_create(&id, new_catalog) {
-            extra_steps.push(drop);
-            extra_steps.push(create);
+        if let Some(steps) = old_catalog.synthesize_drop_create(&id, new_catalog) {
+            extra_steps.extend(steps);
             seen_ids.insert(id);
         }
     }
@@ -84,11 +83,9 @@ pub fn expand(
 
                 if should_cascade
                     && !cascaded_ids.contains(dep)
-                    && let Some((drop, create)) =
-                        old_catalog.synthesize_drop_create(dep, new_catalog)
+                    && let Some(steps) = old_catalog.synthesize_drop_create(dep, new_catalog)
                 {
-                    extra_steps.push(drop);
-                    extra_steps.push(create);
+                    extra_steps.extend(steps);
                     cascaded_ids.insert(dep.clone());
                     seen_ids.insert(dep.clone());
                 }
@@ -102,11 +99,9 @@ pub fn expand(
     let fk_constraints_to_cascade = fk_constraints_affected_by_type_changes(&steps, old_catalog);
     for constraint_id in &fk_constraints_to_cascade {
         if !cascaded_ids.contains(constraint_id)
-            && let Some((drop, create)) =
-                old_catalog.synthesize_drop_create(constraint_id, new_catalog)
+            && let Some(steps) = old_catalog.synthesize_drop_create(constraint_id, new_catalog)
         {
-            extra_steps.push(drop);
-            extra_steps.push(create);
+            extra_steps.extend(steps);
             cascaded_ids.insert(constraint_id.clone());
         }
     }

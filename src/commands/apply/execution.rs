@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::diff::operations::{MigrationStep, SqlRenderer};
 use crate::render::{RenderedSql, Safety};
 
+use super::ApplyOutcome;
 use super::ExecutionMode;
 use super::execution_helpers;
 use super::user_interaction;
@@ -18,7 +19,7 @@ pub async fn execute_plan(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
     print_migration_summary(&rendered);
@@ -26,10 +27,10 @@ pub async fn execute_plan(
     match mode {
         ExecutionMode::DryRun => {
             println!("✅ Dry run completed - no changes applied");
-            Ok(())
+            Ok(ApplyOutcome::Applied) // Dry run shows what would happen
         }
 
-        ExecutionMode::ForceAll => {
+        ExecutionMode::Force => {
             println!("🚀 Applying all migration steps without confirmation...");
             execution_helpers::apply_all_rendered_steps(
                 &rendered,
@@ -37,16 +38,6 @@ pub async fn execute_plan(
                 expected_catalog,
                 config,
                 true,
-            )
-            .await
-        }
-
-        ExecutionMode::ConfirmAll => {
-            user_interaction::execute_with_user_control(
-                &rendered,
-                dev_pool,
-                expected_catalog,
-                config,
             )
             .await
         }
@@ -63,7 +54,32 @@ pub async fn execute_plan(
             .await
         }
 
-        ExecutionMode::AutoSafe => {
+        ExecutionMode::RequireApproval => {
+            let has_destructive = rendered.iter().any(|s| s.safety == Safety::Destructive);
+
+            if has_destructive {
+                println!("\n⚠️  Destructive operations detected:");
+                for step in rendered.iter().filter(|s| s.safety == Safety::Destructive) {
+                    let preview = step.sql.lines().next().unwrap_or("");
+                    println!("   • {}", preview);
+                }
+                println!("\nRun with --force to apply, or resolve the schema changes.");
+                Ok(ApplyOutcome::DestructiveRequired)
+            } else {
+                // All safe, apply them
+                println!("🚀 All operations are safe - applying automatically...");
+                execution_helpers::apply_all_rendered_steps(
+                    &rendered,
+                    dev_pool,
+                    expected_catalog,
+                    config,
+                    true,
+                )
+                .await
+            }
+        }
+
+        ExecutionMode::Interactive => {
             // Check if all operations are safe
             let all_safe = rendered.iter().all(|s| s.safety == Safety::Safe);
 

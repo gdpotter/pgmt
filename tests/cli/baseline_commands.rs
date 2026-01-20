@@ -21,7 +21,7 @@ mod baseline_tests {
             // Apply the schema first
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -76,7 +76,7 @@ mod baseline_tests {
             // Apply schema and create a baseline
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -110,7 +110,7 @@ mod baseline_tests {
             helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL);")?;
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
             helper
@@ -129,7 +129,7 @@ mod baseline_tests {
             )?;
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
             helper
@@ -174,7 +174,7 @@ mod baseline_tests {
                 )?;
                 helper
                     .command()
-                    .args(["apply", "--force-all"])
+                    .args(["apply", "--force"])
                     .assert()
                     .success();
                 helper

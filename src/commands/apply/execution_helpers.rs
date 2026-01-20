@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::db::schema_executor::ApplyStepExecutor;
 use crate::render::{RenderedSql, Safety};
 
+use super::ApplyOutcome;
 use super::verification::verify_final_state;
 
 /// Apply all rendered steps (both safe and destructive)
@@ -17,7 +18,7 @@ pub async fn apply_all_rendered_steps(
     expected_catalog: &Catalog,
     config: &Config,
     verbose: bool,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let executor = ApplyStepExecutor::new(dev_pool.clone(), verbose, true, false); // show_safety=true, dry_run=false
     let total = rendered.len();
     info!("Executing {} migration steps...", total);
@@ -32,7 +33,7 @@ pub async fn apply_all_rendered_steps(
     }
 
     verify_final_state(dev_pool, expected_catalog, config).await?;
-    Ok(())
+    Ok(ApplyOutcome::Applied)
 }
 
 /// Apply only safe rendered steps, optionally showing destructive ones
@@ -43,12 +44,14 @@ pub async fn apply_safe_rendered_steps(
     config: &Config,
     show_skipped: bool,
     verbose: bool,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let safe_count = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
     let destructive_count = rendered
         .iter()
         .filter(|s| s.safety == Safety::Destructive)
         .count();
+
+    let has_skipped = destructive_count > 0;
 
     // Handle destructive operations
     if destructive_count > 0 && show_skipped {
@@ -84,7 +87,7 @@ pub async fn apply_safe_rendered_steps(
 
         if safe_count == 0 {
             println!("⚠️  No safe operations to apply");
-            return Ok(());
+            return Ok(ApplyOutcome::Skipped);
         }
     }
 
@@ -126,5 +129,9 @@ pub async fn apply_safe_rendered_steps(
         verify_final_state(dev_pool, expected_catalog, config).await?;
     }
 
-    Ok(())
+    if has_skipped {
+        Ok(ApplyOutcome::Skipped)
+    } else {
+        Ok(ApplyOutcome::Applied)
+    }
 }

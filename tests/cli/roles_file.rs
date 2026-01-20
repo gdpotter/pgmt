@@ -31,7 +31,7 @@ GRANT SELECT ON users TO test_app_user;"#,
             // Apply schema to dev database (test_app_user exists in test cluster via seed_standard_roles)
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -64,7 +64,7 @@ GRANT SELECT ON users TO test_app_user;"#,
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -99,7 +99,7 @@ DO $$ BEGIN CREATE ROLE test_app_user; EXCEPTION WHEN duplicate_object OR unique
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -163,7 +163,7 @@ GRANT ALL ON users TO test_admin_user;"#,
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -206,7 +206,7 @@ GRANT SELECT ON items TO test_apply_role;"#,
             // If roles.sql wasn't applied to shadow, schema processing would fail
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -236,7 +236,7 @@ GRANT SELECT ON orders TO test_validate_role;"#,
             // Apply and create baseline
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 

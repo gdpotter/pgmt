@@ -22,7 +22,7 @@ mod diff_basic {
             // Apply schema to dev database
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -52,7 +52,7 @@ mod diff_basic {
             )?;
 
             // Apply to dev database
-            helper.command().args(["apply", "--force-all"]).assert().success();
+            helper.command().args(["apply", "--force"]).assert().success();
 
             // Modify schema
             helper.write_schema_file(
@@ -91,7 +91,7 @@ mod diff_formats {
             )?;
 
             // Apply to dev
-            helper.command().args(["apply", "--force-all"]).assert().success();
+            helper.command().args(["apply", "--force"]).assert().success();
 
             // Add a new column - this will definitely be detected
             helper.write_schema_file(
@@ -123,7 +123,7 @@ mod diff_formats {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -156,7 +156,7 @@ mod diff_formats {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -199,7 +199,7 @@ mod diff_formats {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -249,7 +249,7 @@ mod diff_output_file {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -299,7 +299,7 @@ mod diff_exit_codes {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 
@@ -321,7 +321,7 @@ mod diff_exit_codes {
 
             helper
                 .command()
-                .args(["apply", "--force-all"])
+                .args(["apply", "--force"])
                 .assert()
                 .success();
 

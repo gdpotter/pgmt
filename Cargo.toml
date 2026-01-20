@@ -15,7 +15,7 @@ include = ["/src/", "/.sqlx/", "/LICENSE", "/README.md"]
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 tokio = { version = "1.36", features = ["full", "signal"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "chrono"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "chrono", "tls-rustls"] }
 dotenv = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -28,9 +28,9 @@ console = "0.15.11"
 petgraph = "0.8.1"
 itertools = "0.14.0"
 chrono = { version = "0.4", features = ["serde"] }
-md5 = "0.7"
+md5 = "0.8"
 glob = "0.3"
-uuid = { version = "1.16.0", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 bollard = "0.19"
 once_cell = "1.19"
 futures-util = "0.3"
@@ -39,13 +39,13 @@ similar = "2.3"
 
 [dev-dependencies]
 once_cell = "1.21.3"
-tempfile = "3.8"
+tempfile = "3.24"
 anyhow = "1.0"
-assert_cmd = "2.0"
+assert_cmd = "2.1.2"
 predicates = "3.0"
-chrono = "0.4"
-rstest = "0.23"
-insta = "1.41"
+chrono = "0.4.43"
+rstest = "0.26.1"
+insta = "1.46.1"
 
 # Interactive CLI testing - better support on Unix-like systems
 [target.'cfg(not(windows))'.dev-dependencies]

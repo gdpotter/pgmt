@@ -50,27 +50,23 @@ struct Cli {
 
 #[derive(Parser)]
 struct ApplyArgs {
-    /// Apply only safe operations, skip potentially destructive changes
-    #[arg(long, group = "mode")]
-    safe_only: bool,
-
-    /// Auto-apply when all operations are safe, prompt when any are destructive
-    #[arg(long, group = "mode")]
-    auto_safe: bool,
-
-    /// Prompt for confirmation before applying all changes (default)
-    #[arg(long, group = "mode")]
-    confirm_all: bool,
-
-    /// Apply all changes without confirmation prompts
-    #[arg(long, group = "mode")]
-    force_all: bool,
-
     /// Show what would be applied without making any changes
     #[arg(long, group = "mode")]
     dry_run: bool,
 
-    /// Watch for schema file changes and continuously apply them (defaults to --auto-safe mode)
+    /// Apply all changes without confirmation prompts
+    #[arg(long, group = "mode")]
+    force: bool,
+
+    /// Apply only safe operations, skip destructive changes
+    #[arg(long, group = "mode")]
+    safe_only: bool,
+
+    /// Fail if destructive operations exist (default in non-interactive mode)
+    #[arg(long, group = "mode")]
+    require_approval: bool,
+
+    /// Watch for schema file changes and continuously apply them
     #[arg(long)]
     watch: bool,
 
@@ -383,29 +379,38 @@ async fn run_main(cli: Cli) -> Result<()> {
                         .with_cli_args(cli_config)
                         .resolve()?;
 
-                    let execution_mode = if args.safe_only {
-                        ExecutionMode::SafeOnly
-                    } else if args.auto_safe {
-                        ExecutionMode::AutoSafe
-                    } else if args.confirm_all {
-                        ExecutionMode::ConfirmAll
-                    } else if args.force_all {
-                        ExecutionMode::ForceAll
-                    } else if args.dry_run {
+                    use std::io::IsTerminal;
+                    use commands::apply::ApplyOutcome;
+
+                    let execution_mode = if args.dry_run {
                         ExecutionMode::DryRun
-                    } else if args.watch {
-                        // Default to AutoSafe in watch mode for better UX
-                        ExecutionMode::AutoSafe
+                    } else if args.force {
+                        ExecutionMode::Force
+                    } else if args.safe_only {
+                        ExecutionMode::SafeOnly
+                    } else if args.require_approval {
+                        ExecutionMode::RequireApproval
+                    } else if std::io::stdin().is_terminal() {
+                        // Interactive: auto-apply safe, prompt for destructive
+                        ExecutionMode::Interactive
                     } else {
-                        // Keep existing default for non-watch mode
-                        ExecutionMode::ConfirmAll
+                        // Non-interactive: fail if destructive
+                        ExecutionMode::RequireApproval
                     };
 
                     info!("Applying modular schema to dev");
-                    if args.watch {
-                        commands::cmd_apply_watch(&config, &root_dir, execution_mode).await
+                    let outcome = if args.watch {
+                        commands::cmd_apply_watch(&config, &root_dir, execution_mode).await?
                     } else {
-                        commands::cmd_apply(&config, &root_dir, execution_mode).await
+                        commands::cmd_apply(&config, &root_dir, execution_mode).await?
+                    };
+
+                    // Return appropriate exit code based on outcome
+                    match outcome {
+                        ApplyOutcome::DestructiveRequired => {
+                            std::process::exit(2);
+                        }
+                        _ => Ok(()),
                     }
                 }
                 Commands::Migrate { command } => match command {

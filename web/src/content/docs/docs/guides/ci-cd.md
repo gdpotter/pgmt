@@ -9,10 +9,34 @@ Patterns for integrating pgmt with CI/CD pipelines.
 
 | Command                 | Purpose                                         | When to Use            |
 | ----------------------- | ----------------------------------------------- | ---------------------- |
+| `pgmt apply`            | Apply schema to dev database                    | Integration tests      |
 | `pgmt config validate`  | Validate configuration syntax                   | Every PR               |
 | `pgmt migrate validate` | Ensure migrations produce intended schema       | Every PR               |
 | `pgmt migrate diff`     | Detect drift between schema and target database | Scheduled / pre-deploy |
 | `pgmt migrate apply`    | Deploy migrations to target database            | On merge to main       |
+
+## Using pgmt apply in CI
+
+For integration tests or setting up a dev database in CI, use `pgmt apply`:
+
+```bash
+# Default: fails with exit code 2 if destructive operations exist
+pgmt apply
+
+# Force apply everything (use when you know destructive ops are expected)
+pgmt apply --force
+
+# Apply only safe operations, skip destructive
+pgmt apply --safe-only
+```
+
+**How it works:** In non-interactive environments (CI/CD), `pgmt apply` defaults to `--require-approval` behavior, meaning it will:
+- Auto-apply all safe operations
+- Exit with code 2 if any destructive operations exist
+
+This is ideal for agentic tools and CI pipelines where you want to:
+1. Try the safe path first (`pgmt apply`)
+2. If it fails with exit code 2, either fix the schema or use `--force`
 
 ## Basic Workflow
 

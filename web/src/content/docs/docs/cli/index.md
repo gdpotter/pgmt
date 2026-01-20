@@ -125,21 +125,36 @@ pgmt apply [OPTIONS]
 **Options:**
 
 ```bash
---watch                       # Watch for file changes
 --dry-run                     # Preview changes without applying
---auto-safe                   # Auto-apply safe changes, prompt for destructive
---safe-only                   # Apply only safe changes
---confirm-all                 # Prompt for each change
---force-all                   # Apply all without prompts
+--force                       # Apply all changes without confirmation
+--safe-only                   # Apply only safe changes, skip destructive
+--require-approval            # Fail if destructive changes exist
+--watch                       # Watch for file changes
 ```
+
+**Default behavior:**
+
+- **In terminal (interactive):** Auto-apply safe changes, prompt for destructive
+- **In CI/pipes (non-interactive):** Fail with exit code 2 if destructive changes exist
+
+**Exit codes:**
+
+- `0`: Success (or no changes needed)
+- `1`: Error
+- `2`: Destructive changes exist (in `--require-approval` mode or non-interactive)
 
 **Examples:**
 
 ```bash
-pgmt apply                    # Interactive
-pgmt apply --watch            # Watch mode (auto-safe by default)
+pgmt apply                    # Interactive - prompts when needed
+pgmt apply --watch            # Watch mode - shows which file changed
 pgmt apply --dry-run          # Preview only
+pgmt apply --force            # Apply all without prompts
 pgmt apply --safe-only        # Skip destructive changes
+
+# CI/CD usage:
+pgmt apply                    # Fails (exit 2) if destructive ops exist
+pgmt apply --force            # Forces all changes in CI
 ```
 
 ---
@@ -461,12 +476,18 @@ PGMT_TARGET_URL               # Override target database URL
 
 ## Exit Codes
 
-```
-0  - Success
-1  - General error
-2  - Configuration error
-3  - Database connection error
-4  - Migration error
-5  - Validation error
-64 - Usage error (invalid arguments)
-```
+**General:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error (general) |
+
+**Command-specific:**
+
+| Command | Code | Meaning |
+|---------|------|---------|
+| `pgmt apply` | 2 | Destructive operations exist (in non-interactive/`--require-approval` mode) |
+| `pgmt diff` | 1 | Differences detected |
+| `pgmt migrate diff` | 1 | Drift detected |
+| `pgmt migrate validate` | 1 | Validation failed |

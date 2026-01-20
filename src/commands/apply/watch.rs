@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use sqlx::PgPool;
 use std::path::Path;
 use std::sync::mpsc;
@@ -13,6 +13,7 @@ use crate::diff::operations::SqlRenderer;
 use crate::diff::{cascade, diff_all, diff_order};
 use crate::render::{RenderedSql, Safety};
 
+use super::ApplyOutcome;
 use super::ExecutionMode;
 use super::connect_with_retry;
 use super::execution_helpers;
@@ -26,7 +27,7 @@ pub async fn cmd_apply_watch_impl(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     println!("👁️  Starting pgmt in watch mode...");
     println!("💡 Press Ctrl+C to stop watching");
 
@@ -102,8 +103,13 @@ pub async fn cmd_apply_watch_impl(
                 }
 
                 // Check if this is a relevant file change
-                if is_relevant_change(&event) {
-                    println!("\n🔄 Schema file change detected...");
+                if let Some(changed_file) = get_changed_sql_file(&event) {
+                    // Show which file triggered the change
+                    let file_display = changed_file
+                        .strip_prefix(root_dir)
+                        .unwrap_or(changed_file)
+                        .display();
+                    println!("\n🔄 Change detected: {}", file_display);
 
                     match perform_single_apply(
                         config,
@@ -114,8 +120,24 @@ pub async fn cmd_apply_watch_impl(
                     )
                     .await
                     {
-                        Ok(()) => {
-                            println!("✅ Schema applied successfully");
+                        Ok(outcome) => {
+                            match outcome {
+                                ApplyOutcome::NoChanges => {
+                                    println!("✅ No schema changes needed");
+                                }
+                                ApplyOutcome::Applied => {
+                                    println!("✅ Schema applied successfully");
+                                }
+                                ApplyOutcome::Skipped => {
+                                    println!("✅ Safe operations applied (destructive skipped)");
+                                }
+                                ApplyOutcome::DestructiveRequired => {
+                                    println!("⚠️  Destructive operations require --force");
+                                }
+                                ApplyOutcome::Cancelled => {
+                                    println!("❌ Operation cancelled");
+                                }
+                            }
                             last_apply = Instant::now();
                         }
                         Err(e) => {
@@ -144,23 +166,22 @@ pub async fn cmd_apply_watch_impl(
     }
 
     println!("👋 Watch mode stopped");
-    Ok(())
+    Ok(ApplyOutcome::Cancelled)
 }
 
-/// Check if a file event is relevant for schema changes
-fn is_relevant_change(event: &Event) -> bool {
-    use notify::EventKind;
-
+/// Get the first changed SQL file from an event, if any
+fn get_changed_sql_file(event: &Event) -> Option<&Path> {
     // Only care about write events and creation/deletion
     match event.kind {
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-            // Check if any of the paths are .sql files
+            // Find the first .sql file in the paths
             event
                 .paths
                 .iter()
-                .any(|path| path.extension().is_some_and(|ext| ext == "sql"))
+                .find(|path| path.extension().is_some_and(|ext| ext == "sql"))
+                .map(|p| p.as_path())
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -171,7 +192,7 @@ async fn perform_single_apply(
     dev_pool: &PgPool,
     shadow_pool: &PgPool,
     execution_mode: ExecutionMode,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let schema_dir = root_dir.join(&config.directories.schema);
     let roles_file = root_dir.join(&config.directories.roles);
 
@@ -203,7 +224,7 @@ async fn perform_single_apply(
     let ordered = diff_order(full_steps, &old, &new)?;
 
     if ordered.is_empty() {
-        return Ok(()); // No changes
+        return Ok(ApplyOutcome::NoChanges);
     }
 
     println!(
@@ -223,7 +244,7 @@ async fn execute_plan_watch_aware(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
     // Show a summary appropriate for watch mode
@@ -232,10 +253,10 @@ async fn execute_plan_watch_aware(
     match mode {
         ExecutionMode::DryRun => {
             println!("✅ Dry run - no changes applied");
-            Ok(())
+            Ok(ApplyOutcome::Applied)
         }
 
-        ExecutionMode::ForceAll => {
+        ExecutionMode::Force => {
             // Auto-apply everything in watch mode
             println!("🚀 Auto-applying all changes...");
             execution_helpers::apply_all_rendered_steps(
@@ -259,21 +280,33 @@ async fn execute_plan_watch_aware(
                 false,
             )
             .await
-            // TODO: Send desktop notification for destructive operations
         }
 
-        ExecutionMode::ConfirmAll => {
-            // In watch mode, use the enhanced user control
-            user_interaction::execute_with_user_control(
-                &rendered,
-                dev_pool,
-                expected_catalog,
-                config,
-            )
-            .await
+        ExecutionMode::RequireApproval => {
+            let has_destructive = rendered.iter().any(|s| s.safety == Safety::Destructive);
+
+            if has_destructive {
+                println!("\n⚠️  Destructive operations detected:");
+                for step in rendered.iter().filter(|s| s.safety == Safety::Destructive) {
+                    let preview = step.sql.lines().next().unwrap_or("");
+                    println!("   • {}", preview);
+                }
+                println!("\nRun with --force to apply, or resolve the schema changes.");
+                Ok(ApplyOutcome::DestructiveRequired)
+            } else {
+                println!("🚀 All operations are safe - applying automatically...");
+                execution_helpers::apply_all_rendered_steps(
+                    &rendered,
+                    dev_pool,
+                    expected_catalog,
+                    config,
+                    false,
+                )
+                .await
+            }
         }
 
-        ExecutionMode::AutoSafe => {
+        ExecutionMode::Interactive => {
             // Check if all operations are safe
             let all_safe = rendered.iter().all(|s| s.safety == Safety::Safe);
 

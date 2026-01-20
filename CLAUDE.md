@@ -224,6 +224,12 @@ Objects that depend on table columns (via composite types, column references, et
 
 **Note:** The generic cascade loop in `cascade.rs` uses `Catalog::synthesize_drop_create()` to handle all supported object types. Adding your type there makes cascading work automatically.
 
+**Implementation details:**
+- `synthesize_drop_create()` returns `Option<Vec<MigrationStep>>` containing all operations needed
+- Uses existing diff functions (e.g., `views_diff::diff()`) to generate DROP and CREATE operations
+- Automatically includes associated operations like comments
+- Re-applies grants after DROP/CREATE since DROP implicitly revokes all grants
+
 ## Testing Patterns
 
 **Setup:** Run `./scripts/test-setup.sh` once to start PostgreSQL containers (versions 13-18).

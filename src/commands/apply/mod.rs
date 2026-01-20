@@ -17,13 +17,28 @@ pub enum ExecutionMode {
     /// Preview changes without applying them
     DryRun,
     /// Apply all changes without user confirmation
-    ForceAll,
-    /// Prompt for confirmation before each change
-    ConfirmAll,
+    Force,
     /// Apply only safe operations, skip destructive ones
     SafeOnly,
-    /// Auto-apply when all operations are safe, prompt when any are destructive
-    AutoSafe,
+    /// Fail if any destructive operations exist (default in non-TTY)
+    RequireApproval,
+    /// Auto-apply safe, prompt for destructive (default in TTY)
+    Interactive,
+}
+
+/// Outcome of an apply operation, used for exit code determination
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApplyOutcome {
+    /// No changes were needed
+    NoChanges,
+    /// All changes were applied successfully
+    Applied,
+    /// Safe changes applied, destructive skipped (safe-only mode)
+    Skipped,
+    /// Destructive operations exist, not applied (require-approval mode)
+    DestructiveRequired,
+    /// User cancelled the operation
+    Cancelled,
 }
 
 use crate::catalog::Catalog;
@@ -34,14 +49,13 @@ use crate::diff::{cascade, diff_all, diff_order};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::path::Path;
-use tracing::info;
 
 /// Main apply command entry point
 pub async fn cmd_apply(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     println!("🔄 Applying modular schema to development database...");
 
     let shutdown_signal = ShutdownSignal::new();
@@ -55,13 +69,10 @@ pub async fn cmd_apply(
     let dev_pool = PgPool::connect(&config.databases.dev)
         .await
         .context("Failed to connect to development database")?;
-    info!("Connected to development database");
 
     println!("🛡️  Setting up shadow database...");
     let shadow_url = config.databases.shadow.get_connection_string().await?;
-
     let shadow_pool = connect_with_retry(&shadow_url).await?;
-    info!("Shadow database ready");
 
     println!("🔄 Processing schema to shadow database...");
     let schema_dir = root_dir.join(&config.directories.schema);
@@ -78,32 +89,26 @@ pub async fn cmd_apply(
         clean_before_apply: false, // Already cleaned above
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
-    info!("Processing schema files...");
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     println!("📊 Analyzing database catalogs...");
-    info!("Loading development catalog...");
     let old_catalog = Catalog::load(&dev_pool)
         .await
         .context("Failed to load catalog from development database")?;
-    info!("Loaded development catalog");
     let new_catalog = processed_schema.with_file_dependencies_applied();
-    info!("Loaded target catalog");
 
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
     let old = filter.filter_catalog(old_catalog);
     let new = filter.filter_catalog(new_catalog);
 
     println!("🔍 Computing schema differences...");
-    info!("Computing schema differences...");
     let raw_steps = diff_all(&old, &new);
     let full_steps = cascade::expand(raw_steps, &old, &new);
     let ordered = diff_order(full_steps, &old, &new)?;
-    info!("Schema differences computed");
 
     if ordered.is_empty() {
         println!("✅ No schema changes detected - database is up to date");
-        return Ok(());
+        return Ok(ApplyOutcome::NoChanges);
     }
 
     println!(
@@ -112,16 +117,21 @@ pub async fn cmd_apply(
         if ordered.len() == 1 { "" } else { "s" }
     );
 
+    let mut final_outcome = ApplyOutcome::Applied;
+
     loop {
         if shutdown_signal.is_shutdown() {
             println!("🛑 Shutdown signal received, stopping gracefully...");
-            return Ok(());
+            return Ok(ApplyOutcome::Cancelled);
         }
 
         match execution::execute_plan(&ordered, &dev_pool, execution_mode.clone(), &new, config)
             .await
         {
-            Ok(()) => break,
+            Ok(outcome) => {
+                final_outcome = outcome;
+                break;
+            }
             Err(e) if e.to_string() == "REFRESH_REQUESTED" => {
                 println!("🔄 Refreshing schema analysis...");
 
@@ -160,7 +170,7 @@ pub async fn cmd_apply(
                     if new_ordered.len() == 1 { "" } else { "s" }
                 );
 
-                if matches!(execution_mode, ExecutionMode::ConfirmAll) {
+                if matches!(execution_mode, ExecutionMode::Interactive) {
                     use crate::render::RenderedSql;
                     let rendered: Vec<RenderedSql> =
                         new_ordered.iter().flat_map(|step| step.to_sql()).collect();
@@ -174,7 +184,10 @@ pub async fn cmd_apply(
                     )
                     .await
                     {
-                        Ok(()) => break,
+                        Ok(outcome) => {
+                            final_outcome = outcome;
+                            break;
+                        }
                         Err(refresh_err) if refresh_err.to_string() == "REFRESH_REQUESTED" => {
                             continue;
                         }
@@ -188,7 +201,7 @@ pub async fn cmd_apply(
         }
     }
 
-    Ok(())
+    Ok(final_outcome)
 }
 
 /// Apply command with file watching support
@@ -196,6 +209,6 @@ pub async fn cmd_apply_watch(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
-) -> Result<()> {
+) -> Result<ApplyOutcome> {
     watch::cmd_apply_watch_impl(config, root_dir, execution_mode).await
 }
