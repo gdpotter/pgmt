@@ -379,8 +379,8 @@ async fn run_main(cli: Cli) -> Result<()> {
                         .with_cli_args(cli_config)
                         .resolve()?;
 
-                    use std::io::IsTerminal;
                     use commands::apply::ApplyOutcome;
+                    use std::io::IsTerminal;
 
                     let execution_mode = if args.dry_run {
                         ExecutionMode::DryRun
