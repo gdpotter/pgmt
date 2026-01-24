@@ -74,6 +74,8 @@ struct FunctionDependencyRow {
     cls_relkind: Option<String>,
     cls_schema: Option<String>,
     cls_name: Option<String>,
+    /// Column name when refobjsubid > 0 (for BEGIN ATOMIC functions in PostgreSQL 14+)
+    cls_column: Option<String>,
     typ_name: Option<String>,
     typ_schema: Option<String>,
     typ_typtype: Option<String>,
@@ -101,6 +103,8 @@ async fn fetch_all_function_dependencies(
             cls.relkind::text AS "cls_relkind?",
             cls_n.nspname AS "cls_schema?",
             cls.relname AS "cls_name?",
+            -- Column name for column-level dependencies (BEGIN ATOMIC functions, PostgreSQL 14+)
+            cls_attr.attname AS "cls_column?",
 
             -- Type reference (resolve array element type)
             CASE
@@ -140,6 +144,12 @@ async fn fetch_all_function_dependencies(
             AND d.refobjid = cls.oid
             AND cls.relkind IN ('r', 'v', 'm', 'p') -- tables, views, materialized views, partitioned tables
         LEFT JOIN pg_namespace cls_n ON cls.relnamespace = cls_n.oid
+        -- Column-level dependency (BEGIN ATOMIC functions in PostgreSQL 14+)
+        -- refobjsubid > 0 indicates a column reference, attnum matches refobjsubid
+        LEFT JOIN pg_attribute cls_attr
+            ON cls_attr.attrelid = cls.oid
+            AND cls_attr.attnum = d.refobjsubid
+            AND d.refobjsubid > 0
 
         -- Type reference (with array element type resolution)
         LEFT JOIN pg_type typ
@@ -203,6 +213,7 @@ async fn fetch_all_function_dependencies(
                 cls_relkind: row.cls_relkind,
                 cls_schema: row.cls_schema,
                 cls_name: row.cls_name,
+                cls_column: row.cls_column,
                 typ_name: row.typ_name,
                 typ_schema: row.typ_schema,
                 typ_typtype: row.typ_typtype,
@@ -220,16 +231,22 @@ async fn fetch_all_function_dependencies(
 
 /// Populate function dependencies using pg_depend.
 ///
-/// **Important limitation**: PostgreSQL does NOT record table/view/sequence references
-/// from function bodies in pg_depend. This is a fundamental PostgreSQL limitation that
-/// affects all procedural languages (SQL, PL/pgSQL, etc.).
-///
-/// This function currently only captures:
+/// This function captures:
 /// - Type dependencies from function parameters and return types
 /// - Dependencies that PostgreSQL explicitly records in pg_depend
+/// - Column-level dependencies for BEGIN ATOMIC functions (PostgreSQL 14+)
 ///
-/// For function body dependencies (tables/views/sequences referenced in the code),
-/// use file-based dependencies via `-- require:` comments in schema files.
+/// **Important limitation for traditional functions**: PostgreSQL does NOT record
+/// table/view/sequence references from function bodies in pg_depend for `$$` body
+/// functions. This is a fundamental PostgreSQL limitation that affects all
+/// procedural languages (SQL, PL/pgSQL, etc.) using the traditional syntax.
+///
+/// **BEGIN ATOMIC functions (PostgreSQL 14+)**: These functions DO have full
+/// dependency tracking in pg_depend, including column-level granularity via
+/// refobjsubid. This enables proper cascade handling when columns are dropped.
+///
+/// For traditional function body dependencies (tables/views/sequences referenced
+/// in the code), use file-based dependencies via `-- require:` comments in schema files.
 fn populate_function_dependencies(
     functions: &mut [Function],
     func_oids: &[Oid],
@@ -243,7 +260,7 @@ fn populate_function_dependencies(
         let function_id = function.id();
 
         for dep in deps {
-            // Table or view dependency
+            // Table or view dependency (with optional column-level granularity)
             if let Some(relkind) = dep.cls_relkind.as_deref() {
                 if let (Some(schema), Some(name)) = (&dep.cls_schema, &dep.cls_name) {
                     // Skip system schemas
@@ -251,6 +268,20 @@ fn populate_function_dependencies(
                         continue;
                     }
 
+                    // Column-level dependency (BEGIN ATOMIC functions in PostgreSQL 14+)
+                    // When refobjsubid > 0, PostgreSQL records a dependency on a specific column
+                    if let Some(column) = &dep.cls_column {
+                        let col_dep_id = DbObjectId::Column {
+                            schema: schema.clone(),
+                            table: name.clone(),
+                            column: column.clone(),
+                        };
+                        if !function.depends_on.contains(&col_dep_id) {
+                            function.depends_on.push(col_dep_id);
+                        }
+                    }
+
+                    // Also add table/view level dependency for ordering purposes
                     let dep_id = match relkind {
                         "r" | "p" => DbObjectId::Table {
                             schema: schema.clone(),

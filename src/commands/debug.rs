@@ -89,6 +89,11 @@ pub enum ObjectIdJson {
     Comment {
         object_id: Box<ObjectIdJson>,
     },
+    Column {
+        schema: String,
+        table: String,
+        column: String,
+    },
 }
 
 impl From<&DbObjectId> for ObjectIdJson {
@@ -168,6 +173,15 @@ impl From<&DbObjectId> for ObjectIdJson {
             DbObjectId::Grant { id } => ObjectIdJson::Grant { id: id.clone() },
             DbObjectId::Comment { object_id } => ObjectIdJson::Comment {
                 object_id: Box::new(ObjectIdJson::from(object_id.as_ref())),
+            },
+            DbObjectId::Column {
+                schema,
+                table,
+                column,
+            } => ObjectIdJson::Column {
+                schema: schema.clone(),
+                table: table.clone(),
+                column: column.clone(),
             },
         }
     }
@@ -434,6 +448,13 @@ fn format_object_id(obj: &ObjectIdJson) -> String {
         ObjectIdJson::Grant { id } => format!("Grant: {}", id),
         ObjectIdJson::Comment { object_id } => {
             format!("Comment on {}", format_object_id(object_id))
+        }
+        ObjectIdJson::Column {
+            schema,
+            table,
+            column,
+        } => {
+            format!("Column: {}.{}.{}", schema, table, column)
         }
     }
 }

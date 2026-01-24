@@ -988,3 +988,238 @@ async fn test_no_function_cascade_without_column_type_change() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that when a column is dropped and a BEGIN ATOMIC function depends on it,
+/// the function is dropped first before the column can be dropped.
+/// PostgreSQL 14+ requires this ordering due to column-level pg_depend entries.
+#[tokio::test]
+async fn test_begin_atomic_column_drop_cascade() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    // Skip if PostgreSQL < 14 (BEGIN ATOMIC not supported)
+    if helper.pg_major_version().await < 14 {
+        return Ok(());
+    }
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with column and BEGIN ATOMIC function using it
+            &[
+                "CREATE TABLE app.work_orders (id UUID PRIMARY KEY, assignee TEXT, notes TEXT)",
+                "CREATE FUNCTION app.clear_assignee(p_id UUID) RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE app.work_orders SET assignee = NULL WHERE id = p_id; END",
+            ],
+            // Target DB: column dropped, function removed
+            &[
+                "CREATE TABLE app.work_orders (id UUID PRIMARY KEY, notes TEXT)",
+            ],
+            |steps, final_catalog| {
+                // Should have DROP FUNCTION step
+                let drop_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                        if schema == "app" && name == "clear_assignee")
+                });
+                assert!(drop_func, "Should have DROP FUNCTION for clear_assignee");
+
+                // Should have ALTER TABLE with DROP COLUMN
+                let drop_column = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, pgmt::diff::operations::ColumnAction::Drop { name } if name == "assignee")))
+                });
+                assert!(drop_column, "Should have DROP COLUMN assignee");
+
+                // Verify ordering: DROP FUNCTION before DROP COLUMN
+                let drop_func_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                            if schema == "app" && name == "clear_assignee")
+                    });
+                let drop_column_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                            if actions.iter().any(|a| matches!(a, pgmt::diff::operations::ColumnAction::Drop { name } if name == "assignee")))
+                    });
+
+                assert!(
+                    drop_func_pos.unwrap() < drop_column_pos.unwrap(),
+                    "DROP FUNCTION should come before DROP COLUMN (positions: func={:?}, col={:?})",
+                    drop_func_pos,
+                    drop_column_pos
+                );
+
+                // Verify final state: function gone, column gone
+                assert!(
+                    !final_catalog.functions.iter().any(|f| f.name == "clear_assignee"),
+                    "Function should be dropped"
+                );
+                let table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "work_orders")
+                    .expect("Table should exist");
+                assert!(
+                    !table.columns.iter().any(|c| c.name == "assignee"),
+                    "Column assignee should be dropped"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Test BEGIN ATOMIC function cascade when column is dropped but function is updated
+/// to use different columns (function survives with different deps).
+#[tokio::test]
+async fn test_begin_atomic_function_updated_on_column_drop() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    // Skip if PostgreSQL < 14 (BEGIN ATOMIC not supported)
+    if helper.pg_major_version().await < 14 {
+        return Ok(());
+    }
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with column A, function using A
+            &[
+                "CREATE TABLE app.items (id SERIAL PRIMARY KEY, old_status TEXT, new_status TEXT)",
+                "CREATE FUNCTION app.update_item(p_id INTEGER) RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE app.items SET old_status = 'archived' WHERE id = p_id; END",
+            ],
+            // Target DB: column A dropped, function updated to use column B
+            &[
+                "CREATE TABLE app.items (id SERIAL PRIMARY KEY, new_status TEXT)",
+                "CREATE FUNCTION app.update_item(p_id INTEGER) RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE app.items SET new_status = 'active' WHERE id = p_id; END",
+            ],
+            |steps, final_catalog| {
+                // Should cascade: DROP FUNCTION → DROP COLUMN → CREATE FUNCTION
+                // Or: DROP FUNCTION → ALTER → CREATE FUNCTION (if implemented as replace split)
+
+                let drop_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { name, .. })
+                        if name == "update_item")
+                });
+                let create_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { name, .. })
+                        if name == "update_item")
+                });
+
+                assert!(drop_func, "Should have DROP FUNCTION");
+                assert!(create_func, "Should have CREATE FUNCTION");
+
+                // Verify final state: function exists with updated definition
+                let func = final_catalog
+                    .functions
+                    .iter()
+                    .find(|f| f.name == "update_item")
+                    .expect("Function should exist");
+                assert!(
+                    func.definition.contains("new_status"),
+                    "Function should use new_status column"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Test that cascade works when parameter NAME changes (but type stays same) along with column drop.
+/// PostgreSQL considers functions with same parameter types but different names to be the same function.
+/// The cascade lookup must use signature matching (types only), not the exact arguments string.
+#[tokio::test]
+async fn test_begin_atomic_cascade_with_parameter_name_change() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    // Skip if PostgreSQL < 14 (BEGIN ATOMIC not supported)
+    if helper.pg_major_version().await < 14 {
+        return Ok(());
+    }
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: table with 'assignee' column, function with 'p_assignee' parameter
+            &[
+                "CREATE TABLE app.work_orders (id SERIAL PRIMARY KEY, action TEXT, assignee TEXT)",
+                "CREATE FUNCTION app.create_work_order(p_action TEXT, p_assignee TEXT) RETURNS void LANGUAGE sql BEGIN ATOMIC INSERT INTO app.work_orders (action, assignee) VALUES (p_action, p_assignee); END",
+            ],
+            // Target DB: column renamed to 'assignee_member_id', parameter renamed to 'p_assignee_member_id'
+            // Same parameter TYPES (TEXT), different NAMES
+            &[
+                "CREATE TABLE app.work_orders (id SERIAL PRIMARY KEY, action TEXT, assignee_member_id TEXT)",
+                "CREATE FUNCTION app.create_work_order(p_action TEXT, p_assignee_member_id TEXT) RETURNS void LANGUAGE sql BEGIN ATOMIC INSERT INTO app.work_orders (action, assignee_member_id) VALUES (p_action, p_assignee_member_id); END",
+            ],
+            |steps, final_catalog| {
+                // Should cascade with DROP + CREATE (not Replace)
+                // because the old function depends on the 'assignee' column being dropped
+                let drop_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { name, .. })
+                        if name == "create_work_order")
+                });
+                let create_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { name, .. })
+                        if name == "create_work_order")
+                });
+                let replace_func = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Replace { name, .. })
+                        if name == "create_work_order")
+                });
+
+                assert!(drop_func, "Should have DROP FUNCTION (cascade due to column drop)");
+                assert!(create_func, "Should have CREATE FUNCTION (cascade recreation)");
+                assert!(!replace_func, "Should NOT have REPLACE (should be filtered by cascade)");
+
+                // Verify ordering: DROP FUNCTION before DROP COLUMN, CREATE FUNCTION after
+                let drop_func_pos = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { name, .. })
+                        if name == "create_work_order")
+                });
+                let drop_column_pos = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, pgmt::diff::operations::ColumnAction::Drop { name } if name == "assignee")))
+                });
+                let create_func_pos = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { name, .. })
+                        if name == "create_work_order")
+                });
+
+                if let (Some(drop_f), Some(drop_c), Some(create_f)) = (drop_func_pos, drop_column_pos, create_func_pos) {
+                    assert!(
+                        drop_f < drop_c,
+                        "DROP FUNCTION should come before DROP COLUMN"
+                    );
+                    assert!(
+                        drop_c < create_f,
+                        "CREATE FUNCTION should come after DROP COLUMN"
+                    );
+                }
+
+                // Verify final state
+                let func = final_catalog
+                    .functions
+                    .iter()
+                    .find(|f| f.name == "create_work_order")
+                    .expect("Function should exist");
+                assert!(
+                    func.definition.contains("assignee_member_id"),
+                    "Function should use new column name"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

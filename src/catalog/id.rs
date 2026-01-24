@@ -65,6 +65,13 @@ pub enum DbObjectId {
         name: String,
         arguments: String,
     },
+    /// Column-level dependency for BEGIN ATOMIC functions (PostgreSQL 14+)
+    /// and other objects that have pg_depend entries with refobjsubid > 0
+    Column {
+        schema: String,
+        table: String,
+        column: String,
+    },
 }
 
 impl DbObjectId {
@@ -84,7 +91,8 @@ impl DbObjectId {
             | DbObjectId::Constraint { schema, .. }
             | DbObjectId::Trigger { schema, .. }
             | DbObjectId::Policy { schema, .. }
-            | DbObjectId::Aggregate { schema, .. } => Some(schema.as_str()),
+            | DbObjectId::Aggregate { schema, .. }
+            | DbObjectId::Column { schema, .. } => Some(schema.as_str()),
             DbObjectId::Grant { .. } | DbObjectId::Extension { .. } => None,
             DbObjectId::Comment { object_id } => object_id.schema(),
         }
@@ -158,6 +166,17 @@ mod tests {
             }
             .schema(),
             Some("test")
+        );
+
+        // Column returns its schema
+        assert_eq!(
+            DbObjectId::Column {
+                schema: "app".to_string(),
+                table: "users".to_string(),
+                column: "email".to_string()
+            }
+            .schema(),
+            Some("app")
         );
     }
 }

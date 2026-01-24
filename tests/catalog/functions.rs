@@ -905,3 +905,128 @@ async fn test_function_returns_view_type() {
     })
     .await;
 }
+
+/// Test that BEGIN ATOMIC functions (PostgreSQL 14+) track column-level dependencies.
+/// PostgreSQL records these dependencies in pg_depend with refobjsubid > 0.
+#[tokio::test]
+async fn test_begin_atomic_function_column_dependency() {
+    with_test_db(async |db| {
+        // Skip if PostgreSQL < 14 (BEGIN ATOMIC not supported)
+        if db.pg_major_version().await < 14 {
+            return;
+        }
+
+        // Create a table with columns
+        db.execute(
+            "CREATE TABLE work_orders (
+                id UUID PRIMARY KEY,
+                assignee TEXT,
+                completed_at TIMESTAMP
+            )",
+        )
+        .await;
+
+        // Create a BEGIN ATOMIC function that references specific columns
+        db.execute(
+            "CREATE FUNCTION complete_work_order(p_id UUID, p_completed_at TIMESTAMP)
+             RETURNS void
+             LANGUAGE sql
+             BEGIN ATOMIC
+                 UPDATE work_orders
+                 SET assignee = NULL, completed_at = p_completed_at
+                 WHERE id = p_id;
+             END",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.schema, "public");
+        assert_eq!(func.name, "complete_work_order");
+
+        let deps = func.depends_on();
+
+        // Should depend on the table
+        assert!(
+            deps.contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "work_orders".to_string()
+            }),
+            "Function should depend on Table 'work_orders'. Got: {:?}",
+            deps
+        );
+
+        // Should depend on specific columns (BEGIN ATOMIC functions track column-level dependencies)
+        // The exact columns depend on what PostgreSQL determines from the statement
+        let has_column_dep = deps.iter().any(|d| {
+            matches!(d, DbObjectId::Column { schema, table, .. }
+                if schema == "public" && table == "work_orders")
+        });
+        assert!(
+            has_column_dep,
+            "BEGIN ATOMIC function should have column-level dependencies. Got: {:?}",
+            deps
+        );
+    })
+    .await;
+}
+
+/// Test that traditional $$ body functions do NOT track column-level dependencies.
+/// PostgreSQL does not record table/column references in pg_depend for these functions.
+#[tokio::test]
+async fn test_regular_function_no_column_dependency() {
+    with_test_db(async |db| {
+        // Create a table with columns
+        db.execute(
+            "CREATE TABLE orders (
+                id SERIAL PRIMARY KEY,
+                customer_name TEXT,
+                status TEXT
+            )",
+        )
+        .await;
+
+        // Create a traditional $$ body function that references columns
+        db.execute(
+            "CREATE FUNCTION get_order_status(p_id INTEGER)
+             RETURNS TEXT AS $$
+             BEGIN
+                 RETURN (SELECT status FROM orders WHERE id = p_id);
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(functions.len(), 1);
+        let func = &functions[0];
+
+        assert_eq!(func.name, "get_order_status");
+
+        let deps = func.depends_on();
+
+        // Should NOT have column-level dependencies (PostgreSQL limitation for $$ functions)
+        let has_column_dep = deps.iter().any(|d| matches!(d, DbObjectId::Column { .. }));
+        assert!(
+            !has_column_dep,
+            "Traditional $$ function should NOT have column-level dependencies. Got: {:?}",
+            deps
+        );
+
+        // Should NOT even have table dependency (PostgreSQL doesn't track function body refs)
+        let has_table_dep = deps.iter().any(|d| {
+            matches!(d, DbObjectId::Table { schema, name }
+                if schema == "public" && name == "orders")
+        });
+        assert!(
+            !has_table_dep,
+            "Traditional $$ function should NOT track table references from body. Got: {:?}",
+            deps
+        );
+    })
+    .await;
+}

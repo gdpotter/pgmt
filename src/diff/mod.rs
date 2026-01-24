@@ -182,6 +182,18 @@ pub fn diff_order(
     Ok(ordered_steps)
 }
 
+/// Resolve a dependency ID for ordering purposes.
+/// Column dependencies resolve to their parent table since columns aren't standalone objects.
+fn resolve_for_ordering(dep: &DbObjectId) -> DbObjectId {
+    match dep {
+        DbObjectId::Column { schema, table, .. } => DbObjectId::Table {
+            schema: schema.clone(),
+            name: table.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
 /// Internal function to order steps using the existing object-based dependency system
 fn order_steps_by_dependencies(
     steps: Vec<MigrationStep>,
@@ -244,7 +256,9 @@ fn order_steps_by_dependencies(
         // Process catalog dependencies (use reversed edges for drops)
         if let Some(deps) = catalog_deps {
             for dep in deps {
-                if let Some(indices) = id_to_indices.get(dep) {
+                // Resolve Column dependencies to their parent Table for ordering
+                let resolved_dep = resolve_for_ordering(dep);
+                if let Some(indices) = id_to_indices.get(&resolved_dep) {
                     for &dep_i in indices {
                         let from = node_indices[if is_drop { i } else { dep_i }];
                         let to = node_indices[if is_drop { dep_i } else { i }];
@@ -252,7 +266,7 @@ fn order_steps_by_dependencies(
                     }
                 } else {
                     let catalog = if is_drop { old_catalog } else { new_catalog };
-                    if !catalog.contains_id(dep) {
+                    if !catalog.contains_id(&resolved_dep) {
                         missing_deps.push((step.id(), dep.clone()));
                     }
                 }
@@ -264,7 +278,9 @@ fn order_steps_by_dependencies(
             // Step-level deps always use create-style edges: dep → step
             let step_deps = step.dependencies();
             for dep in &step_deps {
-                if let Some(indices) = id_to_indices.get(dep) {
+                // Resolve Column dependencies to their parent Table for ordering
+                let resolved_dep = resolve_for_ordering(dep);
+                if let Some(indices) = id_to_indices.get(&resolved_dep) {
                     for &dep_i in indices {
                         // Always: dependency comes before this step
                         let from = node_indices[dep_i];
@@ -273,7 +289,7 @@ fn order_steps_by_dependencies(
                     }
                 } else {
                     // For step-level deps, check new_catalog (these are for "create" scenarios)
-                    if !new_catalog.contains_id(dep) {
+                    if !new_catalog.contains_id(&resolved_dep) {
                         missing_deps.push((step.id(), dep.clone()));
                     }
                 }

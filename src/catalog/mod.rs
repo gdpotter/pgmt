@@ -232,6 +232,26 @@ impl Catalog {
             .find(|f| f.schema == schema && f.name == name && f.arguments == arguments)
     }
 
+    /// Find a function by signature (schema, name, and parameter types).
+    /// Unlike `find_function`, this ignores parameter names and only matches on types.
+    /// This is needed because PostgreSQL considers functions with the same parameter
+    /// types but different parameter names to be the same function.
+    pub fn find_function_by_signature(
+        &self,
+        reference: &function::Function,
+    ) -> Option<&function::Function> {
+        self.functions.iter().find(|f| {
+            f.schema == reference.schema
+                && f.name == reference.name
+                && f.return_type == reference.return_type
+                && f.parameters.len() == reference.parameters.len()
+                && f.parameters
+                    .iter()
+                    .zip(reference.parameters.iter())
+                    .all(|(a, b)| a.data_type == b.data_type && a.mode == b.mode)
+        })
+    }
+
     pub fn find_trigger(
         &self,
         schema: &str,
@@ -310,7 +330,10 @@ impl Catalog {
                 arguments,
             } => {
                 let old_func = self.find_function(schema, name, arguments)?;
-                let new_func = new_catalog.find_function(schema, name, arguments)?;
+                // Use signature matching for new catalog lookup - parameter names may have
+                // changed even though it's the same function (PostgreSQL identifies functions
+                // by parameter types, not names)
+                let new_func = new_catalog.find_function_by_signature(old_func)?;
 
                 steps.extend(functions_diff::diff(Some(old_func), None));
                 steps.extend(functions_diff::diff(None, Some(new_func)));
@@ -440,6 +463,11 @@ impl Catalog {
             DbObjectId::Extension { name } => self.extensions.iter().any(|e| &e.name == name),
             DbObjectId::Grant { id } => self.grants.iter().any(|g| &g.id() == id),
             DbObjectId::Comment { object_id } => self.contains_id(object_id),
+            // Column resolves to its parent table for containment checks
+            DbObjectId::Column { schema, table, .. } => self
+                .tables
+                .iter()
+                .any(|t| &t.schema == schema && &t.name == table),
         }
     }
 }

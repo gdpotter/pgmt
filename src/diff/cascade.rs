@@ -106,6 +106,27 @@ pub fn expand(
         }
     }
 
+    // Cascade objects that depend on columns being dropped.
+    // This handles BEGIN ATOMIC functions (PostgreSQL 14+) which have column-level dependencies
+    // recorded in pg_depend with refobjsubid > 0.
+    let dropped_columns = columns_being_dropped(&steps);
+    for column_id in &dropped_columns {
+        if let Some(deps) = old_catalog.reverse_deps.get(column_id) {
+            for dep in deps {
+                // Only cascade if not already cascaded and the object still exists in new catalog
+                // If the object doesn't exist in new_catalog, it's being dropped anyway
+                if !cascaded_ids.contains(dep)
+                    && drop_counts.get(dep).copied().unwrap_or(0) == 0
+                    && new_catalog.contains_id(dep)
+                    && let Some(steps) = old_catalog.synthesize_drop_create(dep, new_catalog)
+                {
+                    extra_steps.extend(steps);
+                    cascaded_ids.insert(dep.clone());
+                }
+            }
+        }
+    }
+
     let mut all = steps;
     all.extend(extra_steps);
 
@@ -367,4 +388,33 @@ fn fk_constraints_affected_by_type_changes(
     }
 
     affected
+}
+
+/// Returns a set of DbObjectId::Column for columns being dropped.
+///
+/// This enables cascade handling for objects that depend on specific columns,
+/// such as BEGIN ATOMIC functions in PostgreSQL 14+.
+fn columns_being_dropped(steps: &[MigrationStep]) -> HashSet<DbObjectId> {
+    let mut result = HashSet::new();
+
+    for step in steps {
+        if let MigrationStep::Table(TableOperation::Alter {
+            schema,
+            name,
+            actions,
+        }) = step
+        {
+            for action in actions {
+                if let ColumnAction::Drop { name: col_name } = action {
+                    result.insert(DbObjectId::Column {
+                        schema: schema.clone(),
+                        table: name.clone(),
+                        column: col_name.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    result
 }
