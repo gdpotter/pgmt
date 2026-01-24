@@ -128,6 +128,41 @@ ALTER TABLE users RENAME COLUMN email TO email_address;
 
 After editing, the migration is yours. If you later run `migrate update`, your edits will be lost - so keep track of what you changed.
 
+## Column Ordering
+
+PostgreSQL's `ALTER TABLE ADD COLUMN` always appends columns to the end of a table. This means if you add a column in the middle of your schema file, the physical column order in production won't match your schema definition.
+
+By default, pgmt validates that new columns are placed at the end of table definitions:
+
+```sql
+-- schema/users.sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT now(),
+    email TEXT  -- New columns must go at the end
+);
+```
+
+If you place a new column in the middle, `pgmt migrate new` will error:
+
+```
+Error: Column order validation failed.
+
+Table public.users: new column 'email' must come after existing column 'created_at'
+
+To fix: Move new columns to the end of your table definition.
+```
+
+To change this behavior:
+
+```yaml
+# pgmt.yaml
+migration:
+  column_order: warn     # Warn but allow
+  # column_order: relaxed  # Disable validation entirely
+```
+
 ## Advanced: Multi-Section Migrations
 
 For complex production deployments - concurrent index creation, batched updates, retry logic - see [Multi-Section Migrations](/docs/guides/multi-section-migrations).

@@ -195,6 +195,9 @@ impl ConfigBuilder {
                 .and_then(|m| m.create_baselines_by_default)
                 .unwrap_or(defaults.create_baselines_by_default),
             tracking_table,
+            column_order: mig_input
+                .and_then(|m| m.column_order)
+                .unwrap_or(defaults.column_order),
         }
     }
 

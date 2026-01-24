@@ -3,6 +3,7 @@
 
 pub mod aggregates;
 pub mod baseline_validation;
+pub mod column_order;
 pub mod comment_ordering;
 pub mod comments_parameterized;
 pub mod conflict_detection;

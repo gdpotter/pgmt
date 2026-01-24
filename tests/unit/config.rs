@@ -355,4 +355,68 @@ migration:
 
         Ok(())
     }
+
+    #[test]
+    fn test_column_order_config_default() -> Result<()> {
+        let empty_config = ConfigInput::default();
+        let config = ConfigBuilder::new().with_file(empty_config).resolve()?;
+
+        // Default should be Strict
+        assert_eq!(
+            config.migration.column_order,
+            pgmt::config::ColumnOrderMode::Strict
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_order_config_from_file() -> Result<()> {
+        // Create a temporary config file
+        let temp_dir = TempDir::new()?;
+        let config_path = temp_dir.path().join("pgmt.yaml");
+
+        let config_content = r#"
+migration:
+  column_order: warn
+"#;
+
+        fs::write(&config_path, config_content)?;
+
+        // Load and parse the config
+        let (config_input, _) = pgmt::config::load_config(config_path.to_str().unwrap())?;
+        let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+
+        assert_eq!(
+            config.migration.column_order,
+            pgmt::config::ColumnOrderMode::Warn
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_order_config_relaxed() -> Result<()> {
+        // Create a temporary config file
+        let temp_dir = TempDir::new()?;
+        let config_path = temp_dir.path().join("pgmt.yaml");
+
+        let config_content = r#"
+migration:
+  column_order: relaxed
+"#;
+
+        fs::write(&config_path, config_content)?;
+
+        // Load and parse the config
+        let (config_input, _) = pgmt::config::load_config(config_path.to_str().unwrap())?;
+        let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+
+        assert_eq!(
+            config.migration.column_order,
+            pgmt::config::ColumnOrderMode::Relaxed
+        );
+
+        Ok(())
+    }
 }

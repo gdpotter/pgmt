@@ -191,6 +191,7 @@ pub struct MigrationInput {
     pub validate_baseline_consistency: Option<bool>,
     pub create_baselines_by_default: Option<bool>,
     pub tracking_table: Option<TrackingTableInput>,
+    pub column_order: Option<ColumnOrderMode>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -205,12 +206,26 @@ pub struct Migration {
     pub validate_baseline_consistency: bool,
     pub create_baselines_by_default: bool,
     pub tracking_table: TrackingTable,
+    pub column_order: ColumnOrderMode,
 }
 
 #[derive(Debug, Clone)]
 pub struct TrackingTable {
     pub schema: String,
     pub name: String,
+}
+
+/// Column order validation mode for migration generation
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnOrderMode {
+    /// Error if new columns aren't at the end of the table
+    #[default]
+    Strict,
+    /// Warn but generate migration anyway
+    Warn,
+    /// No validation, allow any ordering
+    Relaxed,
 }
 
 // Docker configuration

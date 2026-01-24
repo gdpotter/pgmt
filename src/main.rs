@@ -452,6 +452,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                                 validate_baseline_consistency: None,
                                 create_baselines_by_default: Some(*create_baseline),
                                 tracking_table: None,
+                                column_order: None,
                             }),
                             schema: None,
                             docker: None,

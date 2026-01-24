@@ -67,6 +67,32 @@ databases:
     url: postgres://localhost/myapp_shadow
 ```
 
+## Column Order Validation Errors
+
+**Error: new column must come after existing column**
+
+When running `pgmt migrate new`, you see:
+
+```
+Error: Column order validation failed.
+Table public.users: new column 'email' must come after existing column 'name'
+```
+
+**Why this happens:** PostgreSQL's `ALTER TABLE ADD COLUMN` always appends columns to the end. If you define new columns in the middle of your schema file, the physical order in production won't match.
+
+**Fix:** Move the new column to the end of your table definition:
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name TEXT,           -- existing
+    created_at TIMESTAMP, -- existing
+    email TEXT           -- new column goes at the end
+);
+```
+
+**To disable this check:** Set `migration.column_order: relaxed` in `pgmt.yaml`. But be aware that your schema files will drift from physical column order, which can cause issues with `SELECT *`, `COPY`, and functions returning row types.
+
 ## Reporting Issues
 
 When opening an issue on [GitHub](https://github.com/gdpotter/pgmt/issues), include:

@@ -1,4 +1,7 @@
-use crate::config::types::*;
+use crate::config::types::{
+    ColumnOrderMode, Databases, Directories, Docker, Migration, ObjectExclude, Schema,
+    ShadowDatabase, ShadowDockerConfig, TrackingTable,
+};
 use std::collections::HashMap;
 
 // Config now derives Default
@@ -43,6 +46,7 @@ impl Default for Migration {
             validate_baseline_consistency: true,
             create_baselines_by_default: false,
             tracking_table: TrackingTable::default(),
+            column_order: ColumnOrderMode::Strict,
         }
     }
 }

@@ -75,6 +75,13 @@ pub async fn cmd_migrate_new(
     let filtered_old_catalog = filter.filter_catalog(old_catalog);
     let filtered_new_catalog = filter.filter_catalog(new_catalog);
 
+    // Validate column ordering before generating migration
+    crate::validation::apply_column_order_validation(
+        &filtered_old_catalog,
+        &filtered_new_catalog,
+        config.migration.column_order,
+    )?;
+
     debug!("Generating migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
         old_catalog: filtered_old_catalog,

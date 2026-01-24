@@ -23,6 +23,7 @@ fn test_tracking_table_configuration_parsing() -> Result<()> {
                 schema: Some("internal".to_string()),
                 name: Some("migration_history".to_string()),
             }),
+            column_order: None,
         }),
         schema: None,
         docker: None,
@@ -51,6 +52,7 @@ fn test_tracking_table_partial_configuration() -> Result<()> {
                 schema: Some("custom_schema".to_string()),
                 name: None, // Use default name
             }),
+            column_order: None,
         }),
         schema: None,
         docker: None,

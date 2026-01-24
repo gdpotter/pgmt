@@ -75,6 +75,13 @@ pub async fn cmd_migrate_update_with_options(
     let filtered_old_catalog = filter.filter_catalog(old_catalog);
     let filtered_new_catalog = filter.filter_catalog(new_catalog);
 
+    // Validate column ordering before generating migration
+    crate::validation::apply_column_order_validation(
+        &filtered_old_catalog,
+        &filtered_new_catalog,
+        config.migration.column_order,
+    )?;
+
     // Step 3: Generate migration using pure logic
     debug!("Generating updated migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
@@ -239,6 +246,13 @@ pub async fn cmd_migrate_update_specific(
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
     let filtered_old_catalog = filter.filter_catalog(old_catalog);
     let filtered_new_catalog = filter.filter_catalog(new_catalog);
+
+    // Validate column ordering before generating migration
+    crate::validation::apply_column_order_validation(
+        &filtered_old_catalog,
+        &filtered_new_catalog,
+        config.migration.column_order,
+    )?;
 
     // Determine version and description for the new migration
     let (new_version, new_description) = if is_latest {

@@ -69,6 +69,7 @@ migration:
   default_mode: safe_only # safe_only | confirm_all | force_all
   validate_baseline_consistency: true
   create_baselines_by_default: false # On-demand (recommended)
+  column_order: strict # strict | warn | relaxed
 
   tracking_table:
     schema: public
@@ -132,5 +133,6 @@ pgmt apply --no-comments --no-grants
 | `objects.extensions`                    | `true`                           |
 | `migration.default_mode`                | `safe_only`                      |
 | `migration.create_baselines_by_default` | `false`                          |
+| `migration.column_order`                | `strict`                         |
 | `migration.tracking_table.schema`       | `public`                         |
 | `migration.tracking_table.name`         | `pgmt_migrations`                |

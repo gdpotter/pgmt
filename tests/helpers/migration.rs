@@ -140,4 +140,50 @@ impl MigrationTestHelper {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
+
+    /// Test with access to the raw catalogs for validation testing.
+    /// Similar to run_migration_test but passes catalogs to verification function
+    /// instead of running the migration pipeline.
+    pub async fn run_catalogs_test<F>(
+        &self,
+        both_dbs_sql: &[&str],
+        initial_only_sql: &[&str],
+        target_only_sql: &[&str],
+        verification: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(Catalog, Catalog) -> Result<()>,
+    {
+        // Setup databases
+        let (initial_db, target_db) = self.setup_migration_test().await;
+
+        // Apply common SQL to both databases
+        for sql in both_dbs_sql {
+            initial_db.execute(sql).await;
+            target_db.execute(sql).await;
+        }
+
+        // Apply initial-only SQL to initial database
+        for sql in initial_only_sql {
+            initial_db.execute(sql).await;
+        }
+
+        // Apply target-only SQL to target database
+        for sql in target_only_sql {
+            target_db.execute(sql).await;
+        }
+
+        // Load catalogs
+        let initial_catalog = Catalog::load(initial_db.pool()).await?;
+        let target_catalog = Catalog::load(target_db.pool()).await?;
+
+        // Run verification with catalogs
+        let result = verification(initial_catalog, target_catalog);
+
+        // Cleanup test databases
+        initial_db.cleanup().await;
+        target_db.cleanup().await;
+
+        result
+    }
 }
