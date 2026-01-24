@@ -1,12 +1,19 @@
 use crate::config::types::TrackingTable;
+use crate::db::error_context::SqlErrorContext;
 use crate::migration::section_parser::{
     BackoffStrategy, LockTimeoutAction, MigrationSection, RetryConfig, TransactionMode,
 };
 use crate::migration_tracking::section_tracking::*;
 use crate::progress::SectionReporter;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
+
+/// Format a SQL execution error with rich PostgreSQL context (DETAIL, HINT, etc.)
+fn format_section_error(error: sqlx::Error, sql: &str, section_name: &str) -> anyhow::Error {
+    let ctx = SqlErrorContext::from_sqlx_error(&error, sql);
+    anyhow::anyhow!("{}", ctx.format(section_name, sql))
+}
 
 /// Execution mode controls retry and timeout behavior
 #[derive(Debug, Clone, Copy)]
@@ -147,7 +154,7 @@ impl SectionExecutor {
                     &e.to_string(),
                 )
                 .await?;
-                return Err(e).context(format!("Section '{}' failed", section.name));
+                return Err(format_section_error(e, &section.sql, &section.name));
             }
         };
 
@@ -268,10 +275,7 @@ impl SectionExecutor {
                         )
                         .await?;
 
-                        return Err(e).context(format!(
-                            "Section '{}' failed after {} attempts",
-                            section.name, attempt
-                        ));
+                        return Err(format_section_error(e, &section.sql, &section.name));
                     }
                 }
             }
@@ -300,7 +304,10 @@ impl SectionExecutor {
 
         // For now, execute normally without batching
         // TODO: Implement batch processing in Phase 3
-        let result = sqlx::query(&section.sql).execute(&self.pool).await?;
+        let result = sqlx::query(&section.sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
 
         let duration = start.elapsed();
         let rows = result.rows_affected() as i64;
@@ -336,13 +343,19 @@ impl SectionExecutor {
             TransactionMode::Transactional => {
                 // Execute in a transaction
                 let mut tx = self.pool.begin().await?;
-                let result = tx.execute(section.sql.as_str()).await?;
+                let result = tx
+                    .execute(section.sql.as_str())
+                    .await
+                    .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
                 tx.commit().await?;
                 result
             }
             TransactionMode::NonTransactional | TransactionMode::Autocommit => {
                 // Execute without transaction
-                self.pool.execute(section.sql.as_str()).await?
+                self.pool
+                    .execute(section.sql.as_str())
+                    .await
+                    .map_err(|e| format_section_error(e, &section.sql, &section.name))?
             }
         };
 
