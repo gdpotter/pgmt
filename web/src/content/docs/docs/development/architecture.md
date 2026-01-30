@@ -60,3 +60,28 @@ Manages migration file lifecycle.
 **Shadow database:** Schema operations use a temporary shadow database to safely determine changes before modifying the dev database.
 
 **Configuration:** Dual type system - `ConfigInput` (partial configs with `Option<T>`) and `Config` (resolved values) enables merging CLI args, YAML, and defaults.
+
+## Operation Classification
+
+Migration operations have two separate classifications that are sometimes conflated:
+
+**OperationKind** (`Create`, `Drop`, `Alter`) — Used for ordering migrations. Drops must happen before creates for the same object type. Defined in `src/diff/operations/mod.rs`.
+
+**Safety** (`Safe`, `Destructive`) — Used for warnings and execution modes. Indicates risk of data loss. Defined in `src/render/mod.rs` as part of `RenderedSql`.
+
+These are separate concerns. A `Drop` operation can be `Safe`:
+- `DROP FUNCTION` is `OperationKind::Drop` but `Safety::Safe` (can be recreated)
+- `DROP TABLE` is `OperationKind::Drop` AND `Safety::Destructive` (loses data)
+
+## Cascade Mechanism
+
+When a column type changes, PostgreSQL blocks `ALTER COLUMN TYPE` if dependent objects (views, functions) reference that column. pgmt handles this by synthesizing DROP and CREATE operations for affected objects.
+
+The `cascade::expand()` function in `src/diff/cascade.rs`:
+1. Detects column type changes that would fail
+2. Finds all dependent views/functions via the dependency graph
+3. Synthesizes DROP operations (before the ALTER)
+4. Synthesizes CREATE operations (after the ALTER)
+5. Re-applies grants since DROP implicitly revokes them
+
+This is implemented via `Catalog::synthesize_drop_create()` which uses existing diff functions to generate the operations.

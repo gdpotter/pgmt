@@ -22,6 +22,17 @@ cargo test                  # Run tests
 - All SQL queries use sqlx compile-time verification
 - Tests required for new features
 
+## Logging Guidelines
+
+Correct logging is critical for UX. The default level is `warn`:
+
+- `println!()`: User-facing output (commands, results, migration plans) — always visible
+- `info!()`: Operational details (connection status, success messages) — visible with `--verbose`
+- `debug!()`: Implementation details (timing, retries, temp schemas) — visible with `--debug`
+- `warn!()`: Potential problems (not expected behaviors like "404 during cleanup")
+
+**Rule of thumb:** Ask "Would this scare a first-time user?" If yes, use `debug!()` not `println!()`.
+
 ## Adding Database Object Support
 
 Each object type needs:

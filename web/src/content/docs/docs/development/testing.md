@@ -182,7 +182,13 @@ See the [contributing guide](contributing.md) for complete testing patterns.
 
 ## Test Database Configuration
 
-Tests use Docker containers for PostgreSQL (versions 13-18). Run `./scripts/test-setup.sh` once to start the containers.
+Tests use Docker containers for PostgreSQL versions 13, 14, 15, 16, 17, and 18. Run `./scripts/test-setup.sh` once to start all containers.
+
+**Test against a specific version:**
+
+```bash
+DATABASE_URL=$(./scripts/test-db-url.sh 18) cargo test
+```
 
 **Manual setup (if not using Docker):**
 
@@ -191,3 +197,22 @@ createdb pgmt_test
 export DATABASE_URL=postgres://localhost/pgmt_test
 cargo test
 ```
+
+## Version-Gated Tests
+
+Some PostgreSQL features require specific versions (e.g., `security_invoker` for views requires PostgreSQL 15+). Use the `pg_major_version()` helper to skip tests on older versions:
+
+```rust
+#[tokio::test]
+async fn test_pg15_feature() -> Result<()> {
+    with_test_db(async |db| {
+        if pg_major_version(db.pool()).await? < 15 {
+            return Ok(()); // Skip on PostgreSQL < 15
+        }
+        // Test code that requires PG 15+ here
+        Ok(())
+    }).await
+}
+```
+
+This pattern is used in `tests/catalog/views.rs` and `tests/migrations/views.rs` for features introduced after PostgreSQL 13.

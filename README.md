@@ -1,7 +1,13 @@
 # pgmt — PostgreSQL Schema-as-Code
 
+[![CI](https://github.com/gdpotter/pgmt/actions/workflows/ci.yml/badge.svg)](https://github.com/gdpotter/pgmt/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/pgmt)](https://crates.io/crates/pgmt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > **Database-first development for PostgreSQL**
 > Manage schema like code, deploy through explicit migrations
+
+> **Status: Alpha** — API may change. Production use requires careful evaluation.
 
 pgmt is a PostgreSQL migration tool that lets you develop your schema like software code — edit database objects directly, see changes immediately, then generate explicit migrations for production deployment.
 
@@ -12,6 +18,15 @@ pgmt is a PostgreSQL migration tool that lets you develop your schema like softw
 - **Full PostgreSQL Support**: Triggers, functions, enums, arrays, JSON, extensions, grants — not just tables
 - **Team Friendly**: Schema files show *intent*, migrations show *deployment steps*
 - **Production Safe**: Shadow databases, dependency ordering, sectioned migrations
+
+## Why pgmt?
+
+Unlike migration-only tools (Flyway, golang-migrate) where you write every migration by hand, or fully declarative tools that hide migrations entirely, pgmt combines both: write your schema declaratively, then review and control the explicit migrations it generates.
+
+## Requirements
+
+- **PostgreSQL 13+** (tested on PostgreSQL 13, 14, 15, 16, 17, 18)
+- **Rust 1.74+** for building from source
 
 ## Quick Start
 
