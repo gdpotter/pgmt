@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"policy_oid!\",\n            n.nspname AS schema_name,\n            c.relname AS table_name,\n            p.polname AS policy_name,\n            p.polcmd::text AS \"command!\",\n            p.polpermissive AS \"permissive!\",\n            COALESCE(\n                ARRAY(\n                    SELECT rolname FROM pg_roles\n                    WHERE oid = ANY(p.polroles)\n                    ORDER BY rolname\n                ),\n                '{}'::text[]\n            ) AS \"roles!: Vec<String>\",\n            pg_get_expr(p.polqual, p.polrelid) AS \"using_expr?\",\n            pg_get_expr(p.polwithcheck, p.polrelid) AS \"with_check_expr?\",\n            d.description AS \"comment?\"\n        FROM pg_policy p\n        JOIN pg_class c ON p.polrelid = c.oid\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ORDER BY n.nspname, c.relname, p.polname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "policy_oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "policy_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 4,
+        "name": "command!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "permissive!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "roles!: Vec<String>",
+        "type_info": "NameArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "using_expr?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "with_check_expr?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "d80569bf1c2dbf4cb6cd15c7075f82dce60b90c2e68960d81b27135aaa299a2e"
+}

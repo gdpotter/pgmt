@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"policy_oid!\",\n            a.attname AS \"column_name!\",\n            n.nspname AS \"table_schema!\",\n            c.relname AS \"table_name!\"\n        FROM pg_policy p\n        JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_policy'::regclass\n        JOIN pg_class c ON d.refobjid = c.oid AND d.refclassid = 'pg_class'::regclass\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.refobjsubid\n        WHERE d.refobjsubid > 0\n          AND d.deptype = 'n'\n          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ORDER BY p.oid, n.nspname, c.relname, a.attname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "policy_oid!",
+        "type_info": "Oid"
+      },
+      {
+        "ordinal": 1,
+        "name": "column_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "table_schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "table_name!",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c32a496cb015a78b9f8875a5157da6dbc4f850ad3e6498a4cdf2e6cc11dd9504"
+}

@@ -760,7 +760,9 @@ async fn test_multiple_policies_cascade_on_column_type_change() -> Result<()> {
                 "CREATE POLICY owner_policy ON app.items FOR UPDATE USING (owner_id = 1)",
             ],
             |steps, final_catalog| {
-                // Both policies should be dropped and recreated
+                // Only priority_policy should be cascaded (dropped and recreated)
+                // because it references the 'priority' column whose type is changing.
+                // owner_policy should NOT be cascaded because it only references 'owner_id'.
                 let drop_priority = steps.iter().any(|s| {
                     matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
                         if identifier.name == "priority_policy")
@@ -778,10 +780,16 @@ async fn test_multiple_policies_cascade_on_column_type_change() -> Result<()> {
                         if policy.name == "owner_policy")
                 });
 
-                assert!(drop_priority, "Should drop priority_policy");
-                assert!(drop_owner, "Should drop owner_policy");
+                assert!(
+                    drop_priority,
+                    "Should drop priority_policy (references changed column)"
+                );
+                assert!(
+                    !drop_owner,
+                    "Should NOT drop owner_policy (doesn't reference changed column)"
+                );
                 assert!(create_priority, "Should create priority_policy");
-                assert!(create_owner, "Should create owner_policy");
+                assert!(!create_owner, "Should NOT create owner_policy");
 
                 // Verify final state
                 assert_eq!(final_catalog.policies.len(), 2);

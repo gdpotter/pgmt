@@ -3,6 +3,7 @@ use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::policy::{Policy, PolicyCommand, fetch};
 use pgmt::catalog::table::fetch as fetch_tables;
+use std::collections::HashSet;
 
 #[tokio::test]
 async fn test_fetch_basic_policy() {
@@ -353,6 +354,74 @@ async fn test_fetch_policies_across_schemas() {
         let public_policy = policies.iter().find(|p| p.schema == "public").unwrap();
         assert_eq!(public_policy.name, "public_policy");
         assert_eq!(public_policy.table_name, "data");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_policy_column_dependencies() {
+    with_test_db(async |db| {
+        // Create table with multiple columns
+        db.execute("CREATE TABLE orders (id SERIAL PRIMARY KEY, tenant_id INTEGER, status TEXT, amount NUMERIC)")
+            .await;
+        db.execute("ALTER TABLE orders ENABLE ROW LEVEL SECURITY")
+            .await;
+
+        // Create policy that references specific columns (tenant_id and status)
+        db.execute(
+            "CREATE POLICY tenant_orders ON orders FOR SELECT USING (tenant_id = 1 AND status = 'active')",
+        )
+        .await;
+
+        let policies = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let policy = &policies[0];
+
+        // Policy should depend on the table
+        assert!(policy.depends_on.contains(&DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "orders".to_string(),
+        }));
+
+        // Policy should have column-level dependencies for columns referenced in expression
+        // Note: PostgreSQL tracks these via pg_depend with refobjsubid > 0
+        let column_deps: HashSet<_> = policy
+            .depends_on
+            .iter()
+            .filter(|d| matches!(d, DbObjectId::Column { .. }))
+            .collect();
+
+        // Should have dependencies on tenant_id and status columns
+        assert!(
+            column_deps.contains(&&DbObjectId::Column {
+                schema: "public".to_string(),
+                table: "orders".to_string(),
+                column: "tenant_id".to_string(),
+            }),
+            "Policy should depend on tenant_id column, but depends_on is: {:?}",
+            policy.depends_on
+        );
+
+        assert!(
+            column_deps.contains(&&DbObjectId::Column {
+                schema: "public".to_string(),
+                table: "orders".to_string(),
+                column: "status".to_string(),
+            }),
+            "Policy should depend on status column, but depends_on is: {:?}",
+            policy.depends_on
+        );
+
+        // Should NOT have dependency on 'amount' column (not referenced in policy)
+        assert!(
+            !column_deps.contains(&&DbObjectId::Column {
+                schema: "public".to_string(),
+                table: "orders".to_string(),
+                column: "amount".to_string(),
+            }),
+            "Policy should NOT depend on unreferenced amount column"
+        );
     })
     .await;
 }

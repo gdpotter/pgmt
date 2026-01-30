@@ -58,26 +58,23 @@ pub fn expand(
     // dependent objects.
     //
     // We selectively cascade based on object type:
-    // - Policies: Cascade ALL on the table (expressions are opaque, can't tell which columns)
-    // - Functions: Cascade if they depend on table (composite type definition changes)
-    // - Triggers: Cascade if they depend on table
+    // - Functions/Triggers: Cascade if they depend on table (composite type definition changes)
     // - Constraints: DON'T cascade here - FK constraints have special handling below
     //   that checks which specific columns are affected
     // - Views: DON'T cascade here - views might only reference unchanged columns,
     //   and will be handled by regular diff if they need updating
+    // - Policies: DON'T cascade here - handled via column-level dependencies below
     let tables_with_type_changes = tables_with_column_type_changes(&steps);
     let mut cascaded_ids: HashSet<DbObjectId> = HashSet::new();
     for table_id in &tables_with_type_changes {
         if let Some(deps) = old_catalog.reverse_deps.get(table_id) {
             for dep in deps {
                 let should_cascade = match dep {
-                    // Policies: Always cascade (opaque expressions, filter ALTERs later)
-                    DbObjectId::Policy { .. } => true,
                     // Functions/Triggers: Cascade if no DROP already exists
                     DbObjectId::Function { .. } | DbObjectId::Trigger { .. } => {
                         drop_counts.get(dep).copied().unwrap_or(0) == 0
                     }
-                    // Constraints/Views: Don't cascade here - handled separately
+                    // Constraints/Views/Policies: Don't cascade here - handled separately
                     _ => false,
                 };
 
@@ -106,11 +103,19 @@ pub fn expand(
         }
     }
 
-    // Cascade objects that depend on columns being dropped.
-    // This handles BEGIN ATOMIC functions (PostgreSQL 14+) which have column-level dependencies
-    // recorded in pg_depend with refobjsubid > 0.
+    // Cascade objects that depend on columns being dropped or type-changed.
+    // This handles:
+    // - BEGIN ATOMIC functions (PostgreSQL 14+) which have column-level dependencies
+    //   recorded in pg_depend with refobjsubid > 0.
+    // - RLS policies which have column-level dependencies recorded in pg_depend
+    //   when the policy expressions reference specific columns.
     let dropped_columns = columns_being_dropped(&steps);
-    for column_id in &dropped_columns {
+    let type_changed_columns = columns_with_type_changes_ids(&steps);
+    let affected_columns: HashSet<_> = dropped_columns
+        .union(&type_changed_columns)
+        .cloned()
+        .collect();
+    for column_id in &affected_columns {
         if let Some(deps) = old_catalog.reverse_deps.get(column_id) {
             for dep in deps {
                 // Only cascade if not already cascaded and the object still exists in new catalog
@@ -274,15 +279,12 @@ fn filter_cascaded_alters(
 
 /// Finds tables that have column type changes (AlterType actions).
 ///
-/// PostgreSQL limitation: ALTER COLUMN TYPE fails if the column is referenced
-/// in an RLS policy expression. Since policy expressions are opaque strings
-/// (PostgreSQL doesn't expose column-level dependencies in pg_depend), we
-/// cannot determine which specific columns a policy references.
+/// Used to cascade table-level dependents like functions and triggers that
+/// depend on the table's composite type definition.
 ///
-/// We conservatively cascade ALL policies on a table when ANY column type
-/// changes. This is safe because policy recreation is non-destructive.
-///
-/// See: https://www.postgresql.org/docs/current/sql-altertable.html
+/// Note: RLS policies are handled separately via column-level dependencies
+/// (pg_depend with refobjsubid > 0), allowing precise cascade - only policies
+/// that reference changed columns are dropped and recreated.
 fn tables_with_column_type_changes(steps: &[MigrationStep]) -> HashSet<DbObjectId> {
     steps
         .iter()
@@ -406,6 +408,36 @@ fn columns_being_dropped(steps: &[MigrationStep]) -> HashSet<DbObjectId> {
         {
             for action in actions {
                 if let ColumnAction::Drop { name: col_name } = action {
+                    result.insert(DbObjectId::Column {
+                        schema: schema.clone(),
+                        table: name.clone(),
+                        column: col_name.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Returns a set of DbObjectId::Column for columns whose types are being changed.
+///
+/// This enables precise cascade handling for objects that depend on specific columns,
+/// such as RLS policies and BEGIN ATOMIC functions. PostgreSQL tracks column-level
+/// dependencies via pg_depend with refobjsubid > 0.
+fn columns_with_type_changes_ids(steps: &[MigrationStep]) -> HashSet<DbObjectId> {
+    let mut result = HashSet::new();
+
+    for step in steps {
+        if let MigrationStep::Table(TableOperation::Alter {
+            schema,
+            name,
+            actions,
+        }) = step
+        {
+            for action in actions {
+                if let ColumnAction::AlterType { name: col_name, .. } = action {
                     result.insert(DbObjectId::Column {
                         schema: schema.clone(),
                         table: name.clone(),
