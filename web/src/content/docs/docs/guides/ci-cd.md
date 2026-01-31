@@ -31,10 +31,12 @@ pgmt apply --safe-only
 ```
 
 **How it works:** In non-interactive environments (CI/CD), `pgmt apply` defaults to `--require-approval` behavior, meaning it will:
+
 - Auto-apply all safe operations
 - Exit with code 2 if any destructive operations exist
 
 This is ideal for agentic tools and CI pipelines where you want to:
+
 1. Try the safe path first (`pgmt apply`)
 2. If it fails with exit code 2, either fix the schema or use `--force`
 

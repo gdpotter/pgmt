@@ -159,7 +159,7 @@ To change this behavior:
 ```yaml
 # pgmt.yaml
 migration:
-  column_order: warn     # Warn but allow
+  column_order: warn # Warn but allow
   # column_order: relaxed  # Disable validation entirely
 ```
 

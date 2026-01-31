@@ -478,16 +478,16 @@ PGMT_TARGET_URL               # Override target database URL
 
 **General:**
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Error (general) |
+| Code | Meaning         |
+| ---- | --------------- |
+| 0    | Success         |
+| 1    | Error (general) |
 
 **Command-specific:**
 
-| Command | Code | Meaning |
-|---------|------|---------|
-| `pgmt apply` | 2 | Destructive operations exist (in non-interactive/`--require-approval` mode) |
-| `pgmt diff` | 1 | Differences detected |
-| `pgmt migrate diff` | 1 | Drift detected |
-| `pgmt migrate validate` | 1 | Validation failed |
+| Command                 | Code | Meaning                                                                     |
+| ----------------------- | ---- | --------------------------------------------------------------------------- |
+| `pgmt apply`            | 2    | Destructive operations exist (in non-interactive/`--require-approval` mode) |
+| `pgmt diff`             | 1    | Differences detected                                                        |
+| `pgmt migrate diff`     | 1    | Drift detected                                                              |
+| `pgmt migrate validate` | 1    | Validation failed                                                           |

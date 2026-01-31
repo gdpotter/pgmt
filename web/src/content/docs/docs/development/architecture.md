@@ -70,6 +70,7 @@ Migration operations have two separate classifications that are sometimes confla
 **Safety** (`Safe`, `Destructive`) — Used for warnings and execution modes. Indicates risk of data loss. Defined in `src/render/mod.rs` as part of `RenderedSql`.
 
 These are separate concerns. A `Drop` operation can be `Safe`:
+
 - `DROP FUNCTION` is `OperationKind::Drop` but `Safety::Safe` (can be recreated)
 - `DROP TABLE` is `OperationKind::Drop` AND `Safety::Destructive` (loses data)
 
@@ -78,6 +79,7 @@ These are separate concerns. A `Drop` operation can be `Safe`:
 When a column type changes, PostgreSQL blocks `ALTER COLUMN TYPE` if dependent objects (views, functions) reference that column. pgmt handles this by synthesizing DROP and CREATE operations for affected objects.
 
 The `cascade::expand()` function in `src/diff/cascade.rs`:
+
 1. Detects column type changes that would fail
 2. Finds all dependent views/functions via the dependency graph
 3. Synthesizes DROP operations (before the ALTER)
