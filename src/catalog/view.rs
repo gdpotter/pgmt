@@ -2,7 +2,7 @@
 //! Fetch views and their dependencies via pg_depend + pg_rewrite
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::is_system_schema;
+use super::utils::{is_system_schema, resolve_type_dependency};
 use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
@@ -272,6 +272,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             WHEN typ.typelem != 0 THEN elem_typ.typtype::text
             ELSE typ.typtype::text
           END AS "typ_typtype?",
+          -- Get relkind for composite types (to distinguish table/view from explicit composite)
+          CASE
+            WHEN typ.typelem != 0 THEN elem_typ_rel.relkind::text
+            ELSE typ_rel.relkind::text
+          END AS "typ_relkind?",
 
           -- Function reference
           proc.proname                  AS "proc_name",
@@ -306,6 +311,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
 
         LEFT JOIN pg_namespace elem_typ_n
           ON elem_typ.typnamespace = elem_typ_n.oid
+
+        -- Get relkind for composite types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class typ_rel
+          ON typ.typrelid = typ_rel.oid AND typ.typrelid != 0
+        LEFT JOIN pg_class elem_typ_rel
+          ON elem_typ.typrelid = elem_typ_rel.oid AND elem_typ.typrelid != 0
 
         -- Extension type lookup: compute once as derived table, then hash join
         LEFT JOIN (
@@ -364,27 +375,17 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             }
 
             // Custom type, domain, or extension type?
-            // Type name is already resolved to element type for arrays via SQL
-            if let (Some(name), Some(ns)) = (&d.typ_name, &d.typ_schema) {
-                if !is_system_schema(ns) {
-                    // If type is from an extension, depend on the extension instead
-                    if let Some(ext_name) = &d.typ_extension_name {
-                        v.push(DbObjectId::Extension {
-                            name: ext_name.clone(),
-                        });
-                    } else if d.typ_typtype.as_deref() == Some("d") {
-                        // Domain type
-                        v.push(DbObjectId::Domain {
-                            schema: ns.to_string(),
-                            name: name.to_string(),
-                        });
-                    } else {
-                        v.push(DbObjectId::Type {
-                            schema: ns.to_string(),
-                            name: name.to_string(),
-                        });
-                    }
-                }
+            // Use resolve_type_dependency for consistent handling of extension types,
+            // domains, composite types from tables/views, and other custom types
+            if let Some(dep_id) = resolve_type_dependency(
+                d.typ_schema.as_deref(),
+                d.typ_name.as_deref(),
+                d.typ_typtype.as_deref(),
+                d.typ_relkind.as_deref(),
+                d.typ_extension_name.is_some(),
+                d.typ_extension_name.as_deref(),
+            ) {
+                v.push(dep_id);
                 continue;
             }
 

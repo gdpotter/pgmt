@@ -674,3 +674,76 @@ async fn test_fetch_view_with_underscore_prefixed_type() {
     })
     .await;
 }
+
+/// Test that a view referencing a table's composite type
+/// correctly depends on DbObjectId::Table, not DbObjectId::Type
+#[tokio::test]
+async fn test_fetch_view_with_table_composite_type_dependency() {
+    with_test_db(async |db| {
+        // Create a table - its composite type is automatically available
+        db.execute(
+            "CREATE TABLE orders (
+                id SERIAL PRIMARY KEY,
+                status TEXT NOT NULL,
+                total NUMERIC(10,2)
+            )",
+        )
+        .await;
+
+        // Create a table that uses the orders composite type
+        db.execute(
+            "CREATE TABLE order_history (
+                id SERIAL PRIMARY KEY,
+                old_order orders,
+                new_order orders
+            )",
+        )
+        .await;
+
+        // Create view that references the table composite type directly via cast
+        db.execute(
+            "CREATE VIEW order_summary AS
+             SELECT id, old_order, new_order, ROW(1, 'test', 100.00)::orders as sample_order
+             FROM order_history",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+
+        let view = views
+            .iter()
+            .find(|v| v.name == "order_summary")
+            .expect("order_summary view should exist");
+
+        // Should depend on Table (for the composite type from cast), not Type
+        let deps = view.depends_on();
+
+        // Check that we have a Table dependency for orders (from the composite type cast)
+        assert!(
+            deps.contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "orders".to_string()
+            }),
+            "View should depend on DbObjectId::Table for table composite type. Deps: {:?}",
+            deps
+        );
+
+        // Should NOT have a Type dependency for orders
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "orders")),
+            "Should not have DbObjectId::Type for table composite type"
+        );
+
+        // Should also depend on the order_history table
+        assert!(
+            deps.contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "order_history".to_string()
+            }),
+            "View should depend on order_history table"
+        );
+    })
+    .await;
+}

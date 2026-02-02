@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n          n.nspname    AS table_schema,\n          c.relname    AS table_name,\n          a.attname    AS column_name,\n          pg_catalog.format_type(a.atttypid, a.atttypmod) AS \"data_type!\",\n          -- Resolve array element type schema/name correctly\n          CASE\n            WHEN t.typelem != 0 THEN elem_tn.nspname\n            ELSE tn.nspname\n          END AS \"type_schema?\",\n          CASE\n            WHEN t.typelem != 0 THEN elem_t.typname\n            ELSE t.typname\n          END AS \"type_name?\",\n          pg_catalog.pg_get_expr(ad.adbin, ad.adrelid)  AS column_expr,\n          a.attgenerated::text AS attgenerated,\n          a.attnotnull AS \"not_null!\",\n          COALESCE(a.attndims, 0)::int AS \"attndims!: i32\",\n          d.description AS \"column_comment?\",\n          -- Check if the type (or element type for arrays) is from an extension\n          ext_types.extname IS NOT NULL AS \"is_extension_type!: bool\",\n          ext_types.extname AS \"extension_name?\",\n          -- Get typtype to distinguish domains ('d') from other types\n          CASE\n            WHEN t.typelem != 0 THEN elem_t.typtype::text\n            ELSE t.typtype::text\n          END AS \"type_typtype?\",\n          -- Get relkind for composite types (to distinguish table/view from explicit composite)\n          CASE\n            WHEN t.typelem != 0 THEN elem_t_rel.relkind::text\n            ELSE t_rel.relkind::text\n          END AS \"type_relkind?\"\n        FROM pg_attribute a\n        LEFT JOIN pg_attrdef ad\n          ON a.attrelid = ad.adrelid\n         AND a.attnum   = ad.adnum\n        LEFT JOIN pg_type t ON a.atttypid = t.oid\n        LEFT JOIN pg_namespace tn ON t.typnamespace = tn.oid\n        -- Element type for array types\n        LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0\n        LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid\n        -- Get relkind for composite types (to distinguish table/view from explicit composite)\n        LEFT JOIN pg_class t_rel ON t.typrelid = t_rel.oid AND t.typrelid != 0\n        LEFT JOIN pg_class elem_t_rel ON elem_t.typrelid = elem_t_rel.oid AND elem_t.typrelid != 0\n        LEFT JOIN pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum\n        -- Extension type lookup: compute once as derived table, then hash join\n        LEFT JOIN (\n          SELECT DISTINCT dep.objid AS type_oid, e.extname\n          FROM pg_depend dep\n          JOIN pg_extension e ON dep.refobjid = e.oid\n          WHERE dep.deptype = 'e'\n        ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(t.typelem, 0::oid), t.oid)\n        JOIN pg_class c\n          ON a.attrelid = c.oid\n        JOIN pg_namespace n\n          ON c.relnamespace = n.oid\n        WHERE a.attnum > 0\n          AND NOT a.attisdropped\n          AND c.relkind = 'r'\n          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        ORDER BY n.nspname, c.relname, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "table_schema",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "table_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "column_name",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 3,
+        "name": "data_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "type_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "type_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "column_expr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "attgenerated",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "not_null!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "attndims!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "column_comment?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "is_extension_type!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "extension_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 13,
+        "name": "type_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "type_relkind?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false,
+      null,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "0f37a46131b73c375d4dacc32ef9112379b68750e9ab14b7fd54a03c2690a2ea"
+}

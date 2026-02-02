@@ -442,3 +442,126 @@ async fn test_aggregate_with_custom_array_state_type() -> Result<()> {
     })
     .await
 }
+
+/// Test that an aggregate using an extension type as state type
+/// correctly depends on DbObjectId::Extension, not DbObjectId::Type
+#[tokio::test]
+async fn test_aggregate_with_extension_state_type() -> Result<()> {
+    with_test_db(async |db| {
+        // Create the hstore extension (provides key-value storage)
+        db.execute("CREATE EXTENSION hstore").await;
+
+        // Create a state function that uses hstore as state type
+        db.execute(
+            "CREATE FUNCTION hstore_merge_sfunc(state hstore, key text, val text) RETURNS hstore AS $$
+             BEGIN
+                 IF state IS NULL THEN
+                     RETURN hstore(key, val);
+                 ELSE
+                     RETURN state || hstore(key, val);
+                 END IF;
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        // Create aggregate with extension type as state type
+        db.execute(
+            "CREATE AGGREGATE key_value_collect(text, text) (
+                SFUNC = hstore_merge_sfunc,
+                STYPE = hstore
+            )",
+        )
+        .await;
+
+        let aggregates = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0];
+
+        assert_eq!(agg.name, "key_value_collect");
+        assert_eq!(agg.state_type, "hstore");
+
+        // Should depend on Extension, not Type
+        let deps = agg.depends_on();
+        assert!(
+            deps.contains(&DbObjectId::Extension {
+                name: "hstore".to_string()
+            }),
+            "Aggregate should depend on DbObjectId::Extension for extension state type. Deps: {:?}",
+            deps
+        );
+
+        // Should NOT have a Type dependency for hstore
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "hstore")),
+            "Should not have DbObjectId::Type for extension state type"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Test that an aggregate using a domain as state type
+/// correctly depends on DbObjectId::Domain, not DbObjectId::Type
+#[tokio::test]
+async fn test_aggregate_with_domain_state_type() -> Result<()> {
+    with_test_db(async |db| {
+        // Create a domain
+        db.execute("CREATE DOMAIN positive_int AS integer CHECK (VALUE > 0)")
+            .await;
+
+        // Create a state function that uses the domain as state type
+        db.execute(
+            "CREATE FUNCTION positive_sum_sfunc(state positive_int, val positive_int) RETURNS positive_int AS $$
+             BEGIN
+                 RETURN (COALESCE(state, 1) + val)::positive_int;
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .await;
+
+        // Create aggregate with domain state type
+        db.execute(
+            "CREATE AGGREGATE positive_sum(positive_int) (
+                SFUNC = positive_sum_sfunc,
+                STYPE = positive_int,
+                INITCOND = '1'
+            )",
+        )
+        .await;
+
+        let aggregates = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0];
+
+        assert_eq!(agg.name, "positive_sum");
+        assert_eq!(agg.state_type, "positive_int");
+
+        // Should depend on Domain, not Type
+        let deps = agg.depends_on();
+        assert!(
+            deps.contains(&DbObjectId::Domain {
+                schema: "public".to_string(),
+                name: "positive_int".to_string(),
+            }),
+            "Aggregate should depend on DbObjectId::Domain for domain state type. Deps: {:?}",
+            deps
+        );
+
+        // Should NOT have a Type dependency for positive_int
+        assert!(
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "positive_int")),
+            "Should not have DbObjectId::Type for domain state type"
+        );
+
+        Ok(())
+    })
+    .await
+}

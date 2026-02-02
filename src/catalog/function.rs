@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::{DependencyBuilder, is_system_schema};
+use super::utils::{is_system_schema, resolve_type_dependency, DependencyBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
@@ -306,44 +306,18 @@ fn populate_function_dependencies(
             }
 
             // Type dependency (beyond what DependencyBuilder already added)
-            // Check for extension types first, then use typtype and relkind to distinguish between types
-            if let (Some(typ_schema), Some(typ_name)) = (&dep.typ_schema, &dep.typ_name) {
-                if !is_system_schema(typ_schema) {
-                    let dep_id = if let Some(ext_name) = &dep.typ_extension_name {
-                        // Type is from an extension - depend on the extension
-                        DbObjectId::Extension {
-                            name: ext_name.clone(),
-                        }
-                    } else if dep.typ_typtype.as_deref() == Some("d") {
-                        DbObjectId::Domain {
-                            schema: typ_schema.clone(),
-                            name: typ_name.clone(),
-                        }
-                    } else if dep.typ_typtype.as_deref() == Some("c") {
-                        // Composite type - check if from table/view
-                        match dep.typ_relkind.as_deref() {
-                            Some("r") | Some("p") => DbObjectId::Table {
-                                schema: typ_schema.clone(),
-                                name: typ_name.clone(),
-                            },
-                            Some("v") | Some("m") => DbObjectId::View {
-                                schema: typ_schema.clone(),
-                                name: typ_name.clone(),
-                            },
-                            _ => DbObjectId::Type {
-                                schema: typ_schema.clone(),
-                                name: typ_name.clone(),
-                            },
-                        }
-                    } else {
-                        DbObjectId::Type {
-                            schema: typ_schema.clone(),
-                            name: typ_name.clone(),
-                        }
-                    };
-                    if !function.depends_on.contains(&dep_id) {
-                        function.depends_on.push(dep_id);
-                    }
+            // Use resolve_type_dependency for consistent handling of extension types,
+            // domains, composite types from tables/views, and other custom types
+            if let Some(dep_id) = resolve_type_dependency(
+                dep.typ_schema.as_deref(),
+                dep.typ_name.as_deref(),
+                dep.typ_typtype.as_deref(),
+                dep.typ_relkind.as_deref(),
+                dep.typ_extension_name.is_some(),
+                dep.typ_extension_name.as_deref(),
+            ) {
+                if !function.depends_on.contains(&dep_id) {
+                    function.depends_on.push(dep_id);
                 }
                 continue;
             }

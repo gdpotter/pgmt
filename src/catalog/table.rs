@@ -5,7 +5,7 @@ use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::is_system_schema;
+use super::utils::{is_system_schema, resolve_type_dependency};
 use crate::render::quote_ident;
 use itertools::Itertools;
 
@@ -174,6 +174,7 @@ struct ColumnRow {
     is_extension_type: bool,
     extension_name: Option<String>,
     type_typtype: Option<String>,
+    type_relkind: Option<String>,
 }
 
 async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> {
@@ -205,7 +206,12 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
           CASE
             WHEN t.typelem != 0 THEN elem_t.typtype::text
             ELSE t.typtype::text
-          END AS "type_typtype?"
+          END AS "type_typtype?",
+          -- Get relkind for composite types (to distinguish table/view from explicit composite)
+          CASE
+            WHEN t.typelem != 0 THEN elem_t_rel.relkind::text
+            ELSE t_rel.relkind::text
+          END AS "type_relkind?"
         FROM pg_attribute a
         LEFT JOIN pg_attrdef ad
           ON a.attrelid = ad.adrelid
@@ -215,6 +221,9 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
         -- Element type for array types
         LEFT JOIN pg_type elem_t ON t.typelem = elem_t.oid AND t.typelem != 0
         LEFT JOIN pg_namespace elem_tn ON elem_t.typnamespace = elem_tn.oid
+        -- Get relkind for composite types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class t_rel ON t.typrelid = t_rel.oid AND t.typrelid != 0
+        LEFT JOIN pg_class elem_t_rel ON elem_t.typrelid = elem_t_rel.oid AND elem_t.typrelid != 0
         LEFT JOIN pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum
         -- Extension type lookup: compute once as derived table, then hash join
         LEFT JOIN (
@@ -254,6 +263,7 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
             is_extension_type: r.is_extension_type,
             extension_name: r.extension_name,
             type_typtype: r.type_typtype,
+            type_relkind: r.type_relkind,
         })
         .collect())
 }
@@ -454,30 +464,17 @@ fn populate_columns(
                 // type_name is already resolved to the element type for arrays via SQL
                 let base_type_name = r.type_name.clone();
 
-                // Track dependencies based on type source
-                if r.is_extension_type {
-                    // For extension types, depend on the extension itself
-                    if let Some(ext_name) = &r.extension_name {
-                        column_depends_on.push(DbObjectId::Extension {
-                            name: ext_name.clone(),
-                        });
-                    }
-                } else if let (Some(type_schema), Some(ref base_type_name)) =
-                    (r.type_schema.clone(), base_type_name.clone())
-                    && !is_system_schema(&type_schema)
-                {
-                    // For user-defined types, depend on the type or domain
-                    if r.type_typtype.as_deref() == Some("d") {
-                        column_depends_on.push(DbObjectId::Domain {
-                            schema: type_schema.clone(),
-                            name: base_type_name.clone(),
-                        });
-                    } else {
-                        column_depends_on.push(DbObjectId::Type {
-                            schema: type_schema.clone(),
-                            name: base_type_name.clone(),
-                        });
-                    }
+                // Track dependencies using resolve_type_dependency for consistent handling
+                // of extension types, domains, composite types from tables/views, and other custom types
+                if let Some(dep_id) = resolve_type_dependency(
+                    r.type_schema.as_deref(),
+                    r.type_name.as_deref(),
+                    r.type_typtype.as_deref(),
+                    r.type_relkind.as_deref(),
+                    r.is_extension_type,
+                    r.extension_name.as_deref(),
+                ) {
+                    column_depends_on.push(dep_id);
                 }
 
                 if let Some(funcs) =

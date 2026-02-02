@@ -843,3 +843,72 @@ async fn test_fetch_primary_key_with_comment() {
     })
     .await;
 }
+
+/// Test that a table column referencing another table's composite type
+/// correctly depends on DbObjectId::Table, not DbObjectId::Type
+#[tokio::test]
+async fn test_fetch_table_with_composite_type_column() {
+    with_test_db(async |db| {
+        // Create a table - its composite type is automatically available as "orders"
+        db.execute(
+            "CREATE TABLE orders (
+                id SERIAL PRIMARY KEY,
+                status TEXT NOT NULL
+            )",
+        )
+        .await;
+
+        // Create a table with a column that uses the orders table's composite type
+        db.execute(
+            "CREATE TABLE order_history (
+                id SERIAL PRIMARY KEY,
+                old_order orders,
+                new_order orders
+            )",
+        )
+        .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+
+        let order_history = tables
+            .iter()
+            .find(|t| t.name == "order_history")
+            .expect("order_history table should exist");
+
+        // The columns using table composite type should depend on the table
+        let old_order_col = order_history
+            .columns
+            .iter()
+            .find(|c| c.name == "old_order")
+            .expect("old_order column should exist");
+
+        // Should depend on Table, not Type
+        assert!(
+            old_order_col.depends_on.contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "orders".to_string()
+            }),
+            "Should depend on DbObjectId::Table for table composite type, got: {:?}",
+            old_order_col.depends_on
+        );
+
+        // Should NOT have a Type dependency for the same name
+        assert!(
+            !old_order_col
+                .depends_on
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Type { name, .. } if name == "orders")),
+            "Should not have DbObjectId::Type for table composite type"
+        );
+
+        // Table-level dependencies should also include the table
+        assert!(
+            order_history.depends_on().contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "orders".to_string()
+            }),
+            "order_history table should depend on orders table"
+        );
+    })
+    .await;
+}

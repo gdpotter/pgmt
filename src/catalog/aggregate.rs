@@ -4,7 +4,7 @@ use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::is_system_schema;
+use super::utils::{is_system_schema, resolve_type_dependency};
 
 /// Represents a PostgreSQL aggregate function
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +86,19 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
             END AS "state_type_schema!",
             -- Full formatted state type for SQL rendering (preserves array brackets)
             format_type(agg.aggtranstype, NULL) AS "state_type_formatted!",
+            -- Get typtype for state type to distinguish domains ('d') from other types
+            CASE
+                WHEN st.typelem != 0 THEN elem_st.typtype::text
+                ELSE st.typtype::text
+            END AS "state_type_typtype!",
+            -- Get relkind for composite state types (to distinguish table/view from explicit composite)
+            CASE
+                WHEN st.typelem != 0 THEN elem_st_rel.relkind::text
+                ELSE st_rel.relkind::text
+            END AS "state_type_relkind?",
+            -- Check if state type (or element type for arrays) is from an extension
+            ext_state_types.extname IS NOT NULL AS "is_state_type_extension!: bool",
+            ext_state_types.extname AS "state_type_extension_name?",
 
             -- State transition function (SFUNC)
             tfunc.proname AS "state_func!",
@@ -118,6 +131,16 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
         -- Element type for array state types
         LEFT JOIN pg_type elem_st ON st.typelem = elem_st.oid AND st.typelem != 0
         LEFT JOIN pg_namespace elem_stn ON elem_st.typnamespace = elem_stn.oid
+        -- Get relkind for composite state types (to distinguish table/view from explicit composite)
+        LEFT JOIN pg_class st_rel ON st.typrelid = st_rel.oid AND st.typrelid != 0
+        LEFT JOIN pg_class elem_st_rel ON elem_st.typrelid = elem_st_rel.oid AND elem_st.typrelid != 0
+        -- Extension type lookup for state type
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS type_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_state_types ON ext_state_types.type_oid = COALESCE(NULLIF(st.typelem, 0::oid), st.oid)
 
         -- State transition function
         JOIN pg_proc tfunc ON agg.aggtransfn = tfunc.oid
@@ -196,12 +219,17 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
             });
         }
 
-        // Depend on state type if it's a custom type
-        if !is_system_schema(&row.state_type_schema) {
-            depends_on.push(DbObjectId::Type {
-                schema: row.state_type_schema.clone(),
-                name: row.state_type.clone(),
-            });
+        // Depend on state type using resolve_type_dependency for consistent handling
+        // of extension types, domains, composite types from tables/views, and other custom types
+        if let Some(dep_id) = resolve_type_dependency(
+            Some(&row.state_type_schema),
+            Some(&row.state_type),
+            Some(&row.state_type_typtype),
+            row.state_type_relkind.as_deref(),
+            row.is_state_type_extension,
+            row.state_type_extension_name.as_deref(),
+        ) {
+            depends_on.push(dep_id);
         }
 
         // Reconstruct the CREATE AGGREGATE definition
