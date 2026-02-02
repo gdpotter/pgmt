@@ -80,7 +80,27 @@ pub fn validate_catalogs(
     let expanded_steps = cascade::expand(steps, &actual, &expected);
     let ordered_steps = diff_order(expanded_steps, &actual, &expected)?;
 
-    if ordered_steps.is_empty() {
+    // Check column order mismatches (respecting ColumnOrderMode)
+    let column_order_mismatches = if config.migration.column_order != ColumnOrderMode::Relaxed {
+        find_column_order_mismatches(&actual, &expected)
+    } else {
+        Vec::new()
+    };
+
+    // Warn about column order mismatches if in warn mode
+    if config.migration.column_order == ColumnOrderMode::Warn && !column_order_mismatches.is_empty()
+    {
+        eprintln!("Warning: Column order mismatches detected:\n");
+        for mismatch in &column_order_mismatches {
+            eprintln!("  {}", mismatch);
+        }
+        eprintln!("\nSchema files have columns in a different order than the database.");
+    }
+
+    let has_column_order_errors = config.migration.column_order == ColumnOrderMode::Strict
+        && !column_order_mismatches.is_empty();
+
+    if ordered_steps.is_empty() && !has_column_order_errors {
         Ok(ValidationResult {
             passed: true,
             differences: ordered_steps,
@@ -88,12 +108,19 @@ pub fn validate_catalogs(
         })
     } else {
         let message = if validation_config.show_differences {
-            format_validation_failure(&ordered_steps)
-        } else {
-            format!(
-                "Schema validation failed! Found {} differences.",
-                ordered_steps.len()
+            format_validation_failure(
+                &ordered_steps,
+                &column_order_mismatches,
+                has_column_order_errors,
             )
+        } else {
+            let total = ordered_steps.len()
+                + if has_column_order_errors {
+                    column_order_mismatches.len()
+                } else {
+                    0
+                };
+            format!("Schema validation failed! Found {} differences.", total)
         };
 
         Ok(ValidationResult {
@@ -105,26 +132,55 @@ pub fn validate_catalogs(
 }
 
 /// Format a detailed validation failure message
-fn format_validation_failure(differences: &[MigrationStep]) -> String {
+fn format_validation_failure(
+    differences: &[MigrationStep],
+    column_order_mismatches: &[ColumnOrderMismatch],
+    include_column_order_errors: bool,
+) -> String {
+    let total_issues = differences.len()
+        + if include_column_order_errors {
+            column_order_mismatches.len()
+        } else {
+            0
+        };
     let mut message = format!(
-        "Schema validation failed! Found {} differences:\n",
-        differences.len()
+        "Schema validation failed! Found {} issue(s):\n",
+        total_issues
     );
-    message.push_str("\nRequired changes to bring database in sync:\n");
-    message.push_str(&"=".repeat(50));
-    message.push('\n');
 
-    for (i, step) in differences.iter().enumerate() {
-        message.push_str(&format!("{}. {:?}\n", i + 1, step.id()));
-        for rendered in step.to_sql() {
-            message.push_str(&format!("   {}\n", rendered.sql));
-        }
+    if !differences.is_empty() {
+        message.push_str("\nRequired changes to bring database in sync:\n");
+        message.push_str(&"=".repeat(50));
         message.push('\n');
+
+        for (i, step) in differences.iter().enumerate() {
+            message.push_str(&format!("{}. {:?}\n", i + 1, step.id()));
+            for rendered in step.to_sql() {
+                message.push_str(&format!("   {}\n", rendered.sql));
+            }
+            message.push('\n');
+        }
+    }
+
+    if include_column_order_errors && !column_order_mismatches.is_empty() {
+        message.push_str("\nColumn order mismatches:\n");
+        message.push_str(&"=".repeat(50));
+        message.push('\n');
+
+        for mismatch in column_order_mismatches {
+            message.push_str(&format!("{}\n\n", mismatch));
+        }
     }
 
     message.push_str("💡 To fix these issues:\n");
-    message.push_str("   1. Update your schema files to match the database, OR\n");
-    message.push_str("   2. Run 'pgmt apply' to apply schema files to the database\n");
+    if !differences.is_empty() {
+        message.push_str("   1. Update your schema files to match the database, OR\n");
+        message.push_str("   2. Run 'pgmt apply' to apply schema files to the database\n");
+    }
+    if include_column_order_errors && !column_order_mismatches.is_empty() {
+        message.push_str("   - For column order: Update schema files to match the physical column order in the database\n");
+        message.push_str("   - To disable column order checks: Set `migration.column_order: relaxed` in pgmt.yaml\n");
+    }
 
     message
 }
@@ -196,7 +252,7 @@ pub fn validate_baseline_consistency_with_suggestions(
     }
 }
 
-/// Represents a column order violation
+/// Represents a column order violation (new column not at end)
 #[derive(Debug, Clone)]
 pub struct ColumnOrderViolation {
     pub schema: String,
@@ -211,6 +267,28 @@ impl std::fmt::Display for ColumnOrderViolation {
             f,
             "Table {}.{}: new column '{}' must come after existing column '{}'",
             self.schema, self.table, self.new_column, self.old_column_after
+        )
+    }
+}
+
+/// Represents a column order mismatch between actual and expected catalogs
+#[derive(Debug, Clone)]
+pub struct ColumnOrderMismatch {
+    pub schema: String,
+    pub table: String,
+    pub expected_order: Vec<String>,
+    pub actual_order: Vec<String>,
+}
+
+impl std::fmt::Display for ColumnOrderMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Table {}.{}: column order mismatch\n  Expected: [{}]\n  Actual:   [{}]",
+            self.schema,
+            self.table,
+            self.expected_order.join(", "),
+            self.actual_order.join(", ")
         )
     }
 }
@@ -274,6 +352,67 @@ pub fn validate_column_order(
     }
 
     violations
+}
+
+/// Find tables where column order differs between actual and expected catalogs.
+///
+/// This detects when schema files have columns in a different order than the
+/// actual database, which can happen when someone hand-writes migrations and
+/// places columns in the wrong position in schema files.
+pub fn find_column_order_mismatches(
+    actual_catalog: &Catalog,
+    expected_catalog: &Catalog,
+) -> Vec<ColumnOrderMismatch> {
+    let mut mismatches = Vec::new();
+
+    // Build a lookup of actual tables by (schema, name)
+    let actual_tables: std::collections::HashMap<(&str, &str), &crate::catalog::table::Table> =
+        actual_catalog
+            .tables
+            .iter()
+            .map(|t| ((t.schema.as_str(), t.name.as_str()), t))
+            .collect();
+
+    for expected_table in &expected_catalog.tables {
+        let Some(actual_table) =
+            actual_tables.get(&(expected_table.schema.as_str(), expected_table.name.as_str()))
+        else {
+            continue;
+        };
+
+        // Get column names in order
+        let expected_columns: Vec<&str> = expected_table
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        let actual_columns: Vec<&str> = actual_table
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+
+        // Only compare if both tables have the same set of columns
+        let expected_set: HashSet<&str> = expected_columns.iter().copied().collect();
+        let actual_set: HashSet<&str> = actual_columns.iter().copied().collect();
+
+        if expected_set != actual_set {
+            // Different columns - the regular diff will catch this
+            continue;
+        }
+
+        // Same columns, check if order matches
+        if expected_columns != actual_columns {
+            mismatches.push(ColumnOrderMismatch {
+                schema: expected_table.schema.clone(),
+                table: expected_table.name.clone(),
+                expected_order: expected_columns.iter().map(|s| s.to_string()).collect(),
+                actual_order: actual_columns.iter().map(|s| s.to_string()).collect(),
+            });
+        }
+    }
+
+    mismatches
 }
 
 /// Apply column order validation based on mode.
@@ -381,7 +520,8 @@ mod tests {
     #[test]
     fn test_format_validation_failure() {
         let differences = vec![]; // Empty for test
-        let message = format_validation_failure(&differences);
+        let column_order_mismatches = vec![];
+        let message = format_validation_failure(&differences, &column_order_mismatches, false);
         assert!(message.contains("Schema validation failed"));
         assert!(message.contains("To fix these issues"));
     }
@@ -518,5 +658,74 @@ mod tests {
         assert!(display.contains("public.users"));
         assert!(display.contains("email"));
         assert!(display.contains("name"));
+    }
+
+    #[test]
+    fn test_find_column_order_mismatches_same_order() {
+        let table1 = make_test_table("public", "users", vec!["id", "name", "email"]);
+        let table2 = make_test_table("public", "users", vec!["id", "name", "email"]);
+
+        let catalog1 = make_catalog_with_table(table1);
+        let catalog2 = make_catalog_with_table(table2);
+
+        let mismatches = find_column_order_mismatches(&catalog1, &catalog2);
+        assert!(mismatches.is_empty());
+    }
+
+    #[test]
+    fn test_find_column_order_mismatches_different_order() {
+        // Actual DB has columns in one order
+        let actual_table = make_test_table("public", "users", vec!["id", "name", "email"]);
+        // Schema file has them in different order
+        let expected_table = make_test_table("public", "users", vec!["id", "email", "name"]);
+
+        let actual_catalog = make_catalog_with_table(actual_table);
+        let expected_catalog = make_catalog_with_table(expected_table);
+
+        let mismatches = find_column_order_mismatches(&actual_catalog, &expected_catalog);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].schema, "public");
+        assert_eq!(mismatches[0].table, "users");
+        assert_eq!(mismatches[0].actual_order, vec!["id", "name", "email"]);
+        assert_eq!(mismatches[0].expected_order, vec!["id", "email", "name"]);
+    }
+
+    #[test]
+    fn test_find_column_order_mismatches_different_columns_ignored() {
+        // If catalogs have different columns, diff_all handles it
+        let actual_table = make_test_table("public", "users", vec!["id", "name"]);
+        let expected_table = make_test_table("public", "users", vec!["id", "name", "email"]);
+
+        let actual_catalog = make_catalog_with_table(actual_table);
+        let expected_catalog = make_catalog_with_table(expected_table);
+
+        let mismatches = find_column_order_mismatches(&actual_catalog, &expected_catalog);
+        assert!(mismatches.is_empty()); // Different column sets - not a mismatch, it's a diff
+    }
+
+    #[test]
+    fn test_find_column_order_mismatches_new_table_ignored() {
+        // Table only in expected - not a mismatch
+        let expected_table = make_test_table("public", "users", vec!["id", "name"]);
+        let actual_catalog = Catalog::empty();
+        let expected_catalog = make_catalog_with_table(expected_table);
+
+        let mismatches = find_column_order_mismatches(&actual_catalog, &expected_catalog);
+        assert!(mismatches.is_empty());
+    }
+
+    #[test]
+    fn test_column_order_mismatch_display() {
+        let mismatch = ColumnOrderMismatch {
+            schema: "public".to_string(),
+            table: "users".to_string(),
+            expected_order: vec!["id".to_string(), "email".to_string(), "name".to_string()],
+            actual_order: vec!["id".to_string(), "name".to_string(), "email".to_string()],
+        };
+        let display = format!("{}", mismatch);
+        assert!(display.contains("public.users"));
+        assert!(display.contains("column order mismatch"));
+        assert!(display.contains("id, email, name"));
+        assert!(display.contains("id, name, email"));
     }
 }
