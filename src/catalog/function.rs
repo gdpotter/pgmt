@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::{is_system_schema, resolve_type_dependency, DependencyBuilder};
+use super::utils::{DependencyBuilder, is_system_schema, resolve_type_dependency};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {

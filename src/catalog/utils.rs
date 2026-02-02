@@ -558,14 +558,8 @@ mod tests {
 
     #[test]
     fn test_resolve_type_dependency_enum() {
-        let result = resolve_type_dependency(
-            Some("app"),
-            Some("status"),
-            Some("e"),
-            None,
-            false,
-            None,
-        );
+        let result =
+            resolve_type_dependency(Some("app"), Some("status"), Some("e"), None, false, None);
         assert_eq!(
             result,
             Some(DbObjectId::Type {
