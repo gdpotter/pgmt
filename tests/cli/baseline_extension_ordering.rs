@@ -68,7 +68,7 @@ async fn test_baseline_extension_first() -> Result<()> {
         let shadow_pool = helper.connect_to_shadow_db().await?;
 
         // Clean shadow database to ensure it's empty before applying baseline
-        cleaner::clean_shadow_db(&shadow_pool).await?;
+        cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
         // Execute baseline as raw SQL (it may contain multiple statements)
         sqlx::raw_sql(&baseline_content)
@@ -159,7 +159,7 @@ async fn test_baseline_multiple_extensions_ordering() -> Result<()> {
         let shadow_pool = helper.connect_to_shadow_db().await?;
 
         // Clean shadow database to ensure it's empty before applying baseline
-        cleaner::clean_shadow_db(&shadow_pool).await?;
+        cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
         sqlx::raw_sql(&baseline_content)
             .execute(&shadow_pool)
@@ -303,7 +303,7 @@ async fn test_extension_with_schema_ordering() -> Result<()> {
         let shadow_pool = helper.connect_to_shadow_db().await?;
 
         // Clean shadow database to ensure it's empty before applying baseline
-        cleaner::clean_shadow_db(&shadow_pool).await?;
+        cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
         sqlx::raw_sql(&baseline_content)
             .execute(&shadow_pool)

@@ -56,6 +56,7 @@ pub async fn cmd_migrate_update_with_options(
         latest_migration.version,
         &roles_file,
         &baseline_config,
+        &config.objects,
     )
     .await?;
 
@@ -139,6 +140,7 @@ pub async fn cmd_migrate_update_with_options(
                 &baseline_config,
                 suggest_file_deps,
                 &roles_file,
+                &config.objects,
             )
             .await?;
         }
@@ -228,6 +230,7 @@ pub async fn cmd_migrate_update_specific(
         target_migration.version,
         &roles_file,
         &baseline_config,
+        &config.objects,
     )
     .await?;
 
@@ -394,6 +397,7 @@ pub async fn cmd_migrate_update_specific(
                 &baseline_config,
                 suggest_file_deps,
                 &roles_file,
+                &config.objects,
             )
             .await?;
         }

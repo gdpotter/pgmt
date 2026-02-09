@@ -220,7 +220,7 @@ pub async fn cmd_debug_dependencies(
 
     // Clean the database first
     debug!("Cleaning shadow database");
-    cleaner::clean_shadow_db(&shadow_pool).await?;
+    cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
 
     // Apply roles file before schema (if it exists)
     let roles_file = root_dir.join(&config.directories.roles);
@@ -232,6 +232,7 @@ pub async fn cmd_debug_dependencies(
         SchemaProcessorConfig {
             verbose: false,
             clean_before_apply: false,
+            objects: config.objects.clone(),
         },
     );
 

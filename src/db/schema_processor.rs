@@ -13,6 +13,7 @@ use crate::catalog::file_dependencies::{
     FileDependencyAugmentation, FileToObjectMapping, create_dependency_augmentation,
 };
 use crate::catalog::identity::{self, CatalogIdentity};
+use crate::config::types::Objects;
 use crate::db::cleaner;
 use crate::db::schema_executor::SchemaFileExecutor;
 use crate::schema_loader::{SchemaLoader, SchemaLoaderConfig};
@@ -25,6 +26,8 @@ pub struct SchemaProcessorConfig {
     pub verbose: bool,
     /// Whether to clean the database before applying schema
     pub clean_before_apply: bool,
+    /// Object filter config (controls which schemas the cleaner drops)
+    pub objects: Objects,
 }
 
 impl Default for SchemaProcessorConfig {
@@ -32,6 +35,7 @@ impl Default for SchemaProcessorConfig {
         Self {
             verbose: false,
             clean_before_apply: true,
+            objects: Objects::default(),
         }
     }
 }
@@ -82,7 +86,7 @@ impl SchemaProcessor {
         // Step 1: Clean database if requested
         if self.config.clean_before_apply {
             debug!("🧹 Cleaning database before applying schema...");
-            cleaner::clean_shadow_db(&self.pool)
+            cleaner::clean_shadow_db(&self.pool, &self.config.objects)
                 .await
                 .context("Failed to clean database before applying schema")?;
         }

@@ -25,6 +25,7 @@ CREATE TABLE users (
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false, // DB is already clean
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(shadow_db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(&schema_dir).await;
@@ -82,6 +83,7 @@ async fn test_schema_executor_succeeds_with_valid_schema() -> Result<()> {
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false,
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(shadow_db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(&schema_dir).await;
@@ -125,6 +127,7 @@ CREATE VIEW user_emails AS SELECT id, email FROM users;"#,
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false,
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(shadow_db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(&schema_dir).await;

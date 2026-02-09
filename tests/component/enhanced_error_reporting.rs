@@ -29,6 +29,7 @@ async fn test_schema_executor_reports_specific_file_on_error() -> Result<()> {
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false,
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(schema_dir).await;
@@ -83,6 +84,7 @@ async fn test_schema_executor_succeeds_with_valid_files() -> Result<()> {
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false,
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(schema_dir).await;
@@ -143,6 +145,7 @@ CREATE TABLE app.users (
         let processor_config = SchemaProcessorConfig {
             verbose: true,
             clean_before_apply: false,
+            ..Default::default()
         };
         let processor = SchemaProcessor::new(db.pool().clone(), processor_config);
         let result = processor.process_schema_directory(schema_dir).await;

@@ -32,6 +32,12 @@ databases:
     # docker:
     #   version: '16'                           # PostgreSQL version
     #   auto_cleanup: true                      # Clean up container after use
+
+    # OR Docker with a custom image (e.g. Supabase):
+    # docker:
+    #   image: public.ecr.aws/supabase/postgres:17.6.1.081
+    #   environment:
+    #     POSTGRES_PASSWORD: your-password       # Custom env vars
 ```
 
 ### directories

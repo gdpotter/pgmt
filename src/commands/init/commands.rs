@@ -853,7 +853,7 @@ async fn validate_schema_files_impl(
     let pool = connect_with_retry(&shadow_url).await?;
 
     // Clean shadow database first
-    cleaner::clean_shadow_db(&pool).await?;
+    cleaner::clean_shadow_db(&pool, &crate::config::types::Objects::default()).await?;
 
     // Apply roles file before schema files (if provided)
     if let Some(roles_path) = roles_file
@@ -867,6 +867,7 @@ async fn validate_schema_files_impl(
     let config = SchemaProcessorConfig {
         verbose: false,            // Silent validation
         clean_before_apply: false, // Already cleaned above
+        ..Default::default()
     };
     let processor = SchemaProcessor::new(pool.clone(), config);
     processor.process_schema_directory(schema_dir).await?;

@@ -79,7 +79,7 @@ pub async fn cmd_apply(
     let roles_file = root_dir.join(&config.directories.roles);
 
     // Clean shadow database first, then apply roles, then apply schema
-    crate::db::cleaner::clean_shadow_db(&shadow_pool).await?;
+    crate::db::cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
 
     // Apply roles file before schema files (if it exists)
     crate::schema_ops::apply_roles_file(&shadow_pool, &roles_file).await?;
@@ -87,6 +87,7 @@ pub async fn cmd_apply(
     let processor_config = SchemaProcessorConfig {
         verbose: true,
         clean_before_apply: false, // Already cleaned above
+        objects: config.objects.clone(),
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
@@ -138,7 +139,7 @@ pub async fn cmd_apply(
                 println!("🔄 Re-processing schema to shadow database...");
 
                 // Clean and re-apply roles before reprocessing schema
-                crate::db::cleaner::clean_shadow_db(&shadow_pool).await?;
+                crate::db::cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
                 crate::schema_ops::apply_roles_file(&shadow_pool, &roles_file).await?;
 
                 let reprocessor =

@@ -107,6 +107,7 @@ pub async fn cmd_baseline_create(
             &baseline_config,
             suggest_file_deps,
             &roles_file,
+            &config.objects,
         )
         .await
         {

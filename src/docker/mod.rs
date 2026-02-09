@@ -39,7 +39,7 @@ impl ContainerInfo {
     /// Get the connection string for this container
     pub fn connection_string(&self) -> String {
         format!(
-            "postgres://{}:{}@{}:{}/{}",
+            "postgres://{}:{}@{}:{}/{}?sslmode=disable",
             self.username, self.password, self.host, self.port, self.database
         )
     }
@@ -350,19 +350,24 @@ impl DockerManager {
         debug!("Image available after {:?}", image_start.elapsed());
 
         // Prepare environment variables
-        let mut env_vars = vec![
-            "POSTGRES_DB=pgmt_shadow".to_string(),
-            "POSTGRES_USER=postgres".to_string(),
-        ];
+        // Only set defaults for DB/user/password if the user hasn't overridden them.
+        // Custom images (e.g. supabase/postgres) may have their own init scripts
+        // that depend on specific users/databases, so overriding breaks them.
+        let mut env_vars = Vec::new();
+
+        if !config.environment.contains_key("POSTGRES_DB") {
+            env_vars.push("POSTGRES_DB=pgmt_shadow".to_string());
+        }
+        if !config.environment.contains_key("POSTGRES_USER") {
+            env_vars.push("POSTGRES_USER=postgres".to_string());
+        }
+        if !config.environment.contains_key("POSTGRES_PASSWORD") {
+            env_vars.push("POSTGRES_PASSWORD=pgmt_shadow_password".to_string());
+        }
 
         // Add custom environment variables
         for (key, value) in &config.environment {
             env_vars.push(format!("{}={}", key, value));
-        }
-
-        // Set default password if not provided
-        if !config.environment.contains_key("POSTGRES_PASSWORD") {
-            env_vars.push("POSTGRES_PASSWORD=pgmt_shadow_password".to_string());
         }
 
         // Configure port binding - let Docker auto-assign a port on 127.0.0.1
@@ -378,7 +383,9 @@ impl DockerManager {
 
         let host_config = HostConfig {
             port_bindings: Some(port_bindings),
-            auto_remove: Some(config.auto_cleanup),
+            // Don't use auto_remove - it destroys the container on exit,
+            // preventing `docker logs` inspection when startup fails.
+            // Cleanup is handled by RAII (Drop) and the global registry instead.
             ..Default::default()
         };
 
@@ -430,18 +437,28 @@ impl DockerManager {
         self.wait_for_postgres_ready(&container.id).await?;
         debug!("PostgreSQL ready after {:?}", readiness_start.elapsed());
 
+        let database = config
+            .environment
+            .get("POSTGRES_DB")
+            .cloned()
+            .unwrap_or_else(|| "pgmt_shadow".to_string());
+        let username = config
+            .environment
+            .get("POSTGRES_USER")
+            .cloned()
+            .unwrap_or_else(|| "postgres".to_string());
         let password = config
             .environment
             .get("POSTGRES_PASSWORD")
-            .unwrap_or(&"pgmt_shadow_password".to_string())
-            .clone();
+            .cloned()
+            .unwrap_or_else(|| "pgmt_shadow_password".to_string());
 
         let container_info = ContainerInfo {
             id: container.id.clone(),
             host: "127.0.0.1".to_string(),
             port: host_port,
-            database: "pgmt_shadow".to_string(),
-            username: "postgres".to_string(),
+            database,
+            username,
             password,
         };
 
@@ -800,6 +817,26 @@ impl DockerManager {
                 .inspect_container(container_id, None::<InspectContainerOptions>)
                 .await
                 .map_err(|e| anyhow!("Failed to inspect container: {}", e))?;
+
+            // Check if the container has exited — fail fast instead of retrying
+            if let Some(ref state) = inspect.state {
+                match state.status {
+                    Some(ContainerStateStatusEnum::EXITED)
+                    | Some(ContainerStateStatusEnum::DEAD) => {
+                        let exit_code = state.exit_code.unwrap_or(-1);
+                        let container_name = inspect.name.as_deref().unwrap_or(container_id);
+                        return Err(anyhow!(
+                            "Shadow database container exited with code {}.\n\
+                             Inspect logs with: docker logs {}\n\
+                             Remove with: docker rm {}",
+                            exit_code,
+                            container_name.trim_start_matches('/'),
+                            container_name.trim_start_matches('/'),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
 
             if let Some(container_info) =
                 self.extract_container_info_from_inspect(&inspect, container_id)?

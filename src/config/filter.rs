@@ -141,8 +141,12 @@ impl ObjectFilter {
             }
         });
 
-        // Note: extensions are not filtered by schema pattern - an extension installed in
-        // one schema may be used across all schemas, so filtering would be incorrect.
+        // Filter extensions by schema - platform extensions (e.g. installed by Supabase
+        // in the `extensions` schema) should be excluded when the user doesn't manage
+        // that schema. Users who need an extension should declare it in their schema files.
+        catalog
+            .extensions
+            .retain(|ext| self.should_include_schema(&ext.schema));
 
         catalog
     }

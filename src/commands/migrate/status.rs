@@ -85,6 +85,7 @@ pub async fn cmd_migrate_validate(
         &baselines_dir,
         &migrations_dir,
         roles_path,
+        &config.objects,
     )
     .await?;
 
@@ -165,6 +166,7 @@ async fn reconstruct_expected_state_from_schema_files(
     baselines_dir: &Path,
     migrations_dir: &Path,
     roles_file: Option<&Path>,
+    objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
     use crate::config::types::TrackingTable;
@@ -174,7 +176,7 @@ async fn reconstruct_expected_state_from_schema_files(
     use crate::progress::SectionReporter;
 
     // Clean shadow database
-    cleaner::clean_shadow_db(shadow_pool).await?;
+    cleaner::clean_shadow_db(shadow_pool, objects).await?;
 
     // Apply roles file before baseline/migrations (so grants can work)
     if let Some(roles_path) = roles_file {

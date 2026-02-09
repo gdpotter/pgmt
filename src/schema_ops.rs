@@ -31,10 +31,11 @@ pub async fn load_and_apply_schema(
     pool: &PgPool,
     schema_dir: &Path,
     config: &SchemaOpsConfig,
+    objects: &crate::config::types::Objects,
 ) -> Result<()> {
     if config.clean_before_apply {
         info!("🧹 Cleaning database before applying schema...");
-        cleaner::clean_shadow_db(pool)
+        cleaner::clean_shadow_db(pool, objects)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
     }
@@ -43,6 +44,7 @@ pub async fn load_and_apply_schema(
     let processor_config = SchemaProcessorConfig {
         verbose: config.verbose,
         clean_before_apply: false, // Already cleaned above if requested
+        objects: objects.clone(),
     };
     let processor = SchemaProcessor::new(pool.clone(), processor_config);
     processor.process_schema_directory(schema_dir).await?;
@@ -62,11 +64,13 @@ async fn apply_schema_with_file_dependency_tracking(
     schema_dir: &Path,
     config: &SchemaOpsConfig,
     verbose: bool,
+    objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     // Use SchemaProcessor which encapsulates all the file dependency tracking logic
     let processor_config = SchemaProcessorConfig {
         verbose,
         clean_before_apply: config.clean_before_apply,
+        objects: objects.clone(),
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
     let processed_schema = processor
@@ -155,6 +159,7 @@ pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) ->
         &ops_config,
         config.schema.augment_dependencies_from_files,
         config.schema.verbose_file_processing,
+        &config.objects,
     )
     .await
 }
@@ -167,13 +172,14 @@ pub async fn apply_schema_to_shadow_with_roles(
     config: &SchemaOpsConfig,
     enable_file_deps: bool,
     verbose_file_processing: bool,
+    objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     let shadow_pool = connect_with_retry(shadow_url).await?;
 
     // Clean the database first if requested
     if config.clean_before_apply {
         info!("🧹 Cleaning database before applying schema...");
-        cleaner::clean_shadow_db(&shadow_pool)
+        cleaner::clean_shadow_db(&shadow_pool, objects)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
     }
@@ -196,11 +202,12 @@ pub async fn apply_schema_to_shadow_with_roles(
             schema_dir,
             &schema_config,
             verbose_file_processing,
+            objects,
         )
         .await?
     } else {
         // Use the traditional method
-        load_and_apply_schema(&shadow_pool, schema_dir, &schema_config).await?;
+        load_and_apply_schema(&shadow_pool, schema_dir, &schema_config, objects).await?;
 
         Catalog::load(&shadow_pool)
             .await

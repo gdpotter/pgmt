@@ -87,6 +87,10 @@ export default defineConfig({
               link: '/docs/guides/baseline-management',
             },
             { label: 'Getting Help', link: '/docs/guides/troubleshooting' },
+            {
+              label: 'Supabase',
+              link: '/docs/guides/supabase',
+            },
           ],
         },
         {
