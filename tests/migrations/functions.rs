@@ -2,7 +2,7 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::diff::operations::{
     CommentOperation, FunctionOperation, MigrationStep, SchemaOperation, TableOperation,
-    TypeOperation,
+    TypeOperation, ViewOperation,
 };
 
 #[tokio::test]
@@ -1214,6 +1214,155 @@ async fn test_begin_atomic_cascade_with_parameter_name_change() -> Result<()> {
                 assert!(
                     func.definition.contains("assignee_member_id"),
                     "Function should use new column name"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// When a function's signature changes (adding a parameter with DEFAULT), dependent views
+/// must be cascaded even though the view text is unchanged. PostgreSQL resolves the call
+/// to the new overload via the default, but the old overload can't be dropped while the
+/// view still depends on it.
+#[tokio::test]
+async fn test_function_signature_change_cascades_to_view() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema and table
+            &[
+                "CREATE SCHEMA app",
+                "CREATE TABLE app.users (id SERIAL PRIMARY KEY, name TEXT, score INTEGER)",
+            ],
+            // Initial DB: single-param function + view using it
+            &[
+                "CREATE FUNCTION app.calculate_score(user_id INTEGER) RETURNS INTEGER AS $$ SELECT score FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+                "CREATE VIEW app.user_rankings AS SELECT id, name, app.calculate_score(id) as computed_score FROM app.users",
+            ],
+            // Target DB: function with added param (has DEFAULT) + same view text
+            &[
+                "CREATE FUNCTION app.calculate_score(user_id INTEGER, include_bonus BOOLEAN DEFAULT false) RETURNS INTEGER AS $$ SELECT score FROM app.users WHERE id = user_id; $$ LANGUAGE sql",
+                "CREATE VIEW app.user_rankings AS SELECT id, name, app.calculate_score(id) as computed_score FROM app.users",
+            ],
+            |steps, final_catalog| {
+                // Should cascade: DROP view → DROP function(integer) → CREATE function(integer, boolean) → CREATE view
+                let drop_view = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Drop { schema, name })
+                        if schema == "app" && name == "user_rankings")
+                });
+                let drop_func = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Drop { schema, name, .. })
+                        if schema == "app" && name == "calculate_score")
+                });
+                let create_func = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(FunctionOperation::Create { schema, name, .. })
+                        if schema == "app" && name == "calculate_score")
+                });
+                let create_view = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Create { schema, name, .. })
+                        if schema == "app" && name == "user_rankings")
+                });
+
+                assert!(drop_view.is_some(), "Should have DROP VIEW (cascade)");
+                assert!(drop_func.is_some(), "Should have DROP FUNCTION (old signature)");
+                assert!(create_func.is_some(), "Should have CREATE FUNCTION (new signature)");
+                assert!(create_view.is_some(), "Should have CREATE VIEW (cascade recreation)");
+
+                let (dv, df, cf, cv) = (
+                    drop_view.unwrap(),
+                    drop_func.unwrap(),
+                    create_func.unwrap(),
+                    create_view.unwrap(),
+                );
+
+                assert!(dv < df, "DROP VIEW should come before DROP FUNCTION");
+                assert!(df < cf, "DROP FUNCTION should come before CREATE FUNCTION");
+                assert!(cf < cv, "CREATE FUNCTION should come before CREATE VIEW");
+
+                // Verify final state
+                let func = final_catalog
+                    .functions
+                    .iter()
+                    .find(|f| f.name == "calculate_score")
+                    .expect("Function should exist");
+                assert_eq!(func.parameters.len(), 2, "Function should have 2 parameters");
+
+                let view = final_catalog
+                    .views
+                    .iter()
+                    .find(|v| v.name == "user_rankings")
+                    .expect("View should exist");
+                assert_eq!(view.name, "user_rankings");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Cascade should work transitively through view chains when a function signature changes.
+/// Function → View A → View B: all must be dropped and recreated.
+#[tokio::test]
+async fn test_function_signature_change_cascades_through_view_chain() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: schema
+            &["CREATE SCHEMA app"],
+            // Initial DB: function + view1 (uses function) + view2 (uses view1)
+            &[
+                "CREATE FUNCTION app.get_status() RETURNS TEXT AS $$ SELECT 'active'; $$ LANGUAGE sql",
+                "CREATE VIEW app.status_view AS SELECT app.get_status() as status",
+                "CREATE VIEW app.status_summary AS SELECT status FROM app.status_view",
+            ],
+            // Target DB: function signature changes + same view texts
+            &[
+                "CREATE FUNCTION app.get_status(fallback TEXT DEFAULT 'unknown') RETURNS TEXT AS $$ SELECT 'active'; $$ LANGUAGE sql",
+                "CREATE VIEW app.status_view AS SELECT app.get_status() as status",
+                "CREATE VIEW app.status_summary AS SELECT status FROM app.status_view",
+            ],
+            |steps, final_catalog| {
+                // Should cascade BOTH views
+                let has_drop_view1 = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Drop { name, .. })
+                        if name == "status_view")
+                });
+                let has_drop_view2 = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Drop { name, .. })
+                        if name == "status_summary")
+                });
+                let has_create_view1 = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Create { name, .. })
+                        if name == "status_view")
+                });
+                let has_create_view2 = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::View(ViewOperation::Create { name, .. })
+                        if name == "status_summary")
+                });
+
+                assert!(has_drop_view1, "Should cascade DROP status_view");
+                assert!(has_drop_view2, "Should cascade DROP status_summary (transitive)");
+                assert!(has_create_view1, "Should cascade CREATE status_view");
+                assert!(has_create_view2, "Should cascade CREATE status_summary");
+
+                // Verify final state
+                assert_eq!(
+                    final_catalog.functions.iter().filter(|f| f.name == "get_status").count(),
+                    1,
+                    "Should have exactly one get_status function"
+                );
+                assert_eq!(
+                    final_catalog.views.iter().filter(|v| v.name == "status_view" || v.name == "status_summary").count(),
+                    2,
+                    "Should have both views"
                 );
 
                 Ok(())

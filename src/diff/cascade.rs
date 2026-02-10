@@ -13,43 +13,37 @@ pub fn expand(
     old_catalog: &Catalog,
     new_catalog: &Catalog,
 ) -> Vec<MigrationStep> {
-    let mut seen_ids: HashSet<DbObjectId> = steps.iter().map(|s| s.id()).collect();
     let mut extra_steps: Vec<MigrationStep> = Vec::new();
+    let mut cascaded_ids: HashSet<DbObjectId> = HashSet::new();
 
     let mut drop_counts: HashMap<DbObjectId, usize> = HashMap::new();
-    let mut create_counts: HashMap<DbObjectId, usize> = HashMap::new();
 
     for step in &steps {
         let id = step.id();
         if step.operation_kind() == OperationKind::Drop {
             *drop_counts.entry(id).or_insert(0) += 1;
-        } else {
-            *create_counts.entry(id).or_insert(0) += 1;
         }
     }
 
-    let mut recreate_roots: HashSet<DbObjectId> = HashSet::new();
-    for id in drop_counts.keys() {
-        if drop_counts.get(id).unwrap_or(&0) > &0 && create_counts.get(id).unwrap_or(&0) > &0 {
-            recreate_roots.insert(id.clone());
-        }
-    }
-
+    // Walk reverse_deps from ALL objects being dropped to find dependents that need
+    // cascading. This handles both "recreate" scenarios (same object dropped and created,
+    // e.g. view with column changes) and "identity change" scenarios (e.g. function
+    // signature change where the old and new functions have different DbObjectIds).
     let mut visited: HashSet<DbObjectId> = HashSet::new();
-    for root in &recreate_roots {
-        collect_dependents(root, old_catalog, &mut visited);
+    for id in drop_counts.keys() {
+        collect_dependents(id, old_catalog, &mut visited);
     }
 
     for id in visited {
-        // Skip if there's already a DROP for this object. We check drop_counts (not
-        // seen_ids) because CREATE OR REPLACE doesn't drop - we need an explicit DROP.
+        // Skip if there's already a DROP for this object. We check drop_counts because
+        // CREATE OR REPLACE doesn't drop - we need an explicit DROP.
         if drop_counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
         }
 
         if let Some(steps) = old_catalog.synthesize_drop_create(&id, new_catalog) {
             extra_steps.extend(steps);
-            seen_ids.insert(id);
+            cascaded_ids.insert(id);
         }
     }
 
@@ -65,7 +59,6 @@ pub fn expand(
     //   and will be handled by regular diff if they need updating
     // - Policies: DON'T cascade here - handled via column-level dependencies below
     let tables_with_type_changes = tables_with_column_type_changes(&steps);
-    let mut cascaded_ids: HashSet<DbObjectId> = HashSet::new();
     for table_id in &tables_with_type_changes {
         if let Some(deps) = old_catalog.reverse_deps.get(table_id) {
             for dep in deps {
@@ -84,7 +77,6 @@ pub fn expand(
                 {
                     extra_steps.extend(steps);
                     cascaded_ids.insert(dep.clone());
-                    seen_ids.insert(dep.clone());
                 }
             }
         }

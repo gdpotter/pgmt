@@ -355,6 +355,39 @@ fn order_steps_by_dependencies(
         }
     }
 
+    // Special rule: Function overloads with the same schema+name but different arguments must
+    // have all drops ordered before all creates. When both calculate_score(integer) and
+    // calculate_score(integer, boolean DEFAULT false) exist simultaneously, PostgreSQL cannot
+    // resolve ambiguous calls like calculate_score(1). Ensuring old overloads are dropped
+    // before new ones are created prevents this ambiguity during migration execution.
+    {
+        let mut func_drops: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        let mut func_creates: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+
+        for (i, step) in steps.iter().enumerate() {
+            if let DbObjectId::Function { schema, name, .. } = &step.id() {
+                let key = (schema.clone(), name.clone());
+                match step.operation_kind() {
+                    OperationKind::Drop => func_drops.entry(key).or_default().push(i),
+                    OperationKind::Create => func_creates.entry(key).or_default().push(i),
+                    _ => {}
+                }
+            }
+        }
+
+        for (key, drops) in &func_drops {
+            if let Some(creates) = func_creates.get(key) {
+                for &drop_i in drops {
+                    for &create_i in creates {
+                        let from = node_indices[drop_i];
+                        let to = node_indices[create_i];
+                        graph.add_edge(from, to, ());
+                    }
+                }
+            }
+        }
+    }
+
     // Special rule: All extension creations must come before all non-extension object creations
     // (except schemas, which extensions may depend on)
     // This ensures extensions are available before any objects that might use them
