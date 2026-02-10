@@ -1,0 +1,154 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Button from '../../components/Button.astro';
+import { getCollection, render } from 'astro:content';
+import { css } from '../../../styled-system/css';
+import { container, hstack } from '../../../styled-system/patterns';
+import { links } from '../../config/links';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map(post => ({
+    params: { slug: post.id },
+    props: post,
+  }));
+}
+
+const post = Astro.props;
+const { Content } = await render(post);
+---
+
+<Layout
+  title={post.data.title}
+  description={post.data.description}
+  currentPath="/blog"
+>
+  <article
+    class={container({
+      maxW: '3xl',
+      px: { base: 'lg', md: 'xl' },
+      py: { base: '3xl', md: '4xl' },
+    })}
+  >
+    <header class={css({ mb: '2xl' })}>
+      <time
+        datetime={post.data.pubDate.toISOString()}
+        class={css({
+          fontSize: 'sm',
+          color: 'text-muted',
+          fontFamily: 'mono',
+        })}
+      >
+        {
+          post.data.pubDate.toLocaleDateString('en-us', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        }
+      </time>
+      <h1
+        class={css({
+          fontSize: { base: '3xl', md: '4xl' },
+          fontWeight: '700',
+          fontFamily: 'heading',
+          color: 'text-primary',
+          mt: 'sm',
+          lineHeight: '1.2',
+        })}
+      >
+        {post.data.title}
+      </h1>
+    </header>
+    <div
+      class={css({
+        color: 'text-secondary',
+        fontSize: 'md',
+        lineHeight: '1.8',
+        '& h2': {
+          fontSize: '2xl',
+          fontWeight: '600',
+          fontFamily: 'heading',
+          color: 'text-primary',
+          mt: '2xl',
+          mb: 'md',
+        },
+        '& h3': {
+          fontSize: 'xl',
+          fontWeight: '600',
+          fontFamily: 'heading',
+          color: 'text-primary',
+          mt: 'xl',
+          mb: 'sm',
+        },
+        '& p': {
+          mb: 'lg',
+        },
+        '& .expressive-code': {
+          mb: 'lg',
+        },
+        '& a': {
+          color: 'accent',
+          textDecoration: 'underline',
+          _hover: { opacity: '0.8' },
+        },
+        '& code': {
+          fontFamily: 'mono',
+          fontSize: 'sm',
+          background: 'rgba(255, 255, 255, 0.1)',
+          padding: '0.1em 0.4em',
+          borderRadius: 'sm',
+        },
+        '& pre': {
+          background: 'rgba(0, 0, 0, 0.4)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: 'lg',
+          padding: 'lg',
+          overflowX: 'auto',
+          mb: 'lg',
+          '& code': {
+            background: 'none',
+            padding: '0',
+          },
+        },
+        '& ul': {
+          pl: 'xl',
+          mb: 'lg',
+          listStyleType: 'disc',
+        },
+        '& ol': {
+          pl: 'xl',
+          mb: 'lg',
+          listStyleType: 'decimal',
+        },
+        '& li': {
+          mb: 'sm',
+        },
+        '& blockquote': {
+          borderLeft: '3px solid',
+          borderColor: 'accent',
+          pl: 'lg',
+          ml: '0',
+          fontStyle: 'italic',
+          color: 'text-muted',
+          mb: 'lg',
+        },
+      })}
+    >
+      <Content />
+    </div>
+    <footer
+      class={css({
+        mt: '3xl',
+        pt: '2xl',
+        borderTop: '1px solid',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+      })}
+    >
+      <div class={hstack({ gap: 'md', flexWrap: 'wrap' })}>
+        <Button href={links.docs.quickStart}>Get Started</Button>
+        <Button href={links.github.repo} variant="outline">GitHub</Button>
+      </div>
+    </footer>
+  </article>
+</Layout>

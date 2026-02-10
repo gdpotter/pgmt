@@ -15,6 +15,11 @@ export default defineConfig({
   integrations: [
     sitemap(),
     starlight({
+      expressiveCode: {
+        defaultProps: {
+          frame: 'code',
+        },
+      },
       title: 'pgmt Documentation',
       description:
         'Modern, database-first migration tool for PostgreSQL designed around modular schemas, declarative drift detection, and explicit migrations.',

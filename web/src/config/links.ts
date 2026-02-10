@@ -21,6 +21,7 @@ export const links = {
   // Internal - Main pages
   home: '/',
   whyPgmt: '/why-pgmt',
+  blog: '/blog',
 
   // Internal - Documentation
   docs: {

@@ -1,0 +1,93 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+import { css } from '../../../styled-system/css';
+import { container, vstack } from '../../../styled-system/patterns';
+
+const posts = (await getCollection('blog')).sort(
+  (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
+);
+---
+
+<Layout title="Blog" currentPath="/blog">
+  <section
+    class={container({
+      maxW: '3xl',
+      px: { base: 'lg', md: 'xl' },
+      py: { base: '3xl', md: '4xl' },
+    })}
+  >
+    <h1
+      class={css({
+        fontSize: { base: '3xl', md: '4xl' },
+        fontWeight: '700',
+        fontFamily: 'heading',
+        color: 'text-primary',
+        mb: '2xl',
+      })}
+    >
+      Blog
+    </h1>
+    <div class={vstack({ gap: 'xl', alignItems: 'stretch' })}>
+      {
+        posts.map(post => (
+          <a
+            href={`/blog/${post.id}/`}
+            class={css({
+              display: 'block',
+              padding: 'xl',
+              borderRadius: 'lg',
+              border: '1px solid',
+              borderColor: 'rgba(255, 255, 255, 0.08)',
+              background: 'rgba(255, 255, 255, 0.03)',
+              textDecoration: 'none',
+              transition: 'all 0.2s ease',
+              _hover: {
+                borderColor: 'rgba(0, 212, 255, 0.4)',
+                background: 'rgba(0, 212, 255, 0.05)',
+                transform: 'translateY(-2px)',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.3)',
+              },
+            })}
+          >
+            <time
+              datetime={post.data.pubDate.toISOString()}
+              class={css({
+                fontSize: 'sm',
+                color: 'text-muted',
+                fontFamily: 'mono',
+              })}
+            >
+              {post.data.pubDate.toLocaleDateString('en-us', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+              })}
+            </time>
+            <h2
+              class={css({
+                fontSize: 'xl',
+                fontWeight: '600',
+                fontFamily: 'heading',
+                color: 'text-primary',
+                mt: 'sm',
+                mb: 'sm',
+              })}
+            >
+              {post.data.title}
+            </h2>
+            <p
+              class={css({
+                color: 'text-secondary',
+                fontSize: 'md',
+                lineHeight: '1.6',
+              })}
+            >
+              {post.data.description}
+            </p>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+</Layout>

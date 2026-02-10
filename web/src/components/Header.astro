@@ -145,6 +145,15 @@ const logoClass = css({
         >
           Docs
         </a>
+        <a
+          href={links.blog}
+          class={cx(
+            navLinkClass,
+            currentPath.startsWith('/blog') ? activeNavLinkClass : ''
+          )}
+        >
+          Blog
+        </a>
       </div>
 
       <!-- Right Side Actions (Desktop) -->
