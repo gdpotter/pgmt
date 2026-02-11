@@ -16,6 +16,7 @@ use crate::render::{RenderedSql, Safety};
 use super::ApplyOutcome;
 use super::ExecutionMode;
 use super::connect_with_retry;
+use super::execution;
 use super::execution_helpers;
 use super::lock::ApplyLock;
 use super::shutdown::ShutdownSignal;
@@ -27,6 +28,7 @@ pub async fn cmd_apply_watch_impl(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
     println!("👁️  Starting pgmt in watch mode...");
     println!("💡 Press Ctrl+C to stop watching");
@@ -36,17 +38,23 @@ pub async fn cmd_apply_watch_impl(
     shutdown_signal.wait_for_signal().await;
 
     // Acquire lock to prevent concurrent apply operations
-    println!("🔒 Checking for concurrent operations...");
+    if verbose {
+        println!("🔒 Checking for concurrent operations...");
+    }
     let _lock = ApplyLock::new(root_dir);
     _lock.acquire()?;
 
     // Set up persistent database connections
-    println!("📊 Connecting to development database...");
+    if verbose {
+        println!("📊 Connecting to development database...");
+    }
     let dev_pool = PgPool::connect(&config.databases.dev)
         .await
         .context("Failed to connect to development database")?;
 
-    println!("🛡️  Setting up shadow database...");
+    if verbose {
+        println!("🛡️  Setting up shadow database...");
+    }
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
@@ -58,6 +66,7 @@ pub async fn cmd_apply_watch_impl(
         &dev_pool,
         &shadow_pool,
         execution_mode.clone(),
+        verbose,
     )
     .await?;
 
@@ -117,6 +126,7 @@ pub async fn cmd_apply_watch_impl(
                         &dev_pool,
                         &shadow_pool,
                         execution_mode.clone(),
+                        verbose,
                     )
                     .await
                     {
@@ -126,7 +136,7 @@ pub async fn cmd_apply_watch_impl(
                                     println!("✅ No schema changes needed");
                                 }
                                 ApplyOutcome::Applied => {
-                                    println!("✅ Schema applied successfully");
+                                    // Concise output already printed by execute_plan
                                 }
                                 ApplyOutcome::Skipped => {
                                     println!("✅ Safe operations applied (destructive skipped)");
@@ -192,6 +202,7 @@ async fn perform_single_apply(
     dev_pool: &PgPool,
     shadow_pool: &PgPool,
     execution_mode: ExecutionMode,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let schema_dir = root_dir.join(&config.directories.schema);
     let roles_file = root_dir.join(&config.directories.roles);
@@ -228,14 +239,16 @@ async fn perform_single_apply(
         return Ok(ApplyOutcome::NoChanges);
     }
 
-    println!(
-        "📋 Found {} migration step{}",
-        ordered.len(),
-        if ordered.len() == 1 { "" } else { "s" }
-    );
+    if verbose {
+        println!(
+            "📋 Found {} migration step{}",
+            ordered.len(),
+            if ordered.len() == 1 { "" } else { "s" }
+        );
+    }
 
-    // Execute the migration plan (with watch-aware execution)
-    execute_plan_watch_aware(&ordered, dev_pool, execution_mode, &new, config).await
+    // Execute the migration plan
+    execute_plan_watch_aware(&ordered, dev_pool, execution_mode, &new, config, verbose).await
 }
 
 /// Execute plan with watch mode optimizations
@@ -245,11 +258,17 @@ async fn execute_plan_watch_aware(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
-    // Show a summary appropriate for watch mode
-    print_watch_migration_summary(&rendered);
+    // Show plan summary
+    execution::print_plan_header(steps);
+    if verbose {
+        execution::print_migration_summary(&rendered);
+    } else {
+        execution::print_concise_plan(steps);
+    }
 
     match mode {
         ExecutionMode::DryRun => {
@@ -259,20 +278,23 @@ async fn execute_plan_watch_aware(
 
         ExecutionMode::Force => {
             // Auto-apply everything in watch mode
-            println!("🚀 Auto-applying all changes...");
-            execution_helpers::apply_all_rendered_steps(
+            let outcome = execution_helpers::apply_all_rendered_steps(
                 &rendered,
                 dev_pool,
                 expected_catalog,
                 config,
                 false,
             )
-            .await
+            .await?;
+            if !verbose {
+                println!("\n✅ Applied {} changes", steps.len());
+            }
+            Ok(outcome)
         }
 
         ExecutionMode::SafeOnly => {
             // Auto-apply safe operations, show destructive ones
-            execution_helpers::apply_safe_rendered_steps(
+            let outcome = execution_helpers::apply_safe_rendered_steps(
                 &rendered,
                 dev_pool,
                 expected_catalog,
@@ -280,7 +302,14 @@ async fn execute_plan_watch_aware(
                 true,
                 false,
             )
-            .await
+            .await?;
+            if !verbose {
+                let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+                if applied > 0 {
+                    println!("\n✅ Applied {} changes", applied);
+                }
+            }
+            Ok(outcome)
         }
 
         ExecutionMode::RequireApproval => {
@@ -295,15 +324,18 @@ async fn execute_plan_watch_aware(
                 println!("\nRun with --force to apply, or resolve the schema changes.");
                 Ok(ApplyOutcome::DestructiveRequired)
             } else {
-                println!("🚀 All operations are safe - applying automatically...");
-                execution_helpers::apply_all_rendered_steps(
+                let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
                     false,
                 )
-                .await
+                .await?;
+                if !verbose {
+                    println!("\n✅ Applied {} changes", steps.len());
+                }
+                Ok(outcome)
             }
         }
 
@@ -313,46 +345,30 @@ async fn execute_plan_watch_aware(
 
             if all_safe {
                 // Auto-apply when all operations are safe
-                println!("🚀 Auto-applying safe operations...");
-                execution_helpers::apply_all_rendered_steps(
+                let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
                     false,
                 )
-                .await
+                .await?;
+                if !verbose {
+                    println!("\n✅ Applied {} changes", steps.len());
+                }
+                Ok(outcome)
             } else {
                 // Prompt when any destructive operations are present
                 user_interaction::execute_with_user_control(
                     &rendered,
+                    steps,
                     dev_pool,
                     expected_catalog,
                     config,
+                    verbose,
                 )
                 .await
             }
         }
     }
-}
-
-/// Print a concise migration summary for watch mode
-fn print_watch_migration_summary(rendered: &[RenderedSql]) {
-    let safe_count = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
-    let destructive_count = rendered
-        .iter()
-        .filter(|s| s.safety == Safety::Destructive)
-        .count();
-
-    print!("   ");
-    if safe_count > 0 {
-        print!("✅ {} safe", safe_count);
-    }
-    if destructive_count > 0 {
-        if safe_count > 0 {
-            print!(", ");
-        }
-        print!("⚠️  {} destructive", destructive_count);
-    }
-    println!(" operation{}", if rendered.len() == 1 { "" } else { "s" });
 }

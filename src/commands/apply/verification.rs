@@ -10,8 +10,11 @@ pub async fn verify_final_state(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
+    verbose: bool,
 ) -> Result<()> {
-    println!("🔍 Verifying final database state...");
+    if verbose {
+        println!("🔍 Verifying final database state...");
+    }
 
     // Load the current dev database catalog after changes
     let current_catalog = Catalog::load(dev_pool)
@@ -52,13 +55,13 @@ pub async fn verify_final_state(
         );
     }
 
-    // For now, just warn about discrepancies rather than failing hard
-    // A full diff comparison would be complex and might be overkill
-    println!("✅ State verification completed");
-    println!(
-        "   📊 Tables: {}, Views: {}, Functions: {}",
-        current_table_count, current_view_count, current_function_count
-    );
+    if verbose {
+        println!("✅ State verification completed");
+        println!(
+            "   📊 Tables: {}, Views: {}, Functions: {}",
+            current_table_count, current_view_count, current_function_count
+        );
+    }
 
     Ok(())
 }

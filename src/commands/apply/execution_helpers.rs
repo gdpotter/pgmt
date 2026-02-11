@@ -32,7 +32,7 @@ pub async fn apply_all_rendered_steps(
         executor.execute_step(&step.sql, step.safety, i + 1).await?;
     }
 
-    verify_final_state(dev_pool, expected_catalog, config).await?;
+    verify_final_state(dev_pool, expected_catalog, config, verbose).await?;
     Ok(ApplyOutcome::Applied)
 }
 
@@ -126,7 +126,7 @@ pub async fn apply_safe_rendered_steps(
             println!("✅ Safe operations completed successfully");
         }
 
-        verify_final_state(dev_pool, expected_catalog, config).await?;
+        verify_final_state(dev_pool, expected_catalog, config, verbose).await?;
     }
 
     if has_skipped {

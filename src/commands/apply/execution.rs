@@ -19,10 +19,17 @@ pub async fn execute_plan(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
-    print_migration_summary(&rendered);
+    print_plan_header(steps);
+    if verbose {
+        print_migration_summary(&rendered);
+    } else {
+        print_concise_plan(steps);
+    }
+    println!();
 
     match mode {
         ExecutionMode::DryRun => {
@@ -31,27 +38,40 @@ pub async fn execute_plan(
         }
 
         ExecutionMode::Force => {
-            println!("🚀 Applying all migration steps without confirmation...");
-            execution_helpers::apply_all_rendered_steps(
+            if verbose {
+                println!("🚀 Applying all migration steps without confirmation...");
+            }
+            let outcome = execution_helpers::apply_all_rendered_steps(
                 &rendered,
                 dev_pool,
                 expected_catalog,
                 config,
-                true,
+                verbose,
             )
-            .await
+            .await?;
+            if !verbose {
+                println!("\n✅ Applied {} changes", steps.len());
+            }
+            Ok(outcome)
         }
 
         ExecutionMode::SafeOnly => {
-            execution_helpers::apply_safe_rendered_steps(
+            let outcome = execution_helpers::apply_safe_rendered_steps(
                 &rendered,
                 dev_pool,
                 expected_catalog,
                 config,
                 true,
-                true,
+                verbose,
             )
-            .await
+            .await?;
+            if !verbose {
+                let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+                if applied > 0 {
+                    println!("\n✅ Applied {} changes", applied);
+                }
+            }
+            Ok(outcome)
         }
 
         ExecutionMode::RequireApproval => {
@@ -67,15 +87,21 @@ pub async fn execute_plan(
                 Ok(ApplyOutcome::DestructiveRequired)
             } else {
                 // All safe, apply them
-                println!("🚀 All operations are safe - applying automatically...");
-                execution_helpers::apply_all_rendered_steps(
+                if verbose {
+                    println!("🚀 All operations are safe - applying automatically...");
+                }
+                let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    true,
+                    verbose,
                 )
-                .await
+                .await?;
+                if !verbose {
+                    println!("\n✅ Applied {} changes", steps.len());
+                }
+                Ok(outcome)
             }
         }
 
@@ -85,22 +111,30 @@ pub async fn execute_plan(
 
             if all_safe {
                 // Auto-apply when all operations are safe
-                println!("🚀 All operations are safe - applying automatically...");
-                execution_helpers::apply_all_rendered_steps(
+                if verbose {
+                    println!("🚀 All operations are safe - applying automatically...");
+                }
+                let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    true,
+                    verbose,
                 )
-                .await
+                .await?;
+                if !verbose {
+                    println!("\n✅ Applied {} changes", steps.len());
+                }
+                Ok(outcome)
             } else {
                 // Prompt when any destructive operations are present
                 user_interaction::execute_with_user_control(
                     &rendered,
+                    steps,
                     dev_pool,
                     expected_catalog,
                     config,
+                    verbose,
                 )
                 .await
             }
@@ -108,7 +142,52 @@ pub async fn execute_plan(
     }
 }
 
-/// Print detailed migration summary
+/// Print the plan header line: "📋 N changes" or "📋 N changes (X safe, Y destructive)"
+pub fn print_plan_header(steps: &[MigrationStep]) {
+    let total = steps.len();
+    let destructive = steps.iter().filter(|s| s.has_destructive_sql()).count();
+
+    if destructive > 0 {
+        let safe = total - destructive;
+        println!(
+            "\n📋 {} change{} ({} safe, {} destructive)",
+            total,
+            if total == 1 { "" } else { "s" },
+            safe,
+            destructive,
+        );
+    } else {
+        println!(
+            "\n📋 {} change{}",
+            total,
+            if total == 1 { "" } else { "s" },
+        );
+    }
+}
+
+/// Print a concise one-line-per-step plan with grants collapsed
+pub fn print_concise_plan(steps: &[MigrationStep]) {
+    let non_grants: Vec<_> = steps.iter().filter(|s| !s.is_grant()).collect();
+    let grant_count = steps.iter().filter(|s| s.is_grant()).count();
+
+    for step in &non_grants {
+        let icon = if step.has_destructive_sql() {
+            "  ⚠"
+        } else {
+            "  ✓"
+        };
+        println!("{} {}", icon, step.summary());
+    }
+    if grant_count > 0 {
+        println!(
+            "  + {} grant change{}",
+            grant_count,
+            if grant_count == 1 { "" } else { "s" }
+        );
+    }
+}
+
+/// Print detailed migration summary (verbose mode)
 pub fn print_migration_summary(rendered: &[RenderedSql]) {
     println!("\n📋 {}", style("Migration Plan").bold().underlined());
 

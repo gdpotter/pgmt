@@ -5,50 +5,54 @@ use sqlx::PgPool;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
+use crate::diff::operations::MigrationStep;
 use crate::render::{RenderedSql, Safety};
 
 use super::ApplyOutcome;
-use super::execute_sql_with_context;
 use super::execution_helpers;
 use super::verification::verify_final_state;
 
 /// Execute migration steps with enhanced user control and recovery options
 pub async fn execute_with_user_control(
     rendered: &[RenderedSql],
+    steps: &[MigrationStep],
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
     loop {
         // Show current migration overview
-        println!("\n📋 {}", style("Migration Overview").bold().underlined());
-        println!(
-            "   ✅ {} safe operation{}",
-            rendered.iter().filter(|s| s.safety == Safety::Safe).count(),
-            if rendered.iter().filter(|s| s.safety == Safety::Safe).count() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        );
-
-        let destructive_count = rendered
-            .iter()
-            .filter(|s| s.safety == Safety::Destructive)
-            .count();
-        if destructive_count > 0 {
+        if verbose {
+            println!("\n📋 {}", style("Migration Overview").bold().underlined());
             println!(
-                "   ⚠️  {} destructive operation{}",
-                destructive_count,
-                if destructive_count == 1 { "" } else { "s" }
+                "   ✅ {} safe operation{}",
+                rendered.iter().filter(|s| s.safety == Safety::Safe).count(),
+                if rendered.iter().filter(|s| s.safety == Safety::Safe).count() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             );
+
+            let destructive_count = rendered
+                .iter()
+                .filter(|s| s.safety == Safety::Destructive)
+                .count();
+            if destructive_count > 0 {
+                println!(
+                    "   ⚠️  {} destructive operation{}",
+                    destructive_count,
+                    if destructive_count == 1 { "" } else { "s" }
+                );
+            }
         }
 
         // Present user options
         let options = vec![
             "Apply all steps",
             "Apply only safe steps",
-            "Review steps individually",
+            "Review destructive steps",
             "Refresh (reload schema and re-analyze)",
             "Cancel",
         ];
@@ -62,33 +66,55 @@ pub async fn execute_with_user_control(
         match selection {
             0 => {
                 // Apply all steps
-                println!("🚀 Applying all migration steps...");
-                return execution_helpers::apply_all_rendered_steps(
+                if verbose {
+                    println!("🚀 Applying all migration steps...");
+                }
+                let outcome = execution_helpers::apply_all_rendered_steps(
                     rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    true,
+                    verbose,
                 )
-                .await;
+                .await?;
+                if !verbose {
+                    println!("\n✅ Applied {} changes", steps.len());
+                }
+                return Ok(outcome);
             }
             1 => {
                 // Apply only safe steps
-                println!("🛡️  Applying only safe operations...");
-                return execution_helpers::apply_safe_rendered_steps(
+                if verbose {
+                    println!("🛡️  Applying only safe operations...");
+                }
+                let outcome = execution_helpers::apply_safe_rendered_steps(
                     rendered,
                     dev_pool,
                     expected_catalog,
                     config,
                     true,
-                    true,
+                    verbose,
                 )
-                .await;
+                .await?;
+                if !verbose {
+                    let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+                    if applied > 0 {
+                        println!("\n✅ Applied {} changes", applied);
+                    }
+                }
+                return Ok(outcome);
             }
             2 => {
-                // Review steps individually
-                return review_steps_individually(rendered, dev_pool, expected_catalog, config)
-                    .await;
+                // Review destructive steps, then auto-apply approved + safe
+                return review_destructive_steps(
+                    rendered,
+                    steps,
+                    dev_pool,
+                    expected_catalog,
+                    config,
+                    verbose,
+                )
+                .await;
             }
             3 => {
                 // Refresh option
@@ -120,109 +146,106 @@ pub async fn execute_with_user_control(
     }
 }
 
-/// Review and apply steps individually with granular control
-async fn review_steps_individually(
+/// Review destructive steps individually, then auto-apply approved + safe steps
+async fn review_destructive_steps(
     rendered: &[RenderedSql],
+    _steps: &[MigrationStep],
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
-    let mut applied_any = false;
+    // Collect destructive step indices (in rendered list) for review
+    let destructive_indices: Vec<usize> = rendered
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.safety == Safety::Destructive)
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut approved_destructive: Vec<bool> = vec![false; rendered.len()];
     let mut skipped_any = false;
 
-    for (i, step) in rendered.iter().enumerate() {
-        let (icon, safety_label) = match step.safety {
-            Safety::Safe => ("✅", style("SAFE").green()),
-            Safety::Destructive => ("⚠️", style("DESTRUCTIVE").red()),
-        };
+    println!(
+        "\n⚠️  Reviewing {} destructive operation{}:",
+        destructive_indices.len(),
+        if destructive_indices.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
+    );
 
+    for (review_num, &idx) in destructive_indices.iter().enumerate() {
         println!(
-            "\n{} Step {}/{}: {}",
-            icon,
-            i + 1,
-            rendered.len(),
-            safety_label
+            "\n⚠️  Destructive step {}/{}: {}",
+            review_num + 1,
+            destructive_indices.len(),
+            style("─".repeat(40)).dim()
         );
-        println!("{}", style("─".repeat(60)).dim());
-        println!("{}", step.sql);
+        println!("{}", rendered[idx].sql);
         println!("{}", style("─".repeat(60)).dim());
 
-        let step_options = vec![
-            "Apply this step",
-            "Skip this step",
-            "Apply remaining steps automatically",
-            "Cancel migration",
-        ];
+        let step_options = vec!["Approve", "Skip", "Cancel migration"];
 
         let step_selection = Select::new()
-            .with_prompt(format!("Action for step {}?", i + 1))
+            .with_prompt(format!(
+                "Action for destructive step {}?",
+                review_num + 1
+            ))
             .items(&step_options)
             .default(0)
             .interact()?;
 
         match step_selection {
             0 => {
-                // Apply this step
-                println!("🚀 Applying step {}...", i + 1);
-                execute_sql_with_context(dev_pool, &step.sql, &format!("step {}", i + 1)).await?;
-                println!("✅ Step {} completed", i + 1);
-                applied_any = true;
+                approved_destructive[idx] = true;
             }
             1 => {
-                // Skip this step
-                println!("⏭️  Skipped step {}", i + 1);
                 skipped_any = true;
-                continue;
             }
             2 => {
-                // Apply remaining steps automatically
-                println!("🚀 Applying remaining steps automatically...");
-                for (j, remaining_step) in rendered.iter().enumerate().skip(i) {
-                    let step_prefix = match remaining_step.safety {
-                        Safety::Safe => "✅",
-                        Safety::Destructive => "⚠️",
-                    };
-                    println!(
-                        "{} Auto-applying step {}/{}",
-                        step_prefix,
-                        j + 1,
-                        rendered.len()
-                    );
-                    execute_sql_with_context(
-                        dev_pool,
-                        &remaining_step.sql,
-                        &format!("step {}", j + 1),
-                    )
-                    .await?;
-                    applied_any = true;
-                }
-                break;
-            }
-            3 => {
-                // Cancel migration
                 println!("❌ Migration cancelled by user");
-                if applied_any {
-                    println!("⚠️  Some steps were already applied");
-                }
                 return Ok(ApplyOutcome::Cancelled);
             }
             _ => unreachable!(),
         }
     }
 
-    if applied_any {
-        println!("✅ Individual step review completed");
-        // Verify final state
-        verify_final_state(dev_pool, expected_catalog, config).await?;
-    } else {
-        println!("ℹ️  No steps were applied");
+    // Now apply: all safe steps + approved destructive steps
+    let to_apply: Vec<&RenderedSql> = rendered
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| s.safety == Safety::Safe || approved_destructive[*i])
+        .map(|(_, s)| s)
+        .collect();
+
+    if to_apply.is_empty() {
+        println!("ℹ️  No steps to apply");
+        return Ok(ApplyOutcome::Cancelled);
     }
 
-    if skipped_any && applied_any {
+    let executor =
+        crate::db::schema_executor::ApplyStepExecutor::new(dev_pool.clone(), verbose, true, false);
+
+    for (i, step) in to_apply.iter().enumerate() {
+        if verbose {
+            println!("{}", style(&step.sql).dim());
+        }
+        executor
+            .execute_step(&step.sql, step.safety, i + 1)
+            .await?;
+    }
+
+    verify_final_state(dev_pool, expected_catalog, config, verbose).await?;
+
+    if !verbose {
+        println!("\n✅ Applied {} changes", to_apply.len());
+    }
+
+    if skipped_any {
         Ok(ApplyOutcome::Skipped)
-    } else if applied_any {
-        Ok(ApplyOutcome::Applied)
     } else {
-        Ok(ApplyOutcome::Cancelled)
+        Ok(ApplyOutcome::Applied)
     }
 }

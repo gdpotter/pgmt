@@ -123,6 +123,21 @@ impl MigrationStep {
         }
     }
 
+    /// Returns a human-readable one-line summary like "Create view public.user_rankings"
+    pub fn summary(&self) -> String {
+        let verb = match self.operation_kind() {
+            OperationKind::Create => "Create",
+            OperationKind::Drop => "Drop",
+            OperationKind::Alter => "Update",
+        };
+        format!("{} {}", verb, self.id())
+    }
+
+    /// Returns true if this step is a grant operation
+    pub fn is_grant(&self) -> bool {
+        matches!(self, MigrationStep::Grant(_))
+    }
+
     /// Returns step-level dependencies that may not be in the catalog's forward_deps.
     /// This is used for dynamically generated steps (like REVOKE for missing defaults)
     /// that aren't part of the catalog but still need proper ordering.

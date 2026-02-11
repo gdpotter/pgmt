@@ -7,7 +7,6 @@ pub mod verification;
 pub mod watch;
 
 pub use crate::db::connection::connect_with_retry;
-pub use crate::db::sql_executor::execute_sql_with_context;
 pub use lock::ApplyLock;
 pub use shutdown::ShutdownSignal;
 
@@ -55,26 +54,37 @@ pub async fn cmd_apply(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
-    println!("🔄 Applying modular schema to development database...");
+    if verbose {
+        println!("🔄 Applying modular schema to development database...");
+    }
 
     let shutdown_signal = ShutdownSignal::new();
     shutdown_signal.wait_for_signal().await;
 
-    println!("🔒 Checking for concurrent operations...");
+    if verbose {
+        println!("🔒 Checking for concurrent operations...");
+    }
     let _lock = ApplyLock::new(root_dir);
     _lock.acquire()?;
 
-    println!("📊 Connecting to development database...");
+    if verbose {
+        println!("📊 Connecting to development database...");
+    }
     let dev_pool = PgPool::connect(&config.databases.dev)
         .await
         .context("Failed to connect to development database")?;
 
-    println!("🛡️  Setting up shadow database...");
+    if verbose {
+        println!("🛡️  Setting up shadow database...");
+    }
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
-    println!("🔄 Processing schema to shadow database...");
+    if verbose {
+        println!("🔄 Processing schema to shadow database...");
+    }
     let schema_dir = root_dir.join(&config.directories.schema);
     let roles_file = root_dir.join(&config.directories.roles);
 
@@ -92,7 +102,9 @@ pub async fn cmd_apply(
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
-    println!("📊 Analyzing database catalogs...");
+    if verbose {
+        println!("📊 Analyzing database catalogs...");
+    }
     let old_catalog = Catalog::load(&dev_pool)
         .await
         .context("Failed to load catalog from development database")?;
@@ -102,7 +114,9 @@ pub async fn cmd_apply(
     let old = filter.filter_catalog(old_catalog);
     let new = filter.filter_catalog(new_catalog);
 
-    println!("🔍 Computing schema differences...");
+    if verbose {
+        println!("🔍 Computing schema differences...");
+    }
     let raw_steps = diff_all(&old, &new);
     let full_steps = cascade::expand(raw_steps, &old, &new);
     let ordered = diff_order(full_steps, &old, &new)?;
@@ -112,11 +126,13 @@ pub async fn cmd_apply(
         return Ok(ApplyOutcome::NoChanges);
     }
 
-    println!(
-        "📋 Found {} migration step{}",
-        ordered.len(),
-        if ordered.len() == 1 { "" } else { "s" }
-    );
+    if verbose {
+        println!(
+            "📋 Found {} migration step{}",
+            ordered.len(),
+            if ordered.len() == 1 { "" } else { "s" }
+        );
+    }
 
     let mut final_outcome = ApplyOutcome::Applied;
 
@@ -126,8 +142,15 @@ pub async fn cmd_apply(
             return Ok(ApplyOutcome::Cancelled);
         }
 
-        match execution::execute_plan(&ordered, &dev_pool, execution_mode.clone(), &new, config)
-            .await
+        match execution::execute_plan(
+            &ordered,
+            &dev_pool,
+            execution_mode.clone(),
+            &new,
+            config,
+            verbose,
+        )
+        .await
         {
             Ok(outcome) => {
                 final_outcome = outcome;
@@ -136,7 +159,9 @@ pub async fn cmd_apply(
             Err(e) if e.to_string() == "REFRESH_REQUESTED" => {
                 println!("🔄 Refreshing schema analysis...");
 
-                println!("🔄 Re-processing schema to shadow database...");
+                if verbose {
+                    println!("🔄 Re-processing schema to shadow database...");
+                }
 
                 // Clean and re-apply roles before reprocessing schema
                 crate::db::cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
@@ -146,14 +171,18 @@ pub async fn cmd_apply(
                     SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
                 let reprocessed_schema = reprocessor.process_schema_directory(&schema_dir).await?;
 
-                println!("📊 Re-analyzing database catalogs...");
+                if verbose {
+                    println!("📊 Re-analyzing database catalogs...");
+                }
                 let new_old_catalog = Catalog::load(&dev_pool).await?;
                 let new_new_catalog = reprocessed_schema.with_file_dependencies_applied();
 
                 let old_filtered = filter.filter_catalog(new_old_catalog);
                 let new_filtered = filter.filter_catalog(new_new_catalog);
 
-                println!("🔍 Re-computing schema differences...");
+                if verbose {
+                    println!("🔍 Re-computing schema differences...");
+                }
                 let new_raw_steps = diff_all(&old_filtered, &new_filtered);
                 let new_full_steps = cascade::expand(new_raw_steps, &old_filtered, &new_filtered);
                 let new_ordered = diff_order(new_full_steps, &old_filtered, &new_filtered)?;
@@ -165,23 +194,33 @@ pub async fn cmd_apply(
                     break;
                 }
 
-                println!(
-                    "📋 Found {} migration step{} after refresh",
-                    new_ordered.len(),
-                    if new_ordered.len() == 1 { "" } else { "s" }
-                );
+                if verbose {
+                    println!(
+                        "📋 Found {} migration step{} after refresh",
+                        new_ordered.len(),
+                        if new_ordered.len() == 1 { "" } else { "s" }
+                    );
+                }
 
                 if matches!(execution_mode, ExecutionMode::Interactive) {
                     use crate::render::RenderedSql;
                     let rendered: Vec<RenderedSql> =
                         new_ordered.iter().flat_map(|step| step.to_sql()).collect();
-                    execution::print_migration_summary(&rendered);
+
+                    execution::print_plan_header(&new_ordered);
+                    if verbose {
+                        execution::print_migration_summary(&rendered);
+                    } else {
+                        execution::print_concise_plan(&new_ordered);
+                    }
 
                     match user_interaction::execute_with_user_control(
                         &rendered,
+                        &new_ordered,
                         &dev_pool,
                         &new_filtered,
                         config,
+                        verbose,
                     )
                     .await
                     {
@@ -210,6 +249,7 @@ pub async fn cmd_apply_watch(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    verbose: bool,
 ) -> Result<ApplyOutcome> {
-    watch::cmd_apply_watch_impl(config, root_dir, execution_mode).await
+    watch::cmd_apply_watch_impl(config, root_dir, execution_mode, verbose).await
 }
