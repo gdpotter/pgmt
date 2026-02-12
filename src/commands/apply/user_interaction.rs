@@ -189,10 +189,7 @@ async fn review_destructive_steps(
         let step_options = vec!["Approve", "Skip", "Cancel migration"];
 
         let step_selection = Select::new()
-            .with_prompt(format!(
-                "Action for destructive step {}?",
-                review_num + 1
-            ))
+            .with_prompt(format!("Action for destructive step {}?", review_num + 1))
             .items(&step_options)
             .default(0)
             .interact()?;
@@ -232,9 +229,7 @@ async fn review_destructive_steps(
         if verbose {
             println!("{}", style(&step.sql).dim());
         }
-        executor
-            .execute_step(&step.sql, step.safety, i + 1)
-            .await?;
+        executor.execute_step(&step.sql, step.safety, i + 1).await?;
     }
 
     verify_final_state(dev_pool, expected_catalog, config, verbose).await?;

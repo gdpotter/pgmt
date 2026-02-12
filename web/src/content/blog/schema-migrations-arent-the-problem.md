@@ -65,14 +65,19 @@ Then:
 
 ```bash
 $ pgmt apply
-✓ Dropping view executive_dashboard
-✓ Dropping view daily_stats
-✓ Dropping view user_rankings
-✓ Updating function calculate_score
-✓ Recreating view user_rankings
-✓ Recreating view daily_stats
-✓ Recreating view executive_dashboard
-✓ Done.
+
+📋 8 changes
+
+  ✓ Drop view public.executive_dashboard
+  ✓ Drop view public.daily_stats
+  ✓ Drop view public.user_rankings
+  ✓ Drop function public.calculate_score(integer)
+  ✓ Create function public.calculate_score(integer, boolean)
+  ✓ Create view public.user_rankings
+  ✓ Create view public.daily_stats
+  ✓ Create view public.executive_dashboard
+
+✅ Applied 8 changes
 ```
 
 pgmt figured out the dependency chain, handled all the drops and recreates, and applied it to your dev database. You didn't think about it. You just edited the file and ran `apply`.

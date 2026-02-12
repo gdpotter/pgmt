@@ -157,11 +157,7 @@ pub fn print_plan_header(steps: &[MigrationStep]) {
             destructive,
         );
     } else {
-        println!(
-            "\n📋 {} change{}",
-            total,
-            if total == 1 { "" } else { "s" },
-        );
+        println!("\n📋 {} change{}", total, if total == 1 { "" } else { "s" },);
     }
 }
 

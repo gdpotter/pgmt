@@ -3,23 +3,28 @@ title: pgmt Documentation
 description: PostgreSQL migration tool for schema-as-code development with explicit migrations.
 ---
 
-pgmt is a PostgreSQL migration tool for schema-as-code development with explicit migrations.
+pgmt lets you manage your PostgreSQL schema like code — edit database objects directly, see changes instantly, and generate explicit migrations when you're ready to deploy.
 
-**Project Status:** Alpha - Core features are functional, but the API may evolve. Not yet recommended for production use.
+> **Status: Alpha** — Core features are functional, but the API may evolve.
 
-## Install
+## Start here
 
-```bash
-cargo install pgmt
-```
+**[Quick Start Guide](/docs/getting-started/quick-start)** — Install pgmt, set up a project, and apply your first schema change in under 10 minutes.
 
-## Get Started
+Already have a database? See [Adopt Existing Database](/docs/guides/existing-database) to import your schema.
 
-**[Quick Start Guide](/docs/getting-started/quick-start)** — Get up and running in 10 minutes
+## What's in these docs
 
-Use the navigation sidebar to explore the documentation.
+**[Using pgmt](/docs/guides/schema-organization)** — How to organize schema files, the day-to-day migration workflow, and managing roles and permissions.
 
-## Get Help
+**[Going to Production](/docs/guides/multi-section-migrations)** — Multi-section migrations with per-section timeouts and retries, CI/CD integration, and baseline management.
 
+**[Under the Hood](/docs/concepts/philosophy)** — How the schema diffing engine works, shadow database validation, and automatic dependency tracking.
+
+**[Reference](/docs/cli/)** — CLI commands, configuration options, and the full list of supported PostgreSQL features.
+
+## Get help
+
+- **[Troubleshooting](/docs/guides/troubleshooting)** — Common issues and solutions
 - **[GitHub Discussions](https://github.com/gdpotter/pgmt/discussions)** — Ask questions
 - **[GitHub Issues](https://github.com/gdpotter/pgmt/issues)** — Report bugs

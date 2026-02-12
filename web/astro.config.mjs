@@ -48,10 +48,56 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Core Concepts',
+          label: 'Using pgmt',
           items: [
-            { label: 'Overview', link: '/docs/concepts/' },
-            { label: 'Philosophy', link: '/docs/concepts/philosophy' },
+            {
+              label: 'Schema Organization',
+              link: '/docs/guides/schema-organization',
+            },
+            {
+              label: 'Migration Workflow',
+              link: '/docs/guides/migration-workflow',
+            },
+            {
+              label: 'Roles & Permissions',
+              link: '/docs/guides/roles-and-permissions',
+            },
+          ],
+        },
+        {
+          label: 'Going to Production',
+          items: [
+            {
+              label: 'Multi-Section Migrations',
+              link: '/docs/guides/multi-section-migrations',
+            },
+            { label: 'CI/CD Integration', link: '/docs/guides/ci-cd' },
+            {
+              label: 'Baseline Management',
+              link: '/docs/guides/baseline-management',
+            },
+          ],
+        },
+        {
+          label: 'Integrations',
+          items: [
+            {
+              label: 'Adopt Existing Database',
+              link: '/docs/guides/existing-database',
+            },
+            {
+              label: 'Supabase',
+              link: '/docs/guides/supabase',
+            },
+          ],
+        },
+        {
+          label: 'Under the Hood',
+          items: [
+            {
+              label: 'Why Schema-as-Code?',
+              link: '/docs/concepts/philosophy',
+            },
             { label: 'How pgmt Works', link: '/docs/concepts/how-it-works' },
             {
               label: 'Shadow Databases',
@@ -64,54 +110,25 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Guides',
+          label: 'Reference',
           items: [
+            { label: 'CLI', link: '/docs/cli/' },
             {
-              label: 'Schema Organization',
-              link: '/docs/guides/schema-organization',
+              label: 'Configuration',
+              link: '/docs/reference/configuration',
             },
             {
-              label: 'Adopt Existing Database',
-              link: '/docs/guides/existing-database',
+              label: 'Supported Features',
+              link: '/docs/reference/supported-features',
             },
             {
-              label: 'Migration Workflow',
-              link: '/docs/guides/migration-workflow',
-            },
-            {
-              label: 'Roles & Permissions',
-              link: '/docs/guides/roles-and-permissions',
-            },
-            { label: 'CI/CD Integration', link: '/docs/guides/ci-cd' },
-            {
-              label: 'Multi-Section Migrations',
-              link: '/docs/guides/multi-section-migrations',
-            },
-            {
-              label: 'Baseline Management',
-              link: '/docs/guides/baseline-management',
-            },
-            { label: 'Getting Help', link: '/docs/guides/troubleshooting' },
-            {
-              label: 'Supabase',
-              link: '/docs/guides/supabase',
+              label: 'Troubleshooting',
+              link: '/docs/guides/troubleshooting',
             },
           ],
         },
         {
-          label: 'CLI Reference',
-          link: '/docs/cli/',
-        },
-        {
-          label: 'Configuration',
-          link: '/docs/reference/configuration',
-        },
-        {
-          label: 'Supported Features',
-          link: '/docs/reference/supported-features',
-        },
-        {
-          label: 'Project Info',
+          label: 'Project',
           items: [
             { label: 'Roadmap', link: '/docs/project/roadmap' },
             { label: 'Contributing', link: '/docs/development/contributing' },

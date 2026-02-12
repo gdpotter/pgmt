@@ -1,0 +1,65 @@
+---
+import { css, cx } from '../../styled-system/css';
+
+export interface Props {
+  title?: string;
+  class?: string;
+}
+
+const { title = 'terminal', class: className = '' } = Astro.props;
+
+const terminalClass = css({
+  borderRadius: 'lg',
+  border: '1px solid transparent',
+  background: `linear-gradient(rgba(36, 36, 36, 1), rgba(36, 36, 36, 1)) padding-box,
+               linear-gradient(135deg, rgba(0, 212, 255, 0.3) 0%, rgba(255, 107, 157, 0.2) 100%) border-box`,
+  overflow: 'hidden',
+  width: 'full',
+});
+
+const headerClass = css({
+  padding: 'md',
+  borderBottom: '1px solid',
+  borderColor: 'border',
+  backgroundColor: 'surface',
+});
+
+const titleClass = css({
+  fontSize: 'sm',
+  fontWeight: '500',
+  color: 'text.muted',
+  fontFamily: 'mono',
+});
+
+const bodyClass = css({
+  padding: 'lg',
+  fontFamily: 'mono',
+  fontSize: { base: 'xs', md: 'sm' },
+  lineHeight: '1.6',
+  color: '#e0e0e0',
+  overflowX: 'auto',
+  '& pre': {
+    margin: '0',
+    whiteSpace: 'pre',
+    color: 'inherit',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    lineHeight: 'inherit',
+  },
+  '& .prompt': { color: '#6272A4' },
+  '& .dim': { color: '#6272A4' },
+  '& .added': { color: '#50FA7B' },
+  '& .removed': { color: '#FF5555' },
+  '& .accent': { color: '#00D4FF', fontWeight: '600' },
+  '& .pink': { color: '#FF6B9D' },
+});
+---
+
+<div class={cx(terminalClass, className)}>
+  <div class={headerClass}>
+    <span class={titleClass}>{title}</span>
+  </div>
+  <div class={bodyClass}>
+    <slot />
+  </div>
+</div>

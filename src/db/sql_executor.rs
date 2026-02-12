@@ -1,7 +1,6 @@
 use anyhow::Result;
-use sqlx::{Executor, PgPool};
+use sqlx::PgPool;
 use std::path::Path;
-use tracing::error;
 
 use super::connection::initialize_database_session;
 use super::error_context::SqlErrorContext;
@@ -20,40 +19,6 @@ impl Default for SqlExecutorConfig {
         Self {
             initialize_session: true,
             verbose: true,
-        }
-    }
-}
-
-/// Execute SQL with better error context
-pub async fn execute_sql_with_context(
-    pool: &PgPool,
-    sql: &str,
-    step_description: &str,
-) -> Result<()> {
-    match pool.execute(sql).await {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            error!("SQL execution failed for {}: {}", step_description, e);
-            let error_msg = if e.to_string().contains("already exists") {
-                format!(
-                    "Object already exists during {}: {}\n\n💡 This might happen if:\n   • You ran apply multiple times\n   • The dev database has manual changes\n   • Consider using --force-all or manually fixing the conflict",
-                    step_description, e
-                )
-            } else if e.to_string().contains("does not exist") {
-                format!(
-                    "Referenced object does not exist during {}: {}\n\n💡 This might happen if:\n   • Dependencies are missing from schema files\n   • Object was manually dropped from dev database\n   • Check dependency order in your schema files",
-                    step_description, e
-                )
-            } else if e.to_string().contains("permission") || e.to_string().contains("access") {
-                format!(
-                    "Permission denied during {}: {}\n\n💡 Check database user permissions",
-                    step_description, e
-                )
-            } else {
-                format!("SQL execution failed during {}: {}", step_description, e)
-            };
-
-            Err(anyhow::anyhow!("{}", error_msg))
         }
     }
 }

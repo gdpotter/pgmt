@@ -1,0 +1,9 @@
+databases:
+  dev_url: ${DATABASE_URL}
+  shadow:
+    auto: true
+
+directories:
+  schema_dir: schema
+  migrations_dir: migrations
+  baselines_dir: baselines
