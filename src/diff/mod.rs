@@ -163,11 +163,27 @@ pub fn diff_order(
     let mut primary_steps = Vec::new();
     let mut relationship_steps = Vec::new();
 
+    // Collect IDs of relationship steps so we can co-locate their comments
+    let relationship_ids: BTreeSet<DbObjectId> = steps
+        .iter()
+        .filter(|step| step.is_relationship())
+        .map(|step| step.id())
+        .collect();
+
     for step in steps {
         if step.is_relationship() {
             relationship_steps.push(step);
         } else {
-            primary_steps.push(step);
+            let id = step.id();
+            if let DbObjectId::Comment { object_id } = &id {
+                if relationship_ids.contains(object_id.as_ref()) {
+                    relationship_steps.push(step);
+                } else {
+                    primary_steps.push(step);
+                }
+            } else {
+                primary_steps.push(step);
+            }
         }
     }
 

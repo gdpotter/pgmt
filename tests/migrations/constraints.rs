@@ -437,6 +437,73 @@ async fn test_composite_fk_cascade_on_column_type_change() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fk_constraint_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: tables
+            &[
+                "CREATE TABLE users (id SERIAL PRIMARY KEY)",
+                "CREATE TABLE orders (id SERIAL, user_id INTEGER)",
+            ],
+            // Initial DB only: nothing extra
+            &[],
+            // Target DB only: FK constraint with comment
+            &[
+                "ALTER TABLE orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id)",
+                "COMMENT ON CONSTRAINT orders_user_id_fkey ON orders IS 'Links orders to users'",
+            ],
+            |steps, final_catalog| {
+                // Should have both create and comment steps
+                let create_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Constraint(ConstraintOperation::Create(c))
+                                if c.name == "orders_user_id_fkey"
+                        )
+                    })
+                    .expect("Should have create FK step");
+
+                let comment_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                        )
+                    })
+                    .expect("Should have comment step");
+
+                assert!(
+                    create_pos < comment_pos,
+                    "FK create (pos {}) must come before comment (pos {})",
+                    create_pos,
+                    comment_pos
+                );
+
+                // Verify final state
+                let constraint = final_catalog
+                    .constraints
+                    .iter()
+                    .find(|c| c.name == "orders_user_id_fkey")
+                    .expect("FK constraint should exist");
+                assert_eq!(
+                    constraint.comment,
+                    Some("Links orders to users".to_string())
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_no_fk_cascade_without_column_type_change() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
