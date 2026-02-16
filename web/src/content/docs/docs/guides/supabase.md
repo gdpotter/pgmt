@@ -48,6 +48,7 @@ databases:
     docker:
       image: public.ecr.aws/supabase/postgres:17.6.1.081
       environment:
+        POSTGRES_USER: supabase_admin
         POSTGRES_PASSWORD: your-super-secret-and-long-postgres-password
 
 objects:
@@ -55,6 +56,8 @@ objects:
     schemas:
       - public
 ```
+
+**Why `POSTGRES_USER: supabase_admin`?** The Supabase image's init scripts expect a superuser named `supabase_admin`. If you omit this, pgmt defaults to `POSTGRES_USER=postgres`, and the Supabase init scripts fail — the container exits immediately with an unhelpful error. Always set `POSTGRES_USER: supabase_admin` when using the Supabase image.
 
 **Why the Supabase image?** The shadow database needs the same extensions your schema might use (`pgcrypto`, `pg_graphql`, `pgsodium`, etc.). These are C extensions that only exist in the Supabase PostgreSQL build. If your schema only uses standard PostgreSQL features, you can skip the `shadow.docker` section entirely and use the default `postgres:alpine` image.
 

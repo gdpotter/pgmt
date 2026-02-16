@@ -105,6 +105,7 @@ PGMT_CONFIG_FILE              # Override config file location
 PGMT_DEV_URL                  # Override dev database URL
 PGMT_SHADOW_URL               # Override shadow database URL
 PGMT_TARGET_URL               # Override target database URL
+PGMT_KEEP_SHADOW_ON_FAILURE   # Keep shadow container alive on startup failure (for debugging)
 ```
 
 Use `${VAR}` syntax in config files to reference environment variables:
