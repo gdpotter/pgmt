@@ -46,7 +46,13 @@ pub async fn connect_to_database(url: &str, label: &str) -> Result<PgPool> {
         .acquire_timeout(Duration::from_secs(5))
         .connect(url)
         .await
-        .with_context(|| format!("Failed to connect to {} at {}", label, mask_url_password(url)))
+        .with_context(|| {
+            format!(
+                "Failed to connect to {} at {}",
+                label,
+                mask_url_password(url)
+            )
+        })
 }
 
 /// Database connection configuration

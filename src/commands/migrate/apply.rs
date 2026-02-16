@@ -32,8 +32,7 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let pool =
-        crate::db::connection::connect_to_database(target_url, "target database").await?;
+    let pool = crate::db::connection::connect_to_database(target_url, "target database").await?;
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 

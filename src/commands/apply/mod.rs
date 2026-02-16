@@ -123,14 +123,8 @@ pub async fn cmd_apply(
             return Ok(ApplyOutcome::Cancelled);
         }
 
-        match execution::execute_plan(
-            &ordered,
-            &dev_pool,
-            execution_mode.clone(),
-            &new,
-            config,
-        )
-        .await
+        match execution::execute_plan(&ordered, &dev_pool, execution_mode.clone(), &new, config)
+            .await
         {
             Ok(outcome) => {
                 final_outcome = outcome;

@@ -5,8 +5,8 @@
 
 use anyhow::{Result, anyhow};
 use bollard::Docker;
-use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum};
 use bollard::container::LogOutput;
+use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum};
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
     LogsOptionsBuilder, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,

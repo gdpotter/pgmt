@@ -211,8 +211,12 @@ async fn review_destructive_steps(
     }
 
     let show_progress = tracing::enabled!(tracing::Level::INFO);
-    let executor =
-        crate::db::schema_executor::ApplyStepExecutor::new(dev_pool.clone(), show_progress, true, false);
+    let executor = crate::db::schema_executor::ApplyStepExecutor::new(
+        dev_pool.clone(),
+        show_progress,
+        true,
+        false,
+    );
 
     for (i, step) in to_apply.iter().enumerate() {
         debug!("{}", style(&step.sql).dim());

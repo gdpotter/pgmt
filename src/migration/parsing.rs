@@ -27,7 +27,9 @@ pub fn parse_migration_filename(filename: &str) -> Option<(u64, String)> {
     let name_without_ext = &filename[..filename.len() - 4]; // Remove ".sql"
 
     // Strip optional V prefix
-    let name_without_prefix = name_without_ext.strip_prefix('V').unwrap_or(name_without_ext);
+    let name_without_prefix = name_without_ext
+        .strip_prefix('V')
+        .unwrap_or(name_without_ext);
 
     let parts: Vec<&str> = name_without_prefix.splitn(2, '_').collect();
 

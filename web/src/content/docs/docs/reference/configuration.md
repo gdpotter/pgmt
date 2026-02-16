@@ -76,7 +76,7 @@ migration:
   validate_baseline_consistency: true
   create_baselines_by_default: false # On-demand (recommended)
   column_order: strict # strict | warn | relaxed
-  filename_prefix: "" # Default: no prefix. Set to "V" for Flyway compatibility
+  filename_prefix: '' # Default: no prefix. Set to "V" for Flyway compatibility
 
   tracking_table:
     schema: public
