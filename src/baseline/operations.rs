@@ -50,6 +50,7 @@ pub async fn create_baseline(request: BaselineCreationRequest) -> Result<Baselin
         new_catalog: request.catalog,
         description: request.description.clone(),
         version: request.version,
+        filename_prefix: String::new(),
     };
 
     let generation_result = generate_migration(generation_input)?;
@@ -86,7 +87,7 @@ pub fn display_baseline_summary(result: &BaselineCreationResult) {
         "📁 File: {}",
         result.path.file_name().unwrap().to_str().unwrap()
     );
-    println!("🔢 Version: V{}", result.version);
+    println!("🔢 Version: {}", result.version);
     println!("📊 Contains {} migration steps", result.steps.len());
 
     if result.steps.is_empty() {

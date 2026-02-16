@@ -744,8 +744,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
 
             // Modify schema and update specific migration (latest)
             helper.write_schema_file(
@@ -795,8 +794,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
 
             // Create second migration (simulating another developer)
             // Add a small delay to ensure different timestamp
@@ -827,8 +825,8 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .args(["migrate", "update", &format!("V{}", first_version)])
                 .assert()
                 .success()
-                .stdout(predicate::str::contains("Migration V"))
-                .stdout(predicate::str::contains("updated to V"))
+                .stdout(predicate::str::contains("Migration "))
+                .stdout(predicate::str::contains("updated to "))
                 .stdout(predicate::str::contains("(renumbered)"));
 
             // Verify we still have 2 migrations but the first one has been renumbered
@@ -842,7 +840,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
             let renumbered_migration = final_files
                 .iter()
                 .find(|f| {
-                    f.contains("create_users") && !f.starts_with(&format!("V{}", first_version))
+                    f.contains("create_users") && !f.starts_with(&format!("{}_", first_version))
                 })
                 .unwrap();
 
@@ -851,8 +849,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
             let renumbered_version_num: u64 = renumbered_version.parse().unwrap();
             let original_version_num: u64 = first_version.parse().unwrap();
             assert!(
@@ -886,8 +883,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
 
             // Modify schema and run dry-run update
             helper.write_schema_file(
@@ -937,8 +933,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
 
             // Store original content
             let original_content = helper.read_migration_file(&migration_files[0])?;
@@ -1024,8 +1019,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
             let partial_version = &full_version[..6]; // First 6 digits
 
             // Modify schema and update with partial version
@@ -1076,8 +1070,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 .split('_')
                 .next()
                 .unwrap()
-                .strip_prefix('V')
-                .unwrap();
+                .trim_start_matches('V');
 
             // Store the original migration content
             let original_content = helper.read_migration_file(&migration_files[0])?;

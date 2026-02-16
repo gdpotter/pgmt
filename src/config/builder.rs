@@ -198,6 +198,10 @@ impl ConfigBuilder {
             column_order: mig_input
                 .and_then(|m| m.column_order)
                 .unwrap_or(defaults.column_order),
+            filename_prefix: mig_input
+                .and_then(|m| m.filename_prefix.as_ref())
+                .cloned()
+                .unwrap_or_else(|| defaults.filename_prefix.clone()),
         }
     }
 

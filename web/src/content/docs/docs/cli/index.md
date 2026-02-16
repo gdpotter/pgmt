@@ -221,7 +221,7 @@ pgmt migrate update [VERSION] [OPTIONS]
 **Arguments:**
 
 ```bash
-VERSION                       # Migration version (e.g., V1234567890 or partial 123456)
+VERSION                       # Migration version (e.g., 1234567890, V1234567890, or partial 123456)
                               # If omitted, updates the latest migration
 ```
 
@@ -235,7 +235,7 @@ VERSION                       # Migration version (e.g., V1234567890 or partial 
 **Examples:**
 
 ```bash
-pgmt migrate update V1734567890   # Update specific migration
+pgmt migrate update 1734567890    # Update specific migration (V prefix also accepted)
 pgmt migrate update --dry-run     # Preview
 pgmt migrate update --backup      # Update with backup
 ```
@@ -285,11 +285,11 @@ pgmt migrate status [OPTIONS]
 
 ```
 Applied:
-  V1734500000__create_users.sql     (2024-12-18 10:00)
-  V1734510000__add_posts.sql        (2024-12-18 11:00)
+  1734500000 - create_users (applied: 2024-12-18 10:00)
+  1734510000 - add_posts (applied: 2024-12-18 11:00)
 
 Pending:
-  V1734520000__add_comments.sql
+  1734520000_add_comments.sql
 ```
 
 ---

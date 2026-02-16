@@ -45,7 +45,7 @@ pub async fn cmd_migrate_status(config: &Config) -> Result<()> {
     } else {
         println!("Applied migrations:");
         for (version, description, applied_at) in applied_migrations {
-            println!("  V{} - {} (applied: {})", version, description, applied_at);
+            println!("  {} - {} (applied: {})", version, description, applied_at);
         }
     }
 
@@ -210,7 +210,7 @@ async fn reconstruct_expected_state_from_schema_files(
     for migration_file in sorted_migrations {
         if migration_file.version > baseline_version {
             let migration_sql = std::fs::read_to_string(&migration_file.path).context(format!(
-                "Failed to read migration file V{}",
+                "Failed to read migration file {}",
                 migration_file.version
             ))?;
 
@@ -233,7 +233,7 @@ async fn reconstruct_expected_state_from_schema_files(
                     .execute_section(migration_file.version, section)
                     .await
                     .context(format!(
-                        "Failed to apply migration file V{} during reconstruction",
+                        "Failed to apply migration file {} during reconstruction",
                         migration_file.version
                     ))?;
             }

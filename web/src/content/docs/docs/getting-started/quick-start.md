@@ -232,13 +232,13 @@ pgmt migrate new "initial schema with user views"
 This creates a migration file like:
 
 ```
-migrations/V1734567890__initial_schema_with_user_views.sql
+migrations/1734567890_initial_schema_with_user_views.sql
 ```
 
 Review the generated SQL:
 
 ```bash
-cat migrations/V*__initial_schema_with_user_views.sql
+cat migrations/*_initial_schema_with_user_views.sql
 ```
 
 You'll see explicit SQL statements that you can review, test, and version control before deploying to production.

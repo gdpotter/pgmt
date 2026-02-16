@@ -1,4 +1,4 @@
-use crate::constants::{BASELINE_FILENAME_PREFIX, MIGRATION_FILENAME_PREFIX};
+use crate::constants::BASELINE_FILENAME_PREFIX;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -17,15 +17,19 @@ pub struct ParsedBaseline {
     pub version: u64,
 }
 
-/// Parse a migration filename like "V1734567890_add_user_index.sql"
+/// Parse a migration filename like "V1734567890_add_user_index.sql" or "1734567890_add_user_index.sql"
+/// Accepts files with or without the V prefix for backwards compatibility.
 pub fn parse_migration_filename(filename: &str) -> Option<(u64, String)> {
-    // Parse filename like "V1734567890_add_user_index.sql"
-    if !filename.starts_with(MIGRATION_FILENAME_PREFIX) || !filename.ends_with(".sql") {
+    if !filename.ends_with(".sql") {
         return None;
     }
 
-    let name_without_ext = &filename[MIGRATION_FILENAME_PREFIX.len()..filename.len() - 4]; // Remove "V" and ".sql"
-    let parts: Vec<&str> = name_without_ext.splitn(2, '_').collect();
+    let name_without_ext = &filename[..filename.len() - 4]; // Remove ".sql"
+
+    // Strip optional V prefix
+    let name_without_prefix = name_without_ext.strip_prefix('V').unwrap_or(name_without_ext);
+
+    let parts: Vec<&str> = name_without_prefix.splitn(2, '_').collect();
 
     if parts.len() != 2 {
         return None;
@@ -183,7 +187,7 @@ pub fn find_migration_by_version(
             // Multiple matches - return an error with suggestions
             let versions: Vec<String> = matching_migrations
                 .iter()
-                .map(|m| format!("V{}", m.version))
+                .map(|m| m.version.to_string())
                 .collect();
             Err(anyhow::anyhow!(
                 "Ambiguous migration version '{}'. Matches: {}. Please be more specific.",
@@ -201,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_parse_migration_filename() {
-        // Valid migration filenames
+        // Valid migration filenames with V prefix (backwards compat)
         assert_eq!(
             parse_migration_filename("V1734567890_add_user_index.sql"),
             Some((1734567890, "add_user_index".to_string()))
@@ -212,14 +216,23 @@ mod tests {
             Some((1234567890, "create_tables".to_string()))
         );
 
-        // Invalid migration filenames
+        // Valid migration filenames without prefix (new default)
         assert_eq!(
             parse_migration_filename("1734567890_add_user_index.sql"),
-            None
-        ); // Missing V prefix
+            Some((1734567890, "add_user_index".to_string()))
+        );
+
+        assert_eq!(
+            parse_migration_filename("1234567890_create_tables.sql"),
+            Some((1234567890, "create_tables".to_string()))
+        );
+
+        // Invalid migration filenames
         assert_eq!(parse_migration_filename("V1734567890_add_user_index"), None); // Missing .sql suffix
         assert_eq!(parse_migration_filename("V1734567890.sql"), None); // Missing description
+        assert_eq!(parse_migration_filename("1734567890.sql"), None); // Missing description (no prefix)
         assert_eq!(parse_migration_filename("Vabc_description.sql"), None); // Invalid version
+        assert_eq!(parse_migration_filename("abc_description.sql"), None); // Invalid version (no prefix)
         assert_eq!(parse_migration_filename("baseline_V1234567890.sql"), None); // Baseline, not migration
     }
 
@@ -256,15 +269,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        // Create test migration files
+        // Create test migration files - mix of V-prefixed and unprefixed
         std::fs::write(
             temp_dir.join("V1000000000_first_migration.sql"),
-            "-- First migration",
+            "-- First migration (V prefix)",
         )
         .unwrap();
         std::fs::write(
-            temp_dir.join("V2000000000_second_migration.sql"),
-            "-- Second migration",
+            temp_dir.join("2000000000_second_migration.sql"),
+            "-- Second migration (no prefix)",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join("V3000000000_third_migration.sql"),
+            "-- Third migration (V prefix)",
         )
         .unwrap();
         std::fs::write(temp_dir.join("invalid_file.sql"), "-- Invalid").unwrap();
@@ -272,11 +290,13 @@ mod tests {
 
         let migrations = discover_migrations(&temp_dir).unwrap();
 
-        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations.len(), 3);
         assert_eq!(migrations[0].version, 1000000000);
         assert_eq!(migrations[0].description, "first_migration");
         assert_eq!(migrations[1].version, 2000000000);
         assert_eq!(migrations[1].description, "second_migration");
+        assert_eq!(migrations[2].version, 3000000000);
+        assert_eq!(migrations[2].description, "third_migration");
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);

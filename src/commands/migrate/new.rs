@@ -89,6 +89,7 @@ pub async fn cmd_migrate_new(
         new_catalog: filtered_new_catalog.clone(),
         description: description.clone(),
         version,
+        filename_prefix: config.migration.filename_prefix.clone(),
     })?;
 
     if !migration_result.has_changes {

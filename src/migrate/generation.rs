@@ -1,5 +1,4 @@
 use crate::catalog::Catalog;
-use crate::constants::MIGRATION_FILENAME_PREFIX;
 use crate::diff::operations::{MigrationStep, SqlRenderer};
 use crate::diff::{cascade, diff_all, diff_order};
 use anyhow::Result;
@@ -11,6 +10,7 @@ pub struct MigrationGenerationInput {
     pub new_catalog: Catalog,
     pub description: String,
     pub version: u64,
+    pub filename_prefix: String,
 }
 
 /// Result of migration generation - all pure data
@@ -40,7 +40,7 @@ pub fn generate_migration(input: MigrationGenerationInput) -> Result<MigrationGe
     let sanitized_description = sanitize_description(&input.description);
     let migration_filename = format!(
         "{}{}_{}.sql",
-        MIGRATION_FILENAME_PREFIX, input.version, sanitized_description
+        input.filename_prefix, input.version, sanitized_description
     );
 
     Ok(MigrationGenerationResult {
@@ -113,12 +113,13 @@ mod tests {
             new_catalog: catalog,
             description: "no_changes".to_string(),
             version: 123456789,
+            filename_prefix: String::new(),
         };
 
         let result = generate_migration(input).unwrap();
 
         assert!(!result.has_changes);
-        assert_eq!(result.migration_filename, "V123456789_no_changes.sql");
+        assert_eq!(result.migration_filename, "123456789_no_changes.sql");
         assert!(result.migration_sql.contains("No changes detected"));
         assert!(result.steps.is_empty());
     }
@@ -137,12 +138,13 @@ mod tests {
             new_catalog,
             description: "add_schema".to_string(),
             version: 987654321,
+            filename_prefix: String::new(),
         };
 
         let result = generate_migration(input).unwrap();
 
         assert!(result.has_changes);
-        assert_eq!(result.migration_filename, "V987654321_add_schema.sql");
+        assert_eq!(result.migration_filename, "987654321_add_schema.sql");
         assert!(result.migration_sql.contains("CREATE SCHEMA"));
         assert!(!result.steps.is_empty());
     }
@@ -189,11 +191,12 @@ mod tests {
             new_catalog,
             description: "add_users_table".to_string(),
             version: 9876543210,
+            filename_prefix: String::new(),
         })
         .unwrap();
 
         assert!(result.has_changes);
-        assert_eq!(result.migration_filename, "V9876543210_add_users_table.sql");
+        assert_eq!(result.migration_filename, "9876543210_add_users_table.sql");
 
         assert_eq!(result.steps.len(), 3);
 
@@ -216,12 +219,34 @@ mod tests {
             new_catalog,
             description: "test_description".to_string(),
             version: 123,
+            filename_prefix: String::new(),
         })
         .unwrap();
 
         assert!(!result.migration_sql.is_empty());
-        assert_eq!(result.migration_filename, "V123_test_description.sql");
+        assert_eq!(result.migration_filename, "123_test_description.sql");
         assert!(!result.steps.is_empty());
         assert!(result.has_changes);
+    }
+
+    #[test]
+    fn test_generate_migration_with_v_prefix() {
+        let old_catalog = Catalog::empty();
+        let mut new_catalog = Catalog::empty();
+        new_catalog.schemas.push(Schema {
+            name: "test".to_string(),
+            comment: None,
+        });
+
+        let result = generate_migration(MigrationGenerationInput {
+            old_catalog,
+            new_catalog,
+            description: "add_schema".to_string(),
+            version: 123,
+            filename_prefix: "V".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(result.migration_filename, "V123_add_schema.sql");
     }
 }

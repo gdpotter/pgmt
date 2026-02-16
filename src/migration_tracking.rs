@@ -135,7 +135,7 @@ pub async fn record_baseline_as_applied(
     .bind(checksum)
     .execute(pool)
     .await
-    .with_context(|| format!("Failed to record baseline V{} in tracking table", version))?;
+    .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
 
     Ok(())
 }

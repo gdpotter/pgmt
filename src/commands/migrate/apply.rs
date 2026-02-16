@@ -87,7 +87,7 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
             // Validate checksum hasn't changed
             if stored_checksum != &checksum {
                 anyhow::bail!(
-                    "Migration V{} has been modified after being applied!\n\
+                    "Migration {} has been modified after being applied!\n\
                      Expected checksum: {}\n\
                      Actual checksum:   {}\n\n\
                      Migrations must be immutable once applied. If you need to make changes:\n\
@@ -98,12 +98,12 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
                     checksum
                 );
             }
-            debug!("Migration V{} already applied, skipping", migration.version);
+            debug!("Migration {} already applied, skipping", migration.version);
             continue;
         }
 
         println!(
-            "\nApplying migration V{} - {}",
+            "\nApplying migration {} - {}",
             migration.version, migration.description
         );
 
@@ -111,12 +111,12 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
 
         // Parse migration into sections
         let sections = parse_migration_sections(&migration.path, &migration_sql)
-            .with_context(|| format!("Failed to parse migration V{}", migration.version))?;
+            .with_context(|| format!("Failed to parse migration {}", migration.version))?;
 
         // Validate sections
         validate_sections(&sections).with_context(|| {
             format!(
-                "Invalid section configuration in migration V{}",
+                "Invalid section configuration in migration {}",
                 migration.version
             )
         })?;
@@ -146,7 +146,7 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
                 .await
                 .with_context(|| {
                     format!(
-                        "Migration V{} failed at section '{}'",
+                        "Migration {} failed at section '{}'",
                         migration.version, section.name
                     )
                 })?;

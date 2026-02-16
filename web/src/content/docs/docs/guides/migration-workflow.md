@@ -32,7 +32,7 @@ This diffs your schema files against your local database and applies the changes
 pgmt migrate new "add users table"
 ```
 
-This creates `migrations/V1734567890__add_users_table.sql` containing the SQL to transform any database at the previous state into the new state.
+This creates `migrations/1734567890_add_users_table.sql` containing the SQL to transform any database at the previous state into the new state.
 
 **4. Commit both schema files and migration:**
 
@@ -57,7 +57,7 @@ If validation passes, you're fine - your changes don't conflict. If it fails, yo
 
 ```bash
 # Use your migration's version number to be explicit
-pgmt migrate update V1734567890
+pgmt migrate update 1734567890
 ```
 
 **Why the explicit version?** If you and a teammate both created migrations, `migrate update` without a version targets the one with the highest timestamp - which might be theirs, not yours.
@@ -92,11 +92,11 @@ pgmt migrate status --target-url postgres://prod/myapp
 
 ```
 Applied:
-  V1734500000__create_users_table.sql     (2024-12-18 10:00)
-  V1734510000__add_posts_table.sql        (2024-12-18 11:00)
+  1734500000 - create_users_table (applied: 2024-12-18 10:00)
+  1734510000 - add_posts_table (applied: 2024-12-18 11:00)
 
 Pending:
-  V1734520000__add_comments_table.sql
+  1734520000_add_comments_table.sql
 ```
 
 ## Validating Before Deploy

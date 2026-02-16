@@ -187,7 +187,7 @@ pub async fn get_migration_update_starting_state(
     } else {
         if config.verbose {
             info!(
-                "No previous baseline found, reconstructing from migrations before V{}",
+                "No previous baseline found, reconstructing from migrations before {}",
                 target_version
             );
         }
@@ -227,7 +227,7 @@ async fn apply_migrations_after_version(
         for migration in migrations_to_apply {
             if config.verbose {
                 println!(
-                    "  Applying V{} - {}",
+                    "  Applying {} - {}",
                     migration.version, migration.description
                 );
             }
@@ -240,13 +240,13 @@ async fn apply_migrations_after_version(
             })?;
 
             let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-            let source = format!("V{} - {}", migration.version, migration.description);
+            let source = format!("{} - {}", migration.version, migration.description);
             executor
                 .execute_baseline(&migration_sql, &source)
                 .await
                 .with_context(|| {
                     format!(
-                        "Failed to apply migration V{}: {}",
+                        "Failed to apply migration {}: {}",
                         migration.version,
                         migration.path.display()
                     )
@@ -283,7 +283,7 @@ async fn apply_migrations_in_range(
         for migration in migrations_to_apply {
             if config.verbose {
                 println!(
-                    "  Applying V{} - {}",
+                    "  Applying {} - {}",
                     migration.version, migration.description
                 );
             }
@@ -296,13 +296,13 @@ async fn apply_migrations_in_range(
             })?;
 
             let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-            let source = format!("V{} - {}", migration.version, migration.description);
+            let source = format!("{} - {}", migration.version, migration.description);
             executor
                 .execute_baseline(&migration_sql, &source)
                 .await
                 .with_context(|| {
                     format!(
-                        "Failed to apply migration V{}: {}",
+                        "Failed to apply migration {}: {}",
                         migration.version,
                         migration.path.display()
                     )
@@ -339,7 +339,7 @@ async fn reconstruct_from_migration_chain(
 
     for migration in migrations {
         println!(
-            "  Applying V{} - {}",
+            "  Applying {} - {}",
             migration.version, migration.description
         );
 
@@ -351,13 +351,13 @@ async fn reconstruct_from_migration_chain(
         })?;
 
         let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-        let source = format!("V{} - {}", migration.version, migration.description);
+        let source = format!("{} - {}", migration.version, migration.description);
         executor
             .execute_baseline(&migration_sql, &source)
             .await
             .with_context(|| {
                 format!(
-                    "Failed to apply migration V{}: {}",
+                    "Failed to apply migration {}: {}",
                     migration.version,
                     migration.path.display()
                 )
@@ -386,21 +386,21 @@ async fn reconstruct_from_migration_chain_before_version(
 
     if migrations.is_empty() {
         println!(
-            "No existing migrations found before V{}, starting from empty schema",
+            "No existing migrations found before {}, starting from empty schema",
             target_version
         );
         return Catalog::load(shadow_pool).await;
     }
 
     println!(
-        "Applying {} existing migration(s) before V{}",
+        "Applying {} existing migration(s) before {}",
         migrations.len(),
         target_version
     );
 
     for migration in migrations {
         println!(
-            "  Applying V{} - {}",
+            "  Applying {} - {}",
             migration.version, migration.description
         );
 
@@ -412,13 +412,13 @@ async fn reconstruct_from_migration_chain_before_version(
         })?;
 
         let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-        let source = format!("V{} - {}", migration.version, migration.description);
+        let source = format!("{} - {}", migration.version, migration.description);
         executor
             .execute_baseline(&migration_sql, &source)
             .await
             .with_context(|| {
                 format!(
-                    "Failed to apply migration V{}: {}",
+                    "Failed to apply migration {}: {}",
                     migration.version,
                     migration.path.display()
                 )

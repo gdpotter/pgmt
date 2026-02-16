@@ -49,7 +49,7 @@ mod migration_reconstruction_tests {
                 .stdout(predicate::str::contains(
                     "Applying 1 existing migration(s) to reconstruct state",
                 ))
-                .stdout(predicate::str::contains("Applying V"))
+                .stdout(predicate::str::contains("Applying "))
                 .stdout(predicate::str::contains("create_users_table"));
 
             // Verify we now have two migrations
@@ -149,7 +149,7 @@ mod migration_reconstruction_tests {
                 .assert()
                 .success()
                 .stdout(predicate::str::contains(
-                    "Applying 1 existing migration(s) before V",
+                    "Applying 1 existing migration(s) before ",
                 ));
 
             // Verify the updated migration includes both posts table changes and NOT users table

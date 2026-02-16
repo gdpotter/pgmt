@@ -116,3 +116,31 @@ pgmt migrate apply --target-url "$SUPABASE_DB_URL"
 ```
 
 Or use the Supabase dashboard to run the migration SQL manually.
+
+### Using `supabase db push`
+
+pgmt generates migration filenames without a prefix by default (e.g., `1734567890_add_profiles_table.sql`), which is compatible with Supabase's migration format. To use pgmt-generated migrations with `supabase db push`:
+
+1. Configure pgmt to write migrations into Supabase's migrations directory:
+
+```yaml
+directories:
+  migrations_dir: supabase/migrations
+```
+
+2. Generate migrations normally:
+
+```bash
+pgmt migrate new "add profiles table"
+# Creates: supabase/migrations/1734567890_add_profiles_table.sql
+```
+
+3. Deploy with `supabase db push`:
+
+```bash
+supabase db push
+```
+
+**Trade-offs:** Multi-section migrations (concurrent index creation, retry logic) won't work through `supabase db push` — use `pgmt migrate apply` for those. For simple DDL migrations, either deployment method works.
+
+**Local development:** `supabase db reset` works as a "clean slate" option, while `pgmt apply --watch` is recommended for iterative development since it applies changes incrementally without resetting your data.

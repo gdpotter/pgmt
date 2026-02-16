@@ -182,7 +182,7 @@ pub async fn cmd_baseline_list(config: &Config, root_dir: &std::path::Path) -> R
 
         let size = format_size(metadata.len());
 
-        println!("📄 V{} - {} ({})", version, filename, created);
+        println!("📄 {} - {} ({})", version, filename, created);
         println!("   📂 Path: {}", path.display());
         println!("   📊 Size: {}", size);
         println!();
@@ -237,7 +237,7 @@ pub async fn cmd_baseline_clean(
         );
         for (version, path, _) in baselines.iter().take(keep) {
             println!(
-                "  ✅ V{} - {}",
+                "  ✅ {} - {}",
                 version,
                 path.file_name().unwrap().to_str().unwrap()
             );
@@ -253,7 +253,7 @@ pub async fn cmd_baseline_clean(
         );
         for (version, path, _) in &baselines {
             println!(
-                "  ✅ V{} - {}",
+                "  ✅ {} - {}",
                 version,
                 path.file_name().unwrap().to_str().unwrap()
             );
@@ -271,7 +271,7 @@ pub async fn cmd_baseline_clean(
                 files_to_delete.push((version, path));
             } else {
                 println!(
-                    "  ⏰ V{} - {} (not old enough, {} days)",
+                    "  ⏰ {} - {} (not old enough, {} days)",
                     version,
                     path.file_name().unwrap().to_str().unwrap(),
                     (SystemTime::now().duration_since(file_time)?.as_secs()) / (24 * 60 * 60)
@@ -294,7 +294,7 @@ pub async fn cmd_baseline_clean(
         let metadata = fs::metadata(path)?;
         let size = format_size(metadata.len());
         println!(
-            "  🗑️  V{} - {} ({})",
+            "  🗑️  {} - {} ({})",
             version,
             path.file_name().unwrap().to_str().unwrap(),
             size
@@ -316,16 +316,16 @@ pub async fn cmd_baseline_clean(
                     deleted_size += metadata.len();
                     match fs::remove_file(&path) {
                         Ok(()) => {
-                            println!("  ✅ Deleted V{}", version);
+                            println!("  ✅ Deleted {}", version);
                             deleted_count += 1;
                         }
                         Err(e) => {
-                            eprintln!("  ❌ Failed to delete V{}: {}", version, e);
+                            eprintln!("  ❌ Failed to delete {}: {}", version, e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("  ❌ Failed to get metadata for V{}: {}", version, e);
+                    eprintln!("  ❌ Failed to get metadata for {}: {}", version, e);
                 }
             }
         }

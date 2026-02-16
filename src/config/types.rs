@@ -192,6 +192,7 @@ pub struct MigrationInput {
     pub create_baselines_by_default: Option<bool>,
     pub tracking_table: Option<TrackingTableInput>,
     pub column_order: Option<ColumnOrderMode>,
+    pub filename_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -207,6 +208,7 @@ pub struct Migration {
     pub create_baselines_by_default: bool,
     pub tracking_table: TrackingTable,
     pub column_order: ColumnOrderMode,
+    pub filename_prefix: String,
 }
 
 #[derive(Debug, Clone)]

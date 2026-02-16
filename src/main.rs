@@ -454,6 +454,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                                 create_baselines_by_default: Some(*create_baseline),
                                 tracking_table: None,
                                 column_order: None,
+                                filename_prefix: None,
                             }),
                             schema: None,
                             docker: None,

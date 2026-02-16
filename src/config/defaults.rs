@@ -47,6 +47,7 @@ impl Default for Migration {
             create_baselines_by_default: false,
             tracking_table: TrackingTable::default(),
             column_order: ColumnOrderMode::Strict,
+            filename_prefix: String::new(),
         }
     }
 }
