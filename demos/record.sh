@@ -45,7 +45,6 @@ vhs "$SCRIPT_DIR/demo.tape"
 
 # Copy outputs from temp dir to demos/out/
 mkdir -p "$SCRIPT_DIR/out"
-cp "$DEMO_DIR"/demo.gif "$DEMO_DIR"/demo.webm "$SCRIPT_DIR/out/"
-cp "$DEMO_DIR"/out.txt "$SCRIPT_DIR/out/" 2>/dev/null || true
+cp "$DEMO_DIR"/demo.gif "$SCRIPT_DIR/out/"
 
 echo "Done! Output in demos/out/"
