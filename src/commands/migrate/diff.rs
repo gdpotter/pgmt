@@ -11,7 +11,6 @@ use crate::config::{Config, ObjectFilter};
 use crate::diff::{cascade, diff_all, diff_order};
 use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::{Result, anyhow};
-use sqlx::PgPool;
 use std::path::Path;
 
 /// Arguments for migrate diff command
@@ -59,7 +58,8 @@ pub async fn cmd_migrate_diff(
 
     // Load target database catalog
     eprintln!("Loading target database...");
-    let target_pool = PgPool::connect(target_url).await?;
+    let target_pool =
+        crate::db::connection::connect_to_database(target_url, "target database").await?;
     let target_catalog = Catalog::load(&target_pool).await?;
 
     // Apply object filtering (excludes tracking table and configured exclusions)

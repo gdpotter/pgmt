@@ -1,6 +1,7 @@
 use anyhow::Result;
 use console::style;
 use sqlx::PgPool;
+use tracing::info;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
@@ -19,12 +20,11 @@ pub async fn execute_plan(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
     print_plan_header(steps);
-    if verbose {
+    if tracing::enabled!(tracing::Level::DEBUG) {
         print_migration_summary(&rendered);
     } else {
         print_concise_plan(steps);
@@ -38,20 +38,15 @@ pub async fn execute_plan(
         }
 
         ExecutionMode::Force => {
-            if verbose {
-                println!("🚀 Applying all migration steps without confirmation...");
-            }
+            info!("Applying all migration steps without confirmation...");
             let outcome = execution_helpers::apply_all_rendered_steps(
                 &rendered,
                 dev_pool,
                 expected_catalog,
                 config,
-                verbose,
             )
             .await?;
-            if !verbose {
-                println!("\n✅ Applied {} changes", steps.len());
-            }
+            println!("\n✅ Applied {} changes", steps.len());
             Ok(outcome)
         }
 
@@ -62,14 +57,11 @@ pub async fn execute_plan(
                 expected_catalog,
                 config,
                 true,
-                verbose,
             )
             .await?;
-            if !verbose {
-                let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
-                if applied > 0 {
-                    println!("\n✅ Applied {} changes", applied);
-                }
+            let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+            if applied > 0 {
+                println!("\n✅ Applied {} changes", applied);
             }
             Ok(outcome)
         }
@@ -87,20 +79,15 @@ pub async fn execute_plan(
                 Ok(ApplyOutcome::DestructiveRequired)
             } else {
                 // All safe, apply them
-                if verbose {
-                    println!("🚀 All operations are safe - applying automatically...");
-                }
+                info!("All operations are safe - applying automatically...");
                 let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await?;
-                if !verbose {
-                    println!("\n✅ Applied {} changes", steps.len());
-                }
+                println!("\n✅ Applied {} changes", steps.len());
                 Ok(outcome)
             }
         }
@@ -111,20 +98,15 @@ pub async fn execute_plan(
 
             if all_safe {
                 // Auto-apply when all operations are safe
-                if verbose {
-                    println!("🚀 All operations are safe - applying automatically...");
-                }
+                info!("All operations are safe - applying automatically...");
                 let outcome = execution_helpers::apply_all_rendered_steps(
                     &rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await?;
-                if !verbose {
-                    println!("\n✅ Applied {} changes", steps.len());
-                }
+                println!("\n✅ Applied {} changes", steps.len());
                 Ok(outcome)
             } else {
                 // Prompt when any destructive operations are present
@@ -134,7 +116,6 @@ pub async fn execute_plan(
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await
             }
@@ -183,7 +164,7 @@ pub fn print_concise_plan(steps: &[MigrationStep]) {
     }
 }
 
-/// Print detailed migration summary (verbose mode)
+/// Print detailed migration summary (debug mode)
 pub fn print_migration_summary(rendered: &[RenderedSql]) {
     println!("\n📋 {}", style("Migration Plan").bold().underlined());
 

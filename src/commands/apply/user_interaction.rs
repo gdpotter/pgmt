@@ -2,6 +2,7 @@ use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Select};
 use sqlx::PgPool;
+use tracing::{debug, info};
 
 use crate::catalog::Catalog;
 use crate::config::Config;
@@ -19,11 +20,10 @@ pub async fn execute_with_user_control(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     loop {
-        // Show current migration overview
-        if verbose {
+        // Show current migration overview at debug level
+        if tracing::enabled!(tracing::Level::DEBUG) {
             println!("\n📋 {}", style("Migration Overview").bold().underlined());
             println!(
                 "   ✅ {} safe operation{}",
@@ -66,41 +66,31 @@ pub async fn execute_with_user_control(
         match selection {
             0 => {
                 // Apply all steps
-                if verbose {
-                    println!("🚀 Applying all migration steps...");
-                }
+                info!("Applying all migration steps...");
                 let outcome = execution_helpers::apply_all_rendered_steps(
                     rendered,
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await?;
-                if !verbose {
-                    println!("\n✅ Applied {} changes", steps.len());
-                }
+                println!("\n✅ Applied {} changes", steps.len());
                 return Ok(outcome);
             }
             1 => {
                 // Apply only safe steps
-                if verbose {
-                    println!("🛡️  Applying only safe operations...");
-                }
+                info!("Applying only safe operations...");
                 let outcome = execution_helpers::apply_safe_rendered_steps(
                     rendered,
                     dev_pool,
                     expected_catalog,
                     config,
                     true,
-                    verbose,
                 )
                 .await?;
-                if !verbose {
-                    let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
-                    if applied > 0 {
-                        println!("\n✅ Applied {} changes", applied);
-                    }
+                let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+                if applied > 0 {
+                    println!("\n✅ Applied {} changes", applied);
                 }
                 return Ok(outcome);
             }
@@ -112,7 +102,6 @@ pub async fn execute_with_user_control(
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await;
             }
@@ -153,7 +142,6 @@ async fn review_destructive_steps(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     // Collect destructive step indices (in rendered list) for review
     let destructive_indices: Vec<usize> = rendered
@@ -222,21 +210,18 @@ async fn review_destructive_steps(
         return Ok(ApplyOutcome::Cancelled);
     }
 
+    let show_progress = tracing::enabled!(tracing::Level::INFO);
     let executor =
-        crate::db::schema_executor::ApplyStepExecutor::new(dev_pool.clone(), verbose, true, false);
+        crate::db::schema_executor::ApplyStepExecutor::new(dev_pool.clone(), show_progress, true, false);
 
     for (i, step) in to_apply.iter().enumerate() {
-        if verbose {
-            println!("{}", style(&step.sql).dim());
-        }
+        debug!("{}", style(&step.sql).dim());
         executor.execute_step(&step.sql, step.safety, i + 1).await?;
     }
 
-    verify_final_state(dev_pool, expected_catalog, config, verbose).await?;
+    verify_final_state(dev_pool, expected_catalog, config).await?;
 
-    if !verbose {
-        println!("\n✅ Applied {} changes", to_apply.len());
-    }
+    println!("\n✅ Applied {} changes", to_apply.len());
 
     if skipped_any {
         Ok(ApplyOutcome::Skipped)

@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use sqlx::PgPool;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Instant;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
@@ -28,7 +28,6 @@ pub async fn cmd_apply_watch_impl(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     println!("👁️  Starting pgmt in watch mode...");
     println!("💡 Press Ctrl+C to stop watching");
@@ -38,23 +37,17 @@ pub async fn cmd_apply_watch_impl(
     shutdown_signal.wait_for_signal().await;
 
     // Acquire lock to prevent concurrent apply operations
-    if verbose {
-        println!("🔒 Checking for concurrent operations...");
-    }
+    info!("Checking for concurrent operations...");
     let _lock = ApplyLock::new(root_dir);
     _lock.acquire()?;
 
     // Set up persistent database connections
-    if verbose {
-        println!("📊 Connecting to development database...");
-    }
-    let dev_pool = PgPool::connect(&config.databases.dev)
-        .await
-        .context("Failed to connect to development database")?;
+    info!("Connecting to development database...");
+    let dev_pool =
+        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
+            .await?;
 
-    if verbose {
-        println!("🛡️  Setting up shadow database...");
-    }
+    info!("Setting up shadow database...");
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
@@ -66,7 +59,6 @@ pub async fn cmd_apply_watch_impl(
         &dev_pool,
         &shadow_pool,
         execution_mode.clone(),
-        verbose,
     )
     .await?;
 
@@ -126,7 +118,6 @@ pub async fn cmd_apply_watch_impl(
                         &dev_pool,
                         &shadow_pool,
                         execution_mode.clone(),
-                        verbose,
                     )
                     .await
                     {
@@ -202,7 +193,6 @@ async fn perform_single_apply(
     dev_pool: &PgPool,
     shadow_pool: &PgPool,
     execution_mode: ExecutionMode,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let schema_dir = root_dir.join(&config.directories.schema);
     let roles_file = root_dir.join(&config.directories.roles);
@@ -239,16 +229,14 @@ async fn perform_single_apply(
         return Ok(ApplyOutcome::NoChanges);
     }
 
-    if verbose {
-        println!(
-            "📋 Found {} migration step{}",
-            ordered.len(),
-            if ordered.len() == 1 { "" } else { "s" }
-        );
-    }
+    info!(
+        "Found {} migration step{}",
+        ordered.len(),
+        if ordered.len() == 1 { "" } else { "s" }
+    );
 
     // Execute the migration plan
-    execute_plan_watch_aware(&ordered, dev_pool, execution_mode, &new, config, verbose).await
+    execute_plan_watch_aware(&ordered, dev_pool, execution_mode, &new, config).await
 }
 
 /// Execute plan with watch mode optimizations
@@ -258,13 +246,12 @@ async fn execute_plan_watch_aware(
     mode: ExecutionMode,
     expected_catalog: &Catalog,
     config: &Config,
-    verbose: bool,
 ) -> Result<ApplyOutcome> {
     let rendered: Vec<RenderedSql> = steps.iter().flat_map(|step| step.to_sql()).collect();
 
     // Show plan summary
     execution::print_plan_header(steps);
-    if verbose {
+    if tracing::enabled!(tracing::Level::DEBUG) {
         execution::print_migration_summary(&rendered);
     } else {
         execution::print_concise_plan(steps);
@@ -283,12 +270,9 @@ async fn execute_plan_watch_aware(
                 dev_pool,
                 expected_catalog,
                 config,
-                false,
             )
             .await?;
-            if !verbose {
-                println!("\n✅ Applied {} changes", steps.len());
-            }
+            println!("\n✅ Applied {} changes", steps.len());
             Ok(outcome)
         }
 
@@ -300,14 +284,11 @@ async fn execute_plan_watch_aware(
                 expected_catalog,
                 config,
                 true,
-                false,
             )
             .await?;
-            if !verbose {
-                let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
-                if applied > 0 {
-                    println!("\n✅ Applied {} changes", applied);
-                }
+            let applied = rendered.iter().filter(|s| s.safety == Safety::Safe).count();
+            if applied > 0 {
+                println!("\n✅ Applied {} changes", applied);
             }
             Ok(outcome)
         }
@@ -329,12 +310,9 @@ async fn execute_plan_watch_aware(
                     dev_pool,
                     expected_catalog,
                     config,
-                    false,
                 )
                 .await?;
-                if !verbose {
-                    println!("\n✅ Applied {} changes", steps.len());
-                }
+                println!("\n✅ Applied {} changes", steps.len());
                 Ok(outcome)
             }
         }
@@ -350,12 +328,9 @@ async fn execute_plan_watch_aware(
                     dev_pool,
                     expected_catalog,
                     config,
-                    false,
                 )
                 .await?;
-                if !verbose {
-                    println!("\n✅ Applied {} changes", steps.len());
-                }
+                println!("\n✅ Applied {} changes", steps.len());
                 Ok(outcome)
             } else {
                 // Prompt when any destructive operations are present
@@ -365,7 +340,6 @@ async fn execute_plan_watch_aware(
                     dev_pool,
                     expected_catalog,
                     config,
-                    verbose,
                 )
                 .await
             }

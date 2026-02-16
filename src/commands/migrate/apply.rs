@@ -7,7 +7,6 @@ use crate::migration_tracking::{
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
-use sqlx::PgPool;
 use std::path::Path;
 use std::time::Instant;
 use tracing::debug;
@@ -33,7 +32,8 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let pool = PgPool::connect(target_url).await?;
+    let pool =
+        crate::db::connection::connect_to_database(target_url, "target database").await?;
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 

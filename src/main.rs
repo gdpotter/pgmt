@@ -400,10 +400,10 @@ async fn run_main(cli: Cli) -> Result<()> {
 
                     info!("Applying modular schema to dev");
                     let outcome = if args.watch {
-                        commands::cmd_apply_watch(&config, &root_dir, execution_mode, cli.verbose)
+                        commands::cmd_apply_watch(&config, &root_dir, execution_mode)
                             .await?
                     } else {
-                        commands::cmd_apply(&config, &root_dir, execution_mode, cli.verbose).await?
+                        commands::cmd_apply(&config, &root_dir, execution_mode).await?
                     };
 
                     // Return appropriate exit code based on outcome

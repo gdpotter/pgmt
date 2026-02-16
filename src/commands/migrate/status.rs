@@ -9,10 +9,12 @@ use anyhow::{Context, Result, anyhow};
 use sqlx::PgPool;
 use std::path::Path;
 
+use crate::db::connection::connect_to_database;
+
 pub async fn cmd_migrate_status(config: &Config) -> Result<()> {
     println!("Checking migration status");
 
-    let dev_pool = PgPool::connect(&config.databases.dev).await?;
+    let dev_pool = connect_to_database(&config.databases.dev, "development database").await?;
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 

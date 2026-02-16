@@ -1,9 +1,53 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::time::Duration;
 use tracing::info;
 use tracing::log::LevelFilter;
+
+/// Mask password in database URL for display
+pub fn mask_url_password(url: &str) -> String {
+    // Handle case where URL doesn't contain ://
+    if !url.contains("://") {
+        return url.to_string();
+    }
+
+    // Split on :// to get protocol and rest
+    let parts: Vec<&str> = url.splitn(2, "://").collect();
+    if parts.len() != 2 {
+        return url.to_string();
+    }
+
+    let protocol = parts[0];
+    let rest = parts[1];
+
+    // Check if there's user info (user:pass@host or user@host)
+    if let Some(at_pos) = rest.find('@') {
+        let user_info = &rest[..at_pos];
+        let host_and_path = &rest[at_pos + 1..];
+
+        // Check if there's a password (user:pass)
+        if let Some(colon_pos) = user_info.find(':') {
+            let username = &user_info[..colon_pos];
+            return format!("{}://{}:***@{}", protocol, username, host_and_path);
+        }
+    }
+
+    url.to_string()
+}
+
+/// Connect to a database with a 5-second timeout and enriched error messages
+///
+/// Use this for one-shot connections where retry logic is not needed.
+/// The `label` describes the database role (e.g., "development database", "target database")
+/// and is included in error messages along with the masked URL.
+pub async fn connect_to_database(url: &str, label: &str) -> Result<PgPool> {
+    PgPoolOptions::new()
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(url)
+        .await
+        .with_context(|| format!("Failed to connect to {} at {}", label, mask_url_password(url)))
+}
 
 /// Database connection configuration
 #[derive(Debug, Clone)]
@@ -62,7 +106,8 @@ pub async fn connect_with_retry_config(url: &str, config: &ConnectionConfig) -> 
     }
 
     Err(anyhow::anyhow!(
-        "Failed to connect to database after {} attempts: {}",
+        "Failed to connect to database at {} after {} attempts: {}",
+        mask_url_password(url),
         config.max_retries + 1,
         last_error.unwrap()
     ))
@@ -122,7 +167,8 @@ pub async fn connect_with_retry_config_quiet(
     }
 
     Err(anyhow::anyhow!(
-        "Failed to connect to database after {} attempts: {}",
+        "Failed to connect to database at {} after {} attempts: {}",
+        mask_url_password(url),
         config.max_retries + 1,
         last_error.unwrap()
     ))
@@ -179,5 +225,29 @@ mod tests {
         };
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.retry_delay, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_mask_url_password() {
+        // URL with password
+        assert_eq!(
+            mask_url_password("postgres://user:secret@localhost:5432/mydb"),
+            "postgres://user:***@localhost:5432/mydb"
+        );
+
+        // URL without password
+        assert_eq!(
+            mask_url_password("postgres://user@localhost/mydb"),
+            "postgres://user@localhost/mydb"
+        );
+
+        // URL without any auth
+        assert_eq!(
+            mask_url_password("postgres://localhost/mydb"),
+            "postgres://localhost/mydb"
+        );
+
+        // Invalid URL (no protocol)
+        assert_eq!(mask_url_password("not a url"), "not a url");
     }
 }

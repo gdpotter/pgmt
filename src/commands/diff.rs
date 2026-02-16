@@ -8,7 +8,6 @@ use crate::config::{Config, ObjectFilter};
 use crate::diff::{cascade, diff_all, diff_order};
 use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::Result;
-use sqlx::PgPool;
 use std::path::Path;
 
 use super::diff_output::{DiffContext, has_differences, output_diff};
@@ -45,7 +44,9 @@ pub async fn cmd_diff(config: &Config, root_dir: &Path, args: DiffArgs) -> Resul
 
     // Load dev database catalog
     eprintln!("Loading dev database...");
-    let dev_pool = PgPool::connect(&config.databases.dev).await?;
+    let dev_pool =
+        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
+            .await?;
     let dev_catalog = Catalog::load(&dev_pool).await?;
 
     // Apply object filtering (excludes tracking table and configured exclusions)

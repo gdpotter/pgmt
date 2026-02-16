@@ -65,7 +65,7 @@ fn test_apply_command_signature() {
         let root_dir = Path::new("/tmp");
 
         // This won't succeed due to invalid config, but proves the signature is correct
-        let _result = cmd_apply(&config, root_dir, ExecutionMode::DryRun, false).await;
+        let _result = cmd_apply(&config, root_dir, ExecutionMode::DryRun).await;
 
         Ok(())
     }
@@ -111,7 +111,7 @@ async fn test_apply_command_error_handling() -> Result<()> {
     let config = ConfigBuilder::new().with_file(config_input).resolve()?;
 
     // Test that apply command fails gracefully with invalid config
-    let result = cmd_apply(&config, root_dir, ExecutionMode::DryRun, false).await;
+    let result = cmd_apply(&config, root_dir, ExecutionMode::DryRun).await;
     assert!(
         result.is_err(),
         "Apply command should fail with invalid database URL"

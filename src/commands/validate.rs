@@ -2,13 +2,14 @@ use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::validation::{ValidationConfig, validate_database_against_schema_files};
 use anyhow::{Result, anyhow};
-use sqlx::PgPool;
 use std::path::Path;
 
 pub async fn cmd_validate(config: &Config) -> Result<()> {
     println!("🔍 Validating schema consistency...");
 
-    let dev_pool = PgPool::connect(&config.databases.dev).await?;
+    let dev_pool =
+        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
+            .await?;
 
     println!("📊 Loading current database schema...");
     let db_catalog = Catalog::load(&dev_pool).await?;

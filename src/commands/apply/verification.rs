@@ -1,6 +1,6 @@
 use anyhow::Result;
 use sqlx::PgPool;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
@@ -10,11 +10,8 @@ pub async fn verify_final_state(
     dev_pool: &PgPool,
     expected_catalog: &Catalog,
     config: &Config,
-    verbose: bool,
 ) -> Result<()> {
-    if verbose {
-        println!("🔍 Verifying final database state...");
-    }
+    debug!("Verifying final database state...");
 
     // Load the current dev database catalog after changes
     let current_catalog = Catalog::load(dev_pool)
@@ -55,13 +52,10 @@ pub async fn verify_final_state(
         );
     }
 
-    if verbose {
-        println!("✅ State verification completed");
-        println!(
-            "   📊 Tables: {}, Views: {}, Functions: {}",
-            current_table_count, current_view_count, current_function_count
-        );
-    }
+    debug!(
+        "State verification completed - Tables: {}, Views: {}, Functions: {}",
+        current_table_count, current_view_count, current_function_count
+    );
 
     Ok(())
 }

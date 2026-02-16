@@ -12,6 +12,7 @@ use crate::baseline::operations::{
 use crate::catalog::Catalog;
 use crate::config::load_config;
 use crate::constants::CONFIG_FILENAME;
+use crate::db::connection::mask_url_password;
 use crate::migration_tracking;
 use crate::prompts::ShadowDatabaseInput;
 
@@ -152,37 +153,6 @@ pub fn check_existing_config(
             Ok(ExistingConfigResult::Cancelled)
         }
     }
-}
-
-/// Mask password in database URL for display
-fn mask_url_password(url: &str) -> String {
-    // Handle case where URL doesn't contain ://
-    if !url.contains("://") {
-        return url.to_string();
-    }
-
-    // Split on :// to get protocol and rest
-    let parts: Vec<&str> = url.splitn(2, "://").collect();
-    if parts.len() != 2 {
-        return url.to_string();
-    }
-
-    let protocol = parts[0];
-    let rest = parts[1];
-
-    // Check if there's user info (user:pass@host or user@host)
-    if let Some(at_pos) = rest.find('@') {
-        let user_info = &rest[..at_pos];
-        let host_and_path = &rest[at_pos + 1..];
-
-        // Check if there's a password (user:pass)
-        if let Some(colon_pos) = user_info.find(':') {
-            let username = &user_info[..colon_pos];
-            return format!("{}://{}:***@{}", protocol, username, host_and_path);
-        }
-    }
-
-    url.to_string()
 }
 
 /// Complete configuration for project initialization
@@ -959,30 +929,6 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_mask_url_password() {
-        // URL with password
-        assert_eq!(
-            mask_url_password("postgres://user:secret@localhost:5432/mydb"),
-            "postgres://user:***@localhost:5432/mydb"
-        );
-
-        // URL without password
-        assert_eq!(
-            mask_url_password("postgres://user@localhost/mydb"),
-            "postgres://user@localhost/mydb"
-        );
-
-        // URL without any auth
-        assert_eq!(
-            mask_url_password("postgres://localhost/mydb"),
-            "postgres://localhost/mydb"
-        );
-
-        // Invalid URL (no protocol)
-        assert_eq!(mask_url_password("not a url"), "not a url");
     }
 
     #[test]
