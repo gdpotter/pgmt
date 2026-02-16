@@ -6,9 +6,10 @@
 use anyhow::{Result, anyhow};
 use bollard::Docker;
 use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum};
+use bollard::container::LogOutput;
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+    LogsOptionsBuilder, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
 use bollard::secret::{ContainerInspectResponse, HostConfig, PortBinding};
 use futures_util::StreamExt;
@@ -413,10 +414,15 @@ impl DockerManager {
 
         // Start the container
         let start_container_time = std::time::Instant::now();
-        self.docker
+        if let Err(e) = self
+            .docker
             .start_container(&container.id, None::<StartContainerOptions>)
             .await
-            .map_err(|e| anyhow!("Failed to start container: {}", e))?;
+        {
+            // Clean up the created-but-not-started container
+            let _ = self.remove_container(&container.id, true).await;
+            return Err(anyhow!("Failed to start container: {}", e));
+        }
         debug!(
             "Container started after {:?}",
             start_container_time.elapsed()
@@ -434,7 +440,32 @@ impl DockerManager {
 
         // Wait for PostgreSQL to be ready
         let readiness_start = std::time::Instant::now();
-        self.wait_for_postgres_ready(&container.id).await?;
+        if let Err(readiness_err) = self.wait_for_postgres_ready(&container.id).await {
+            let logs = self.fetch_container_logs(&container.id).await;
+            let keep_on_failure =
+                std::env::var("PGMT_KEEP_SHADOW_ON_FAILURE").is_ok_and(|v| !v.is_empty());
+
+            if keep_on_failure {
+                // Leave the container alive for debugging — don't register it
+                // so global cleanup won't remove it either
+                return Err(anyhow!(
+                    "{readiness_err}\n\n\
+                     Container logs (last 50 lines):\n{logs}\n\n\
+                     The container has been kept alive for debugging:\n  \
+                     docker logs {container_name}\n  \
+                     docker exec -it {container_name} bash\n  \
+                     docker rm -f {container_name}"
+                ));
+            } else {
+                // Force-remove the failed container (works in any state)
+                let _ = self.remove_container(&container.id, true).await;
+                return Err(anyhow!(
+                    "{readiness_err}\n\n\
+                     Container logs (last 50 lines):\n{logs}\n\n\
+                     Tip: Re-run with PGMT_KEEP_SHADOW_ON_FAILURE=1 to keep the container alive for debugging."
+                ));
+            }
+        }
         debug!("PostgreSQL ready after {:?}", readiness_start.elapsed());
 
         let database = config
@@ -479,16 +510,41 @@ impl DockerManager {
         })
     }
 
-    /// Stop and optionally remove a container
+    /// Stop and optionally remove a container.
+    /// Resilient to already-stopped containers: if stop fails, still attempts force-remove.
     pub async fn stop_container(&self, container_id: &str, remove: bool) -> Result<()> {
-        // Stop the container
-        self.docker
+        let stop_result = self
+            .docker
             .stop_container(container_id, None::<StopContainerOptions>)
-            .await
-            .map_err(|e| anyhow!("Failed to stop container: {}", e))?;
+            .await;
 
-        if remove {
-            self.remove_container(container_id, false).await?;
+        match stop_result {
+            Ok(()) => {
+                if remove {
+                    self.remove_container(container_id, false).await?;
+                }
+            }
+            Err(ref e) => {
+                let error_msg = e.to_string();
+                let is_not_found =
+                    error_msg.contains("404") || error_msg.contains("No such container");
+
+                if is_not_found {
+                    // Container already gone — nothing to clean up
+                    unregister_container(container_id);
+                    return Err(anyhow!("Failed to stop container: {}", e));
+                }
+
+                // Container may have crashed/exited — still try to force-remove
+                if remove {
+                    self.remove_container(container_id, true).await?;
+                    unregister_container(container_id);
+                    return Ok(());
+                }
+
+                unregister_container(container_id);
+                return Err(anyhow!("Failed to stop container: {}", e));
+            }
         }
 
         // Unregister from cleanup registry
@@ -510,6 +566,39 @@ impl DockerManager {
             .map_err(|e| anyhow!("Failed to remove container: {}", e))?;
 
         Ok(())
+    }
+
+    /// Fetch the last 50 lines of container logs (stdout + stderr).
+    /// Returns the log text, or a fallback message on failure.
+    async fn fetch_container_logs(&self, container_id: &str) -> String {
+        let options = LogsOptionsBuilder::new()
+            .stdout(true)
+            .stderr(true)
+            .tail("50")
+            .build();
+
+        let log_stream = self.docker.logs(container_id, Some(options));
+
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            log_stream.collect::<Vec<Result<LogOutput, _>>>(),
+        )
+        .await
+        {
+            Ok(results) => {
+                let lines: Vec<String> = results
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .map(|output| output.to_string())
+                    .collect();
+                if lines.is_empty() {
+                    "(no logs available)".to_string()
+                } else {
+                    lines.join("")
+                }
+            }
+            Err(_) => "(timed out fetching container logs)".to_string(),
+        }
     }
 
     /// Find an existing container by name
@@ -685,13 +774,15 @@ impl DockerManager {
 
     /// Single attempt to connect to PostgreSQL and run a test query
     async fn try_database_connection(container_info: &ContainerInfo) -> Result<()> {
-        use sqlx::PgPool;
+        use sqlx::postgres::PgPoolOptions;
 
-        // Create connection with short timeout for quick failure
+        // Short timeout so we fail fast and re-check container status between attempts
         let connection_string = container_info.connection_string();
         debug!("🔗 Attempting to connect to: {}", connection_string);
 
-        let pool = PgPool::connect(&connection_string)
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&connection_string)
             .await
             .map_err(|e| anyhow!("Failed to connect to PostgreSQL: {}", e))?;
         debug!("✅ Connection pool established");
@@ -792,15 +883,15 @@ impl DockerManager {
         let (max_attempts, retry_delay_ms) = if is_test_env {
             // Test environment: more frequent checks, reasonable timeout for test environment
             debug!(
-                "🧪 Test environment detected - using optimized retry settings (25 attempts × 1s = 25s max)"
+                "🧪 Test environment detected - using optimized retry settings (25 attempts × 6s = 150s max)"
             );
-            (25_u32, 1000_u64) // 25 attempts × 1s = 25 seconds max
+            (25_u32, 1000_u64) // 25 attempts × (5s timeout + 1s delay) = 150 seconds max
         } else {
             // Production environment: less frequent checks, longer timeout for reliability
             debug!(
-                "🏭 Production environment - using standard retry settings (30 attempts × 2s = 60s max)"
+                "🏭 Production environment - using standard retry settings (30 attempts × 7s = 210s max)"
             );
-            (30_u32, 2000_u64) // 30 attempts × 2s = 60 seconds max
+            (30_u32, 2000_u64) // 30 attempts × (5s timeout + 2s delay) = 210 seconds max
         };
 
         const INITIAL_DELAY_MS: u64 = 500;
@@ -824,14 +915,9 @@ impl DockerManager {
                     Some(ContainerStateStatusEnum::EXITED)
                     | Some(ContainerStateStatusEnum::DEAD) => {
                         let exit_code = state.exit_code.unwrap_or(-1);
-                        let container_name = inspect.name.as_deref().unwrap_or(container_id);
                         return Err(anyhow!(
-                            "Shadow database container exited with code {}.\n\
-                             Inspect logs with: docker logs {}\n\
-                             Remove with: docker rm {}",
+                            "Shadow database container exited with code {}.",
                             exit_code,
-                            container_name.trim_start_matches('/'),
-                            container_name.trim_start_matches('/'),
                         ));
                     }
                     _ => {}
@@ -845,7 +931,9 @@ impl DockerManager {
                     "📋 Container connection info: {}:{}",
                     container_info.host, container_info.port
                 );
-                match self.test_postgres_connection(&container_info).await {
+                // Use single connection attempt per iteration so we can re-check
+                // container status quickly if the container crashes/exits
+                match Self::try_database_connection(&container_info).await {
                     Ok(()) => {
                         debug!(
                             "✅ PostgreSQL is ready to accept connections after {} attempt{}",

@@ -51,6 +51,58 @@ async fn test_docker_postgres_container() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_shadow_database_failure_includes_logs() -> Result<()> {
+    with_docker_cleanup(async {
+        let docker_manager = match DockerManager::new().await {
+            Ok(manager) => manager,
+            Err(e) => {
+                println!("Skipping Docker test - Docker daemon not available: {}", e);
+                return;
+            }
+        };
+
+        let mut environment = HashMap::new();
+        environment.insert("POSTGRES_PASSWORD".to_string(), "test_password".to_string());
+        // Pass an invalid initdb flag to guarantee the container fails during startup
+        environment.insert(
+            "POSTGRES_INITDB_ARGS".to_string(),
+            "--invalid-flag".to_string(),
+        );
+
+        let container_name = format!("pgmt_test_fail_{}", Uuid::new_v4().simple());
+
+        let config = ShadowDockerConfig {
+            version: None,
+            image: "postgres:18-alpine".to_string(),
+            environment,
+            container_name: Some(container_name),
+            auto_cleanup: true,
+            volumes: None,
+            network: None,
+        };
+
+        let result = docker_manager.start_shadow_database(&config).await;
+        let error_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("Expected start_shadow_database to fail"),
+        };
+        assert!(
+            error_msg.contains("Container logs"),
+            "Error should contain inline logs, got: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("PGMT_KEEP_SHADOW_ON_FAILURE"),
+            "Error should mention PGMT_KEEP_SHADOW_ON_FAILURE, got: {}",
+            error_msg
+        );
+    })
+    .await;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_shadow_database_config_docker() -> Result<()> {
     let mut environment = HashMap::new();
     environment.insert("POSTGRES_PASSWORD".to_string(), "test_password".to_string());
