@@ -1,6 +1,7 @@
 use crate::helpers::cli::with_cli_helper;
 use anyhow::Result;
 use predicates::prelude::*;
+use std::fs;
 
 #[cfg(not(windows))]
 use expectrl::Eof;
@@ -225,6 +226,106 @@ mod migrate_new_tests {
                 .success()
                 .stdout(predicate::str::contains("Generate migration from diff"))
                 .stdout(predicate::str::contains("Description for the migration"));
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test that migrate new respects custom directory paths from config
+    #[tokio::test]
+    async fn test_migrate_new_uses_custom_directories() -> Result<()> {
+        with_cli_helper(async |helper| {
+            // Create custom directories instead of the defaults
+            let custom_migrations = "custom_migrations";
+            let custom_baselines = "custom_baselines";
+            fs::create_dir_all(helper.project_root.join("schema"))?;
+            fs::create_dir_all(helper.project_root.join(custom_migrations))?;
+            fs::create_dir_all(helper.project_root.join(custom_baselines))?;
+
+            // Write config with custom directory names
+            let config_content = format!(
+                r#"databases:
+  dev_url: {}
+  shadow:
+    auto: false
+    url: {}
+
+directories:
+  schema_dir: schema/
+  migrations_dir: {}/
+  baselines_dir: {}/
+  roles_file: roles.sql
+
+migration:
+  validate_baseline_consistency: true
+  create_baselines_by_default: false
+"#,
+                helper.dev_database_url,
+                helper.shadow_database_url,
+                custom_migrations,
+                custom_baselines,
+            );
+            fs::write(helper.project_root.join("pgmt.yaml"), config_content)?;
+
+            // Create a schema file
+            helper.write_schema_file(
+                "users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL);",
+            )?;
+
+            // Run migrate new with --create-baseline
+            helper
+                .command()
+                .args(["migrate", "new", "custom_dir_test", "--create-baseline"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(
+                    "Generating migration: custom_dir_test",
+                ))
+                .stdout(predicate::str::contains("Created baseline:"))
+                .stdout(predicate::str::contains("Migration generation complete!"));
+
+            // Verify migration was created in the custom directory
+            let custom_migration_files: Vec<_> =
+                fs::read_dir(helper.project_root.join(custom_migrations))?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "sql"))
+                    .collect();
+            assert_eq!(
+                custom_migration_files.len(),
+                1,
+                "Expected 1 migration in custom_migrations/"
+            );
+            let migration_name = custom_migration_files[0]
+                .file_name()
+                .to_string_lossy()
+                .to_string();
+            assert!(migration_name.contains("custom_dir_test"));
+
+            // Verify baseline was created in the custom directory
+            let custom_baseline_files: Vec<_> =
+                fs::read_dir(helper.project_root.join(custom_baselines))?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "sql"))
+                    .collect();
+            assert_eq!(
+                custom_baseline_files.len(),
+                1,
+                "Expected 1 baseline in custom_baselines/"
+            );
+
+            // Verify nothing was created in the default directories
+            let default_migrations = helper.project_root.join("migrations");
+            let default_baselines = helper.project_root.join("schema_baselines");
+            assert!(
+                !default_migrations.exists(),
+                "Default migrations/ directory should not exist"
+            );
+            assert!(
+                !default_baselines.exists(),
+                "Default schema_baselines/ directory should not exist"
+            );
 
             Ok(())
         })

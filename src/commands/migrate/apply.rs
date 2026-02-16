@@ -26,7 +26,7 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
 
     println!("Applying migrations to target database");
 
-    let migrations_dir = root_dir.join("migrations");
+    let migrations_dir = root_dir.join(&config.directories.migrations);
     if !migrations_dir.exists() {
         println!("No migrations directory found - nothing to apply");
         return Ok(());

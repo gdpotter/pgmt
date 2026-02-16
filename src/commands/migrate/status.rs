@@ -63,8 +63,8 @@ pub async fn cmd_migrate_validate(
     }
 
     // Create necessary directories
-    let migrations_dir = root_dir.join("migrations");
-    let baselines_dir = root_dir.join("schema_baselines");
+    let migrations_dir = root_dir.join(&config.directories.migrations);
+    let baselines_dir = root_dir.join(&config.directories.baselines);
     std::fs::create_dir_all(&migrations_dir)?;
     std::fs::create_dir_all(&baselines_dir)?;
 
