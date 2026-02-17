@@ -1,7 +1,7 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::diff::operations::{
-    ColumnAction, CommentOperation, MigrationStep, PolicyOperation, TableOperation,
+    ColumnAction, CommentOperation, MigrationStep, PolicyOperation, TableOperation, ViewOperation,
 };
 use pgmt::render::SqlRenderer;
 
@@ -915,6 +915,64 @@ async fn test_policy_cascade_replaces_alter_on_column_type_change() -> Result<()
                 assert_eq!(final_catalog.policies.len(), 1);
                 let policy = &final_catalog.policies[0];
                 assert!(policy.using_expr.as_ref().unwrap().contains("2"));
+
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_policy_and_view_together() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table with RLS enabled
+            &[
+                "CREATE TABLE accounts (id SERIAL PRIMARY KEY, tenant_id INTEGER)",
+                "ALTER TABLE accounts ENABLE ROW LEVEL SECURITY",
+            ],
+            // Initial DB: view + policy referencing the view
+            &[
+                "CREATE VIEW active_tenants AS SELECT DISTINCT tenant_id FROM accounts WHERE tenant_id IS NOT NULL",
+                "CREATE POLICY tenant_check ON accounts FOR SELECT USING (EXISTS (SELECT 1 FROM active_tenants WHERE active_tenants.tenant_id = accounts.tenant_id))",
+            ],
+            // Target DB: both removed
+            &[],
+            |steps, final_catalog| -> Result<()> {
+                // Should have DROP POLICY and DROP VIEW
+                let drop_policy_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Policy(PolicyOperation::Drop { identifier })
+                            if identifier.name == "tenant_check")
+                    })
+                    .expect("Should have DROP POLICY step");
+
+                let drop_view_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::View(ViewOperation::Drop { name, .. })
+                            if name == "active_tenants")
+                    })
+                    .expect("Should have DROP VIEW step");
+
+                // DROP POLICY must come before DROP VIEW
+                assert!(
+                    drop_policy_pos < drop_view_pos,
+                    "DROP POLICY (pos {}) should come before DROP VIEW (pos {})",
+                    drop_policy_pos,
+                    drop_view_pos,
+                );
+
+                // Verify final state - no policies or views
+                assert_eq!(final_catalog.policies.len(), 0);
+                assert!(
+                    final_catalog.views.iter().all(|v| v.name != "active_tenants"),
+                    "active_tenants view should be gone"
+                );
 
                 Ok(())
             },

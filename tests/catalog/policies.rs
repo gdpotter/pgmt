@@ -6,6 +6,53 @@ use pgmt::catalog::table::fetch as fetch_tables;
 use std::collections::HashSet;
 
 #[tokio::test]
+async fn test_fetch_policy_view_dependency() {
+    with_test_db(async |db| {
+        // Create a table, a view on the table, and a policy referencing the view
+        db.execute("CREATE TABLE accounts (id SERIAL PRIMARY KEY, tenant_id INTEGER)")
+            .await;
+        db.execute("ALTER TABLE accounts ENABLE ROW LEVEL SECURITY")
+            .await;
+
+        db.execute(
+            "CREATE VIEW active_tenants AS SELECT DISTINCT tenant_id FROM accounts WHERE tenant_id IS NOT NULL",
+        )
+        .await;
+
+        db.execute(
+            "CREATE POLICY tenant_check ON accounts FOR SELECT USING (EXISTS (SELECT 1 FROM active_tenants WHERE active_tenants.tenant_id = accounts.tenant_id))",
+        )
+        .await;
+
+        let policies = fetch(&mut *db.conn().await).await.unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let policy = &policies[0];
+
+        // Policy should depend on the parent table
+        assert!(
+            policy.depends_on.contains(&DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "accounts".to_string(),
+            }),
+            "Policy should depend on its parent table, but depends_on is: {:?}",
+            policy.depends_on
+        );
+
+        // Policy should also depend on the view referenced in its USING expression
+        assert!(
+            policy.depends_on.contains(&DbObjectId::View {
+                schema: "public".to_string(),
+                name: "active_tenants".to_string(),
+            }),
+            "Policy should depend on view referenced in USING expression, but depends_on is: {:?}",
+            policy.depends_on
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn test_fetch_basic_policy() {
     with_test_db(async |db| {
         db.execute("CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT)")
