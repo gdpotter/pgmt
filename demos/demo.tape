@@ -29,7 +29,7 @@ Sleep 6s
 # 3. Generate a production migration
 Type `pgmt migrate new "add bonus scoring"`
 Enter
-Sleep 4s
+Sleep 6s
 
 # Hold for viewers
-Sleep 2s
+Sleep 4s
