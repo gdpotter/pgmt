@@ -1,6 +1,6 @@
 [package]
 name = "pgmt"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 description = "PostgreSQL migration tool that keeps your schema files as the source of truth"
 license = "MIT"
