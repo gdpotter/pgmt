@@ -128,7 +128,7 @@ This table depends on:
 
 You can organize your schema files however you want. Two common approaches:
 
-**Numbered prefixes** leverage alphabetical loading:
+**Numbered prefixes** use alphabetical loading order:
 
 ```
 schema/

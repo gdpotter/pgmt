@@ -286,11 +286,11 @@ See which migrations have been applied to your database.
 
 **Work with a team:**
 
-- [Team Collaboration](/docs/guides/team-collaboration) - Merge conflicts, code review, branching strategies
+- [CI/CD Integration](/docs/guides/ci-cd) - Automated migrations, CI pipelines, deployment strategies
 
 **Handle complex changes:**
 
-- [Migration Strategies](/docs/guides/migration-strategies) - Destructive changes, data migrations, rollbacks
+- [Migration Workflow](/docs/guides/migration-workflow) - Creating, editing, and deploying migrations
 
 ### Have an Existing Database?
 

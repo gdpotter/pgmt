@@ -120,7 +120,5 @@ async fn test_example_multi_file_schema_loads() -> Result<()> {
             .contains("CREATE OR REPLACE FUNCTION app.get_user_task_count")
     }));
 
-    println!("Example schema loaded successfully with correct dependency order!");
-
     Ok(())
 }

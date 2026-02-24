@@ -3,7 +3,8 @@ use crate::helpers::harness::with_test_db;
 /// Tests the core migration tracking functions with real databases
 use anyhow::Result;
 use pgmt::config::types::TrackingTable;
-use pgmt::migration_tracking::{ensure_tracking_table_exists, get_applied_migrations};
+use pgmt::migration_tracking::{ensure_tracking_table_exists, version_to_db};
+use sqlx::Row;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::test]
@@ -31,17 +32,27 @@ async fn test_migration_tracking_functions() -> Result<()> {
         .await?;
 
         // Test checking if migration is applied
-        let is_applied =
-            pgmt::migration_tracking::is_migration_applied(db.pool(), &tracking_table, version)
-                .await?;
-        assert!(is_applied, "Baseline should be marked as applied");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"public\".\"pgmt_migrations\" WHERE version = $1",
+        )
+        .bind(version_to_db(version)?)
+        .fetch_one(db.pool())
+        .await?;
+        assert!(count > 0, "Baseline should be marked as applied");
 
         // Test getting applied migrations
-        let applied_migrations = get_applied_migrations(db.pool(), &tracking_table).await?;
-        assert_eq!(applied_migrations.len(), 1);
-        assert_eq!(applied_migrations[0].version, version);
-        assert_eq!(applied_migrations[0].description, "test baseline");
-        assert_eq!(applied_migrations[0].checksum, checksum);
+        let rows = sqlx::query(
+            "SELECT version, description, checksum FROM \"public\".\"pgmt_migrations\" ORDER BY version",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(rows.len(), 1);
+        let row_version: i64 = rows[0].get("version");
+        let row_desc: String = rows[0].get("description");
+        let row_checksum: String = rows[0].get("checksum");
+        assert_eq!(row_version, version_to_db(version)?);
+        assert_eq!(row_desc, "test baseline");
+        assert_eq!(row_checksum, checksum);
 
         Ok(())
     })
@@ -75,15 +86,22 @@ async fn test_baseline_creation_prevents_recreation() -> Result<()> {
         .await?;
 
         // Now test that the migration is marked as applied
-        let is_applied =
-            pgmt::migration_tracking::is_migration_applied(db.pool(), &tracking_table, version)
-                .await?;
-        assert!(is_applied, "Baseline should be marked as applied");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"public\".\"pgmt_migrations\" WHERE version = $1",
+        )
+        .bind(version_to_db(version)?)
+        .fetch_one(db.pool())
+        .await?;
+        assert!(count > 0, "Baseline should be marked as applied");
 
         // Simulate what a future 'pgmt migrate new' would check
-        let applied_migrations = get_applied_migrations(db.pool(), &tracking_table).await?;
-        assert_eq!(applied_migrations.len(), 1);
-        assert_eq!(applied_migrations[0].version, version);
+        let rows =
+            sqlx::query("SELECT version FROM \"public\".\"pgmt_migrations\" ORDER BY version")
+                .fetch_all(db.pool())
+                .await?;
+        assert_eq!(rows.len(), 1);
+        let row_version: i64 = rows[0].get("version");
+        assert_eq!(row_version, version_to_db(version)?);
 
         // This proves that the baseline is properly recorded and would prevent recreation
         Ok(())
@@ -154,13 +172,19 @@ async fn test_multiple_baselines_ordering() -> Result<()> {
         .await?;
 
         // Get applied migrations - should be ordered by version
-        let applied_migrations = get_applied_migrations(db.pool(), &tracking_table).await?;
-        assert_eq!(applied_migrations.len(), 3);
+        let rows =
+            sqlx::query("SELECT version FROM \"public\".\"pgmt_migrations\" ORDER BY version")
+                .fetch_all(db.pool())
+                .await?;
+        assert_eq!(rows.len(), 3);
 
         // Verify chronological ordering
-        assert_eq!(applied_migrations[0].version, version1); // 1000
-        assert_eq!(applied_migrations[1].version, version3); // 1500
-        assert_eq!(applied_migrations[2].version, version2); // 2000
+        let v0: i64 = rows[0].get("version");
+        let v1: i64 = rows[1].get("version");
+        let v2: i64 = rows[2].get("version");
+        assert_eq!(v0, version_to_db(version1)?); // 1000
+        assert_eq!(v1, version_to_db(version3)?); // 1500
+        assert_eq!(v2, version_to_db(version2)?); // 2000
 
         Ok(())
     })
@@ -191,10 +215,13 @@ async fn test_tracking_table_custom_schema() -> Result<()> {
         )
         .await?;
 
-        let is_applied =
-            pgmt::migration_tracking::is_migration_applied(db.pool(), &tracking_table, version)
-                .await?;
-        assert!(is_applied, "Should work with custom schema and table name");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"internal\".\"migrations_log\" WHERE version = $1",
+        )
+        .bind(version_to_db(version)?)
+        .fetch_one(db.pool())
+        .await?;
+        assert!(count > 0, "Should work with custom schema and table name");
 
         Ok(())
     })

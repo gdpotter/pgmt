@@ -2,7 +2,8 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::config::types::TrackingTable;
-use pgmt::migration_tracking::{get_applied_migrations, is_migration_applied};
+use pgmt::migration_tracking::version_to_db;
+use sqlx::Row;
 
 /// Test the complete baseline + migration flow to ensure future migrations
 /// only contain new changes after baseline creation during init
@@ -49,8 +50,13 @@ CREATE INDEX idx_users_email ON users (email);
         .await?;
 
         // Step 3: Verify baseline is recorded as applied
-        let is_applied = is_migration_applied(db.pool(), &tracking_table, baseline_version).await?;
-        assert!(is_applied, "Baseline should be marked as applied");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"public\".\"pgmt_migrations\" WHERE version = $1",
+        )
+        .bind(version_to_db(baseline_version)?)
+        .fetch_one(db.pool())
+        .await?;
+        assert!(count > 0, "Baseline should be marked as applied");
 
         // Step 4: Now simulate what "migrate new" would do after init
         // It should only detect NEW changes, not recreate existing objects
@@ -102,14 +108,16 @@ CREATE INDEX idx_users_email ON users (email);
         ).await?;
 
         // Step 6: Verify applied migrations list
-        let applied_migrations = get_applied_migrations(db.pool(), &tracking_table).await?;
-        assert_eq!(
-            applied_migrations.len(),
-            1,
-            "Should only have the baseline recorded"
-        );
-        assert_eq!(applied_migrations[0].version, baseline_version);
-        assert_eq!(applied_migrations[0].description, "initial baseline");
+        let rows = sqlx::query(
+            "SELECT version, description FROM \"public\".\"pgmt_migrations\" ORDER BY version",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(rows.len(), 1, "Should only have the baseline recorded");
+        let row_version: i64 = rows[0].get("version");
+        let row_desc: String = rows[0].get("description");
+        assert_eq!(row_version, version_to_db(baseline_version)?);
+        assert_eq!(row_desc, "initial baseline");
 
         Ok(())
     }).await
@@ -197,8 +205,12 @@ CREATE TABLE customers (
         ).await?;
 
         // Step 5: Verify migration tracking state
-        let applied = get_applied_migrations(db.pool(), &tracking_table).await?;
-        assert_eq!(applied.len(), 1, "Should only have baseline recorded");
+        let rows = sqlx::query(
+            "SELECT version FROM \"public\".\"pgmt_migrations\" ORDER BY version",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(rows.len(), 1, "Should only have baseline recorded");
 
         // If we were to apply the new migration, it would be version 2
         let new_migration_version = 2000000000u64;
@@ -211,20 +223,20 @@ CREATE TABLE customers (
         )
         .await?;
 
-        let applied_after = get_applied_migrations(db.pool(), &tracking_table).await?;
+        let rows_after = sqlx::query(
+            "SELECT version FROM \"public\".\"pgmt_migrations\" ORDER BY version",
+        )
+        .fetch_all(db.pool())
+        .await?;
         assert_eq!(
-            applied_after.len(),
+            rows_after.len(),
             2,
             "Should have baseline + new migration"
         );
-        assert_eq!(
-            applied_after[0].version, baseline_version,
-            "First should be baseline"
-        );
-        assert_eq!(
-            applied_after[1].version, new_migration_version,
-            "Second should be new migration"
-        );
+        let v0: i64 = rows_after[0].get("version");
+        let v1: i64 = rows_after[1].get("version");
+        assert_eq!(v0, version_to_db(baseline_version)?, "First should be baseline");
+        assert_eq!(v1, version_to_db(new_migration_version)?, "Second should be new migration");
 
         Ok(())
     }).await

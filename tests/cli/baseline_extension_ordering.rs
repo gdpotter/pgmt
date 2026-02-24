@@ -26,21 +26,6 @@ async fn test_baseline_extension_first() -> Result<()> {
         // Read the generated baseline
         let baseline_files = helper.list_baseline_files()?;
 
-        // Debug: show what files were created
-        println!("Baseline files found: {:?}", baseline_files);
-        if baseline_files.is_empty() {
-            // Check if project was created at all
-            println!("Project root exists: {}", helper.project_root.exists());
-            if helper.project_root.exists() {
-                println!(
-                    "Directory contents: {:?}",
-                    std::fs::read_dir(&helper.project_root)
-                        .unwrap()
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-
         assert_eq!(
             baseline_files.len(),
             1,

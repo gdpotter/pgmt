@@ -172,9 +172,9 @@ async fn test_fetch_function_grants() {
             })
             .collect();
 
-        // Note: Function grants might not be captured in all PostgreSQL setups
-        // This test verifies the grant fetching mechanism works
-        println!("Found {} function grants", function_grants.len());
+        assert!(!function_grants.is_empty(), "Should have function grants");
+        let grant = &function_grants[0];
+        assert!(grant.privileges.contains(&"EXECUTE".to_string()));
     })
     .await;
 }

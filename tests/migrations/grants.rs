@@ -202,7 +202,6 @@ async fn test_grant_view_privilege_migration() -> Result<()> {
             // Check the generated SQL - should NOT contain "ON VIEW" or "ON TABLE"
             let sql_list = grant_step.to_sql();
             let grant_sql = &sql_list[0].sql;
-            println!("Generated grant SQL: {}", grant_sql);
 
             // Should be: GRANT SELECT ON "public"."active_users" TO test_app_user;
             // Should NOT be: GRANT SELECT ON VIEW "public"."active_users" TO test_app_user;

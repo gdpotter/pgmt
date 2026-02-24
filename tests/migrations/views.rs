@@ -78,13 +78,13 @@ async fn test_drop_view_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Should have DROP VIEW step
                 assert!(!steps.is_empty());
-                let _drop_step = steps
-                    .iter()
-                    .find(|s| {
+                assert!(
+                    steps.iter().any(|s| {
                         matches!(s, MigrationStep::View(ViewOperation::Drop { schema, name })
                     if schema == "test_schema" && name == "old_view")
-                    })
-                    .expect("Should have DropView step");
+                    }),
+                    "Should have DropView step"
+                );
 
                 // Verify final state exactly
                 assert_eq!(final_catalog.tables.len(), 1); // Table should remain

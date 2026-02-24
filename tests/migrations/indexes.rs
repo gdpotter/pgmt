@@ -73,13 +73,13 @@ async fn test_index_drop_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Should have DROP INDEX step
                 assert!(!steps.is_empty());
-                let _drop_step = steps
-                    .iter()
-                    .find(|s| {
+                assert!(
+                    steps.iter().any(|s| {
                         matches!(s, MigrationStep::Index(IndexOperation::Drop { name, .. })
                     if name == "idx_users_email")
-                    })
-                    .expect("Should have DropIndex step");
+                    }),
+                    "Should have DropIndex step"
+                );
 
                 // Verify final state - index should be gone
                 let has_index = final_catalog

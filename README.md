@@ -79,15 +79,15 @@ CREATE INDEX CONCURRENTLY idx_users_verified ON users(verified);
 
 ## Documentation
 
-- [Quick Start](https://gdpotter.github.io/pgmt/docs/getting-started/quick-start) — Get up and running
-- [Adopt Existing Database](https://gdpotter.github.io/pgmt/docs/guides/existing-database) — Import existing schema
-- [CLI Reference](https://gdpotter.github.io/pgmt/docs/cli/) — All commands and options
-- [Blog](https://gdpotter.github.io/pgmt/blog) — Why schema-as-code?
+- [Quick Start](https://pgmt.dev/docs/getting-started/quick-start) — Get up and running
+- [Adopt Existing Database](https://pgmt.dev/docs/guides/existing-database) — Import existing schema
+- [CLI Reference](https://pgmt.dev/docs/cli/) — All commands and options
+- [Blog](https://pgmt.dev/blog) — Why schema-as-code?
 
 ## Requirements
 
 - **PostgreSQL 13+** (tested on 13–18)
-- **Rust 1.74+** for building from source
+- **Rust 1.85+** for building from source
 
 ## Contributing
 
@@ -96,7 +96,7 @@ CREATE INDEX CONCURRENTLY idx_users_verified ON users(verified);
 cargo test                 # Run tests
 ```
 
-See the [contributing guide](https://gdpotter.github.io/pgmt/docs/development/contributing) for details.
+See the [contributing guide](https://pgmt.dev/docs/development/contributing) for details.
 
 ## License
 

@@ -1,7 +1,4 @@
-//! Parameterized comment migration tests using rstest
-//!
-//! This file demonstrates how rstest can consolidate similar comment tests
-//! across different object types, reducing duplication while maintaining clarity.
+//! Parameterized comment migration tests across object types (tables, views, schemas).
 
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;

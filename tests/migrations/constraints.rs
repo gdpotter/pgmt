@@ -114,13 +114,13 @@ async fn test_drop_constraint_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Verify migration steps
                 assert!(!steps.is_empty());
-                let _drop_step = steps
-                    .iter()
-                    .find(|s| {
+                assert!(
+                    steps.iter().any(|s| {
                         matches!(s, MigrationStep::Constraint(ConstraintOperation::Drop(identifier))
                     if identifier.name == "users_email_unique")
-                    })
-                    .expect("Should have drop constraint step");
+                    }),
+                    "Should have drop constraint step"
+                );
 
                 // Verify final state
                 let found_constraint = final_catalog
@@ -156,10 +156,10 @@ async fn test_foreign_key_constraint_migration() -> Result<()> {
         |steps, final_catalog| {
             // Verify migration steps
             assert!(!steps.is_empty());
-            let _create_step = steps.iter().find(|s| {
+            assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Constraint(ConstraintOperation::Create(constraint))
                     if constraint.name == "orders_user_id_fkey")
-            }).expect("Should have create foreign key step");
+            }), "Should have create foreign key step");
 
             // Verify final state
             let created_constraint = final_catalog.constraints.iter()
@@ -191,10 +191,10 @@ async fn test_check_constraint_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Verify migration steps
                 assert!(!steps.is_empty());
-                let _create_step = steps.iter().find(|s| {
+                assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Constraint(ConstraintOperation::Create(constraint))
                     if constraint.name == "products_price_check")
-            }).expect("Should have create check constraint step");
+            }), "Should have create check constraint step");
 
                 // Verify final state
                 let created_constraint = final_catalog
@@ -231,15 +231,15 @@ async fn test_constraint_modification_migration() -> Result<()> {
         |steps, final_catalog| {
             // Verify migration steps - should drop and recreate constraint
             assert!(!steps.is_empty());
-            let _drop_step = steps.iter().find(|s| {
+            assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Constraint(ConstraintOperation::Drop(identifier))
                     if identifier.name == "orders_user_id_fkey")
-            }).expect("Should have drop constraint step");
+            }), "Should have drop constraint step");
 
-            let _create_step = steps.iter().find(|s| {
+            assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Constraint(ConstraintOperation::Create(constraint))
                     if constraint.name == "orders_user_id_fkey")
-            }).expect("Should have create constraint step");
+            }), "Should have create constraint step");
 
             // Verify final state
             let modified_constraint = final_catalog.constraints.iter()

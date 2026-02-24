@@ -139,26 +139,7 @@ impl Catalog {
         };
 
         if let Some(augmentation) = file_augmentation {
-            for (object_id, additional_deps) in &augmentation.additional_dependencies {
-                let existing_deps = catalog.forward_deps.entry(object_id.clone()).or_default();
-
-                for additional_dep in additional_deps {
-                    if !existing_deps.contains(additional_dep) {
-                        existing_deps.push(additional_dep.clone());
-                    }
-                }
-            }
-
-            catalog.reverse_deps.clear();
-            for (object_id, deps) in &catalog.forward_deps {
-                for dep in deps {
-                    catalog
-                        .reverse_deps
-                        .entry(dep.clone())
-                        .or_default()
-                        .push(object_id.clone());
-                }
-            }
+            catalog.apply_file_augmentation(augmentation);
         }
 
         Ok(catalog)
@@ -169,12 +150,17 @@ impl Catalog {
         mut self,
         augmentation: FileDependencyAugmentation,
     ) -> Self {
-        for (object_id, additional_deps) in augmentation.additional_dependencies {
+        self.apply_file_augmentation(&augmentation);
+        self
+    }
+
+    fn apply_file_augmentation(&mut self, augmentation: &FileDependencyAugmentation) {
+        for (object_id, additional_deps) in &augmentation.additional_dependencies {
             let existing_deps = self.forward_deps.entry(object_id.clone()).or_default();
 
             for additional_dep in additional_deps {
-                if !existing_deps.contains(&additional_dep) {
-                    existing_deps.push(additional_dep);
+                if !existing_deps.contains(additional_dep) {
+                    existing_deps.push(additional_dep.clone());
                 }
             }
         }
@@ -188,8 +174,6 @@ impl Catalog {
                     .push(object_id.clone());
             }
         }
-
-        self
     }
 
     pub fn find_view(&self, schema: &str, name: &str) -> Option<&view::View> {
@@ -269,7 +253,7 @@ impl Catalog {
     /// dropped and recreated. Returns None if the object type doesn't support cascading
     /// or if the object doesn't exist in the new catalog.
     ///
-    /// This leverages the existing per-object diff functions to ensure all associated
+    /// This uses the existing per-object diff functions to ensure all associated
     /// operations (comments, etc.) are included. Grants are also re-applied since
     /// DROP implicitly revokes them.
     ///

@@ -78,18 +78,6 @@ impl FileDependencyAugmentation {
             .or_default()
             .push(to);
     }
-
-    /// Get additional dependencies for an object
-    ///
-    /// **Note**: This method is primarily for testing dependency augmentation.
-    /// Production code should access augmentation through the catalog's dependency maps.
-    #[allow(dead_code)]
-    pub fn get_additional_dependencies(&self, object_id: &DbObjectId) -> Vec<DbObjectId> {
-        self.additional_dependencies
-            .get(object_id)
-            .cloned()
-            .unwrap_or_default()
-    }
 }
 
 /// Create file-based dependency augmentation from file mappings and schema file dependencies
@@ -192,7 +180,11 @@ mod tests {
 
         augmentation.add_dependency(obj2.clone(), obj1.clone());
 
-        let deps = augmentation.get_additional_dependencies(&obj2);
+        let deps = augmentation
+            .additional_dependencies
+            .get(&obj2)
+            .cloned()
+            .unwrap_or_default();
         assert_eq!(deps, vec![obj1]);
     }
 }

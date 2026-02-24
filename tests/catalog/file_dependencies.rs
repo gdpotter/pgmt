@@ -46,7 +46,11 @@ fn test_dependency_augmentation() {
 
     augmentation.add_dependency(table_id.clone(), schema_id.clone());
 
-    let deps = augmentation.get_additional_dependencies(&table_id);
+    let deps = augmentation
+        .additional_dependencies
+        .get(&table_id)
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(deps, vec![schema_id]);
 
     // Test empty dependencies
@@ -54,7 +58,11 @@ fn test_dependency_augmentation() {
         schema: "app".to_string(),
         name: "posts".to_string(),
     };
-    let empty_deps = augmentation.get_additional_dependencies(&other_table);
+    let empty_deps = augmentation
+        .additional_dependencies
+        .get(&other_table)
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(empty_deps, Vec::<DbObjectId>::new());
 }
 
@@ -181,15 +189,15 @@ fn test_complex_dependency_chain() {
     };
 
     // View should depend on table (04_views.sql requires 03_tables.sql)
-    let view_deps = augmentation.get_additional_dependencies(&view_id);
+    let view_deps = augmentation.additional_dependencies.get(&view_id).unwrap();
     assert!(view_deps.contains(&table_id));
 
     // Table should depend on schema and type (03_tables.sql requires 01_schemas.sql and 02_types.sql)
-    let table_deps = augmentation.get_additional_dependencies(&table_id);
+    let table_deps = augmentation.additional_dependencies.get(&table_id).unwrap();
     assert!(table_deps.contains(&schema_id));
     assert!(table_deps.contains(&type_id));
 
     // Type should depend on schema (02_types.sql requires 01_schemas.sql)
-    let type_deps = augmentation.get_additional_dependencies(&type_id);
+    let type_deps = augmentation.additional_dependencies.get(&type_id).unwrap();
     assert!(type_deps.contains(&schema_id));
 }

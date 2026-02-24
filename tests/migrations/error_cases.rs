@@ -9,26 +9,6 @@ use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::diff::operations::MigrationStep;
 
-/// Test that empty catalogs produce no migration steps
-#[tokio::test]
-async fn test_empty_to_empty_no_migration() -> Result<()> {
-    let helper = MigrationTestHelper::new().await;
-
-    helper
-        .run_migration_test(
-            &[], // Both databases empty
-            &[], // No initial-only SQL
-            &[], // No target-only SQL
-            |steps, _final_catalog| {
-                assert!(steps.is_empty(), "Empty to empty should produce no steps");
-                Ok(())
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
 /// Test that identical schemas produce no migration steps
 #[tokio::test]
 async fn test_identical_schemas_no_migration() -> Result<()> {

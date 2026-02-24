@@ -85,13 +85,13 @@ async fn test_drop_table_migration() -> Result<()> {
             &[],
             |steps, final_catalog| {
                 assert!(!steps.is_empty());
-                let _drop_step = steps
-                    .iter()
-                    .find(|s| {
+                assert!(
+                    steps.iter().any(|s| {
                         matches!(s, MigrationStep::Table(TableOperation::Drop { schema, name })
                     if schema == "test_schema" && name == "old_table")
-                    })
-                    .expect("Should have DropTable step");
+                    }),
+                    "Should have DropTable step"
+                );
 
                 // Verify final state - table completely removed
                 assert!(final_catalog.tables.is_empty());
@@ -353,10 +353,10 @@ async fn test_cross_schema_table_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Should have CREATE TABLE step for orders
                 assert!(!steps.is_empty());
-                let _create_step = steps.iter().find(|s| {
+                assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Table(TableOperation::Create { schema, name, .. })
                     if schema == "sales" && name == "orders")
-            }).expect("Should have CreateTable step for orders");
+            }), "Should have CreateTable step for orders");
 
                 // Verify final state exactly
                 assert!(final_catalog.schemas.len() >= 2);
@@ -592,10 +592,10 @@ async fn test_create_table_with_column_comments_migration() -> Result<()> {
         // Verification closure
         |steps, final_catalog| {
             // Verify we have a CREATE TABLE step
-            let _create_step = steps.iter().find(|s| {
+            assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Table(TableOperation::Create { schema, name, .. })
                     if schema == "test_schema" && name == "users")
-            }).expect("Should have CreateTable step");
+            }), "Should have CreateTable step");
 
             // Check if we have column comment steps
             let column_comment_steps: Vec<_> = steps.iter().filter(|s| {

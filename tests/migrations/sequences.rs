@@ -64,10 +64,10 @@ async fn test_drop_sequence_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Should have DROP SEQUENCE step
                 assert!(!steps.is_empty());
-                let _drop_step = steps.iter().find(|s| {
+                assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Sequence(SequenceOperation::Drop { schema, name })
                     if schema == "test_schema" && name == "old_seq")
-            }).expect("Should have DropSequence step");
+            }), "Should have DropSequence step");
 
                 // Verify final state - sequence should be gone
                 let has_sequence = final_catalog

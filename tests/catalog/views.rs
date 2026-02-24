@@ -118,7 +118,6 @@ async fn test_fetch_view_with_domain_dependency() -> anyhow::Result<()> {
 
         // Should depend on Domain (via explicit cast)
         let deps = view.depends_on();
-        println!("View dependencies: {:?}", deps);
         assert!(
             deps.contains(&DbObjectId::Domain {
                 schema: "public".to_string(),

@@ -65,13 +65,13 @@ async fn test_drop_schema_migration() -> Result<()> {
             |steps, final_catalog| {
                 // Should have DROP SCHEMA step
                 assert!(!steps.is_empty());
-                let _drop_step = steps
-                    .iter()
-                    .find(|s| {
+                assert!(
+                    steps.iter().any(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Drop { name })
                     if name == "old_schema")
-                    })
-                    .expect("Should have DropSchema step");
+                    }),
+                    "Should have DropSchema step"
+                );
 
                 // Verify final state - schema completely removed
                 let has_old_schema = final_catalog.schemas.iter().any(|s| s.name == "old_schema");

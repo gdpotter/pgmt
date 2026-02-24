@@ -102,17 +102,6 @@ impl SectionReporter {
         println!("{} Failed: {}", style("✗").red(), style(&err_str).red());
     }
 
-    #[allow(dead_code)]
-    pub fn batch_progress(&self, batch_num: usize, rows: usize, elapsed: Duration) {
-        let elapsed_str = format_duration(elapsed);
-        println!(
-            "    Batch {}: {:>6} rows (elapsed: {})",
-            batch_num,
-            rows,
-            style(&elapsed_str).dim()
-        );
-    }
-
     pub fn migration_summary(&self, total_duration: Duration, _sections_completed: usize) {
         let duration_str = format_duration(total_duration);
         println!(

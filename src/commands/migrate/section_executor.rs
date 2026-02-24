@@ -31,18 +31,6 @@ pub struct SectionExecutor {
     mode: ExecutionMode,
 }
 
-#[derive(Debug)]
-pub struct SectionResult {
-    #[allow(dead_code)]
-    pub status: SectionStatus,
-    #[allow(dead_code)]
-    pub rows_affected: Option<i64>,
-    #[allow(dead_code)]
-    pub duration: Duration,
-    #[allow(dead_code)]
-    pub attempts: u32,
-}
-
 impl SectionExecutor {
     pub fn new(
         pool: PgPool,
@@ -63,7 +51,7 @@ impl SectionExecutor {
         &mut self,
         migration_version: u64,
         section: &MigrationSection,
-    ) -> Result<SectionResult> {
+    ) -> Result<()> {
         // In Validation mode, skip all tracking and just execute SQL
         if matches!(self.mode, ExecutionMode::Validation) {
             return self.execute_validation(section).await;
@@ -79,12 +67,7 @@ impl SectionExecutor {
         .await?
         {
             self.reporter.skip_section(&section.name);
-            return Ok(SectionResult {
-                status: SectionStatus::Completed,
-                rows_affected: None,
-                duration: Duration::ZERO,
-                attempts: 0,
-            });
+            return Ok(());
         }
 
         // Execute based on mode
@@ -116,7 +99,7 @@ impl SectionExecutor {
         &mut self,
         migration_version: u64,
         section: &MigrationSection,
-    ) -> Result<SectionResult> {
+    ) -> Result<()> {
         self.reporter
             .start_section(&section.name, section.description.as_deref());
 
@@ -177,12 +160,7 @@ impl SectionExecutor {
         self.reporter
             .complete_section(&section.name, duration, Some(rows as usize));
 
-        Ok(SectionResult {
-            status: SectionStatus::Completed,
-            rows_affected: Some(rows),
-            duration,
-            attempts: 1,
-        })
+        Ok(())
     }
 
     /// Execute section without transaction (for CONCURRENTLY, etc.)
@@ -190,7 +168,7 @@ impl SectionExecutor {
         &mut self,
         migration_version: u64,
         section: &MigrationSection,
-    ) -> Result<SectionResult> {
+    ) -> Result<()> {
         self.reporter
             .start_section(&section.name, section.description.as_deref());
 
@@ -244,12 +222,7 @@ impl SectionExecutor {
                         retry_config.attempts,
                     );
 
-                    return Ok(SectionResult {
-                        status: SectionStatus::Completed,
-                        rows_affected: Some(rows),
-                        duration,
-                        attempts: attempt,
-                    });
+                    return Ok(());
                 }
                 Err(e) => {
                     let is_lock_timeout = is_lock_timeout_error(&e);
@@ -289,7 +262,7 @@ impl SectionExecutor {
         &mut self,
         migration_version: u64,
         section: &MigrationSection,
-    ) -> Result<SectionResult> {
+    ) -> Result<()> {
         self.reporter
             .start_section(&section.name, section.description.as_deref());
 
@@ -303,7 +276,6 @@ impl SectionExecutor {
         .await?;
 
         // For now, execute normally without batching
-        // TODO: Implement batch processing in Phase 3
         let result = sqlx::query(&section.sql)
             .execute(&self.pool)
             .await
@@ -325,49 +297,29 @@ impl SectionExecutor {
         self.reporter
             .complete_section(&section.name, duration, Some(rows as usize));
 
-        Ok(SectionResult {
-            status: SectionStatus::Completed,
-            rows_affected: Some(rows),
-            duration,
-            attempts: 1,
-        })
+        Ok(())
     }
 
     /// Execute section in validation mode (no retries, no timeouts, no tracking)
-    async fn execute_validation(&mut self, section: &MigrationSection) -> Result<SectionResult> {
-        let start = Instant::now();
-
-        // Execute based on transaction mode
+    async fn execute_validation(&mut self, section: &MigrationSection) -> Result<()> {
         use sqlx::Executor;
-        let result = match section.mode {
+        match section.mode {
             TransactionMode::Transactional => {
-                // Execute in a transaction
                 let mut tx = self.pool.begin().await?;
-                let result = tx
-                    .execute(section.sql.as_str())
+                tx.execute(section.sql.as_str())
                     .await
                     .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
                 tx.commit().await?;
-                result
             }
             TransactionMode::NonTransactional | TransactionMode::Autocommit => {
-                // Execute without transaction
                 self.pool
                     .execute(section.sql.as_str())
                     .await
-                    .map_err(|e| format_section_error(e, &section.sql, &section.name))?
+                    .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
             }
         };
 
-        let duration = start.elapsed();
-        let rows = result.rows_affected() as i64;
-
-        Ok(SectionResult {
-            status: SectionStatus::Completed,
-            rows_affected: Some(rows),
-            duration,
-            attempts: 1,
-        })
+        Ok(())
     }
 }
 
