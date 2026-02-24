@@ -1,0 +1,28 @@
+{
+  "name": "@pgmt/pgmt",
+  "version": "0.0.0",
+  "description": "PostgreSQL schema-as-code with dependency tracking and production-ready migrations",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gdpotter/pgmt"
+  },
+  "homepage": "https://pgmt.dev",
+  "keywords": [
+    "postgresql",
+    "postgres",
+    "migration",
+    "schema",
+    "database"
+  ],
+  "bin": {
+    "pgmt": "bin/pgmt"
+  },
+  "optionalDependencies": {
+    "@pgmt/cli-linux-x64": "0.0.0",
+    "@pgmt/cli-linux-arm64": "0.0.0",
+    "@pgmt/cli-darwin-x64": "0.0.0",
+    "@pgmt/cli-darwin-arm64": "0.0.0",
+    "@pgmt/cli-win32-x64": "0.0.0"
+  }
+}

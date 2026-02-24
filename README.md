@@ -12,11 +12,22 @@ Edit database objects like code. pgmt tracks dependencies, applies changes insta
 
 One function changed. pgmt detected 3 dependent views, dropped them in the right order, applied the update, and recreated everything — automatically.
 
+## Install
+
+```bash
+# Shell (macOS/Linux)
+curl -fsSL https://pgmt.dev/install.sh | sh
+
+# npm
+npm install -g @pgmt/pgmt
+
+# Cargo (from source)
+cargo install pgmt
+```
+
 ## Quick Start
 
 ```bash
-cargo install pgmt
-
 # Initialize (new project or from existing database)
 pgmt init
 pgmt init --dev-url postgres://localhost/my_existing_db

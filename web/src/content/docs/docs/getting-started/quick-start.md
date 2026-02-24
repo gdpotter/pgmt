@@ -7,15 +7,22 @@ Get started with pgmt in 10 minutes and see what makes it different from other m
 
 ## Install pgmt
 
+**Shell (macOS/Linux):**
+
 ```bash
-cargo install pgmt
+curl -fsSL https://pgmt.dev/install.sh | sh
 ```
 
-**Don't have Rust?** Install it first:
+**npm:**
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
+npm install -g @pgmt/pgmt
+```
+
+**Cargo (from source):**
+
+```bash
+cargo install pgmt
 ```
 
 Verify installation:
