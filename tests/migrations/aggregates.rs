@@ -1,6 +1,9 @@
+use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
+use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{AggregateOperation, MigrationStep};
+use pgmt::diff::{cascade, diff_all, diff_order};
 
 /// Helper SQL to create a state transition function for testing
 fn create_sfunc_sql(schema: &str, name: &str) -> String {
@@ -384,4 +387,63 @@ async fn test_aggregate_with_array_state_type_migration() -> Result<()> {
         )
         .await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn test_aggregate_cascade_on_function_drop() -> Result<()> {
+    with_test_db(async |initial_db| {
+        with_test_db(async |target_db| {
+            // Initial: composite type, function using it, aggregate using that function
+            initial_db
+                .execute("CREATE TYPE item AS (id INT, score SMALLINT)")
+                .await;
+            initial_db
+                .execute(
+                    "CREATE FUNCTION sum_scores(state BIGINT, next item) RETURNS BIGINT
+                     AS $$ SELECT state + next.score; $$ LANGUAGE sql",
+                )
+                .await;
+            initial_db
+                .execute("CREATE AGGREGATE total_score(item) (SFUNC = sum_scores, STYPE = BIGINT)")
+                .await;
+
+            // Target: composite type gains a field → type drops/recreates →
+            // function cascades → aggregate should cascade
+            target_db
+                .execute("CREATE TYPE item AS (id INT, score SMALLINT, bonus INT)")
+                .await;
+            target_db
+                .execute(
+                    "CREATE FUNCTION sum_scores(state BIGINT, next item) RETURNS BIGINT
+                     AS $$ SELECT state + next.score; $$ LANGUAGE sql",
+                )
+                .await;
+            target_db
+                .execute("CREATE AGGREGATE total_score(item) (SFUNC = sum_scores, STYPE = BIGINT)")
+                .await;
+
+            let initial_catalog = Catalog::load(initial_db.pool()).await?;
+            let target_catalog = Catalog::load(target_db.pool()).await?;
+
+            let mut steps = diff_all(&initial_catalog, &target_catalog);
+            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
+            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+
+            // The aggregate should cascade (depends on function, which depends on type)
+            let drop_agg = steps.iter().any(|s| {
+                matches!(s, MigrationStep::Aggregate(AggregateOperation::Drop { identifier })
+                    if identifier.name == "total_score")
+            });
+            let create_agg = steps.iter().any(|s| {
+                matches!(s, MigrationStep::Aggregate(AggregateOperation::Create { aggregate })
+                    if aggregate.name == "total_score")
+            });
+            assert!(drop_agg, "Should have DROP AGGREGATE for total_score");
+            assert!(create_agg, "Should have CREATE AGGREGATE for total_score");
+
+            Ok(())
+        })
+        .await
+    })
+    .await
 }

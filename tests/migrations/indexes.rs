@@ -1,6 +1,9 @@
+use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
-use pgmt::diff::operations::{CommentOperation, IndexOperation, MigrationStep};
+use pgmt::catalog::Catalog;
+use pgmt::diff::operations::{CommentOperation, IndexOperation, MigrationStep, TypeOperation};
+use pgmt::diff::{cascade, diff_all, diff_order};
 
 #[tokio::test]
 async fn test_index_create_migration() -> Result<()> {
@@ -280,4 +283,87 @@ async fn test_multi_column_index_migration() -> Result<()> {
     ).await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_index_cascade_on_type_change() -> Result<()> {
+    with_test_db(async |initial_db| {
+        with_test_db(async |target_db| {
+            // Initial: composite type, table with that type, expression index
+            initial_db
+                .execute("CREATE TYPE dimensions AS (width INT, height INT)")
+                .await;
+            initial_db
+                .execute("CREATE TABLE products (id SERIAL PRIMARY KEY, dims dimensions)")
+                .await;
+            initial_db
+                .execute("CREATE INDEX idx_dims ON products (((dims).width))")
+                .await;
+
+            // Target: composite type gains a field
+            target_db
+                .execute("CREATE TYPE dimensions AS (width INT, height INT, depth INT)")
+                .await;
+            target_db
+                .execute("CREATE TABLE products (id SERIAL PRIMARY KEY, dims dimensions)")
+                .await;
+            target_db
+                .execute("CREATE INDEX idx_dims ON products (((dims).width))")
+                .await;
+
+            let initial_catalog = Catalog::load(initial_db.pool()).await?;
+            let target_catalog = Catalog::load(target_db.pool()).await?;
+
+            let mut steps = diff_all(&initial_catalog, &target_catalog);
+            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
+            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+
+            // The type change should cascade to the index
+            let drop_index_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Index(IndexOperation::Drop { name, .. })
+                        if name == "idx_dims")
+                })
+                .expect("Should have DROP INDEX for idx_dims");
+
+            let create_index_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Index(IndexOperation::Create(index))
+                        if index.name == "idx_dims")
+                })
+                .expect("Should have CREATE INDEX for idx_dims");
+
+            let drop_type_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. })
+                        if name == "dimensions")
+                })
+                .expect("Should have DROP TYPE for dimensions");
+
+            let create_type_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                        if name == "dimensions")
+                })
+                .expect("Should have CREATE TYPE for dimensions");
+
+            // Index must be dropped before type, and created after type
+            assert!(
+                drop_index_pos < drop_type_pos,
+                "DROP INDEX should come before DROP TYPE"
+            );
+            assert!(
+                create_type_pos < create_index_pos,
+                "CREATE TYPE should come before CREATE INDEX"
+            );
+
+            Ok(())
+        })
+        .await
+    })
+    .await
 }

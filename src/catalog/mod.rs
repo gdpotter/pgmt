@@ -3,9 +3,10 @@ use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::diff::grants::is_owner_grant;
 use crate::diff::operations::{GrantOperation, MigrationStep};
 use crate::diff::{
-    constraints as constraints_diff, custom_types as custom_types_diff,
-    functions as functions_diff, policies as policies_diff, tables as tables_diff,
-    triggers as triggers_diff, views as views_diff,
+    aggregates as aggregates_diff, constraints as constraints_diff,
+    custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
+    indexes as indexes_diff, policies as policies_diff, sequences as sequences_diff,
+    tables as tables_diff, triggers as triggers_diff, views as views_diff,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -254,18 +255,39 @@ impl Catalog {
             .find(|t| t.schema == schema && t.table_name == table && t.name == name)
     }
 
-    /// Synthesize DROP and CREATE operations for cascading an object.
+    pub fn find_index(&self, schema: &str, name: &str) -> Option<&index::Index> {
+        self.indexes
+            .iter()
+            .find(|i| i.schema == schema && i.name == name)
+    }
+
+    pub fn find_domain(&self, schema: &str, name: &str) -> Option<&domain::Domain> {
+        self.domains
+            .iter()
+            .find(|d| d.schema == schema && d.name == name)
+    }
+
+    pub fn find_sequence(&self, schema: &str, name: &str) -> Option<&sequence::Sequence> {
+        self.sequences
+            .iter()
+            .find(|s| s.schema == schema && s.name == name)
+    }
+
+    pub fn find_aggregate(
+        &self,
+        schema: &str,
+        name: &str,
+        arguments: &str,
+    ) -> Option<&aggregate::Aggregate> {
+        self.aggregates
+            .iter()
+            .find(|a| a.schema == schema && a.name == name && a.arguments == arguments)
+    }
+
+    /// Synthesize DROP + CREATE steps for cascading a dependent object.
     ///
-    /// This method is used when column type changes require dependent objects to be
-    /// dropped and recreated. Returns None if the object type doesn't support cascading
-    /// or if the object doesn't exist in the new catalog.
-    ///
-    /// This uses the existing per-object diff functions to ensure all associated
-    /// operations (comments, etc.) are included. Grants are also re-applied since
-    /// DROP implicitly revokes them.
-    ///
-    /// When adding a new database object type to pgmt, add a match arm here if the object
-    /// can depend on table columns (e.g., views, functions, triggers, policies).
+    /// Returns `None` if the object type doesn't support cascading or doesn't
+    /// exist in both catalogs. Grants are re-applied since DROP revokes them.
     pub fn synthesize_drop_create(
         &self,
         id: &DbObjectId,
@@ -350,9 +372,43 @@ impl Catalog {
                 steps.extend(custom_types_diff::diff(None, Some(new_type)));
             }
 
-            // Other types don't need cascade support - they either don't depend on
-            // table columns or are handled by regular diff logic
-            _ => return None,
+            DbObjectId::Domain { schema, name } => {
+                let old = self.find_domain(schema, name)?;
+                let new = new_catalog.find_domain(schema, name)?;
+                steps.extend(domains_diff::diff(Some(old), None));
+                steps.extend(domains_diff::diff(None, Some(new)));
+            }
+
+            DbObjectId::Index { schema, name } => {
+                let old = self.find_index(schema, name)?;
+                let new = new_catalog.find_index(schema, name)?;
+                steps.extend(indexes_diff::diff(Some(old), None));
+                steps.extend(indexes_diff::diff(None, Some(new)));
+            }
+
+            DbObjectId::Sequence { schema, name } => {
+                let old = self.find_sequence(schema, name)?;
+                let new = new_catalog.find_sequence(schema, name)?;
+                steps.extend(sequences_diff::diff(Some(old), None));
+                steps.extend(sequences_diff::diff(None, Some(new)));
+            }
+
+            DbObjectId::Aggregate {
+                schema,
+                name,
+                arguments,
+            } => {
+                let old = self.find_aggregate(schema, name, arguments)?;
+                let new = new_catalog.find_aggregate(schema, name, arguments)?;
+                steps.extend(aggregates_diff::diff(Some(old), None));
+                steps.extend(aggregates_diff::diff(None, Some(new)));
+            }
+
+            DbObjectId::Schema { .. }
+            | DbObjectId::Extension { .. }
+            | DbObjectId::Grant { .. }
+            | DbObjectId::Comment { .. }
+            | DbObjectId::Column { .. } => return None,
         }
 
         // Re-grant permissions for the cascaded object.

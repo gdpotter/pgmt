@@ -1,9 +1,13 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
+use pgmt::catalog::Catalog;
 use pgmt::catalog::domain::fetch;
 use pgmt::diff::domains::diff;
-use pgmt::diff::operations::{CommentOperation, DomainOperation, MigrationStep, SqlRenderer};
+use pgmt::diff::operations::{
+    CommentOperation, DomainOperation, MigrationStep, SqlRenderer, TypeOperation,
+};
+use pgmt::diff::{cascade, diff_all, diff_order};
 use pgmt::render::Safety;
 
 #[tokio::test]
@@ -734,4 +738,81 @@ async fn test_domain_sql_rendering() {
     };
     let sql = drop_constraint.to_sql();
     assert!(sql[0].sql.contains("DROP CONSTRAINT"));
+}
+
+#[tokio::test]
+async fn test_domain_cascade_on_base_type_change() -> Result<()> {
+    with_test_db(async |initial_db| {
+        with_test_db(async |target_db| {
+            // Initial: composite type + domain based on it
+            initial_db
+                .execute("CREATE TYPE address AS (street TEXT, city TEXT)")
+                .await;
+            initial_db
+                .execute("CREATE DOMAIN mailing_address AS address")
+                .await;
+
+            // Target: composite type gains a field
+            target_db
+                .execute("CREATE TYPE address AS (street TEXT, city TEXT, zip TEXT)")
+                .await;
+            target_db
+                .execute("CREATE DOMAIN mailing_address AS address")
+                .await;
+
+            let initial_catalog = Catalog::load(initial_db.pool()).await?;
+            let target_catalog = Catalog::load(target_db.pool()).await?;
+
+            let mut steps = diff_all(&initial_catalog, &target_catalog);
+            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
+            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+
+            // Should have DROP + CREATE for domain (cascade) and type
+            let drop_domain_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Domain(DomainOperation::Drop { name, .. })
+                        if name == "mailing_address")
+                })
+                .expect("Should have DROP DOMAIN for mailing_address");
+
+            let create_domain_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Domain(DomainOperation::Create { name, .. })
+                        if name == "mailing_address")
+                })
+                .expect("Should have CREATE DOMAIN for mailing_address");
+
+            let drop_type_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. })
+                        if name == "address")
+                })
+                .expect("Should have DROP TYPE for address");
+
+            let create_type_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                        if name == "address")
+                })
+                .expect("Should have CREATE TYPE for address");
+
+            // Domain must be dropped before type, and created after type
+            assert!(
+                drop_domain_pos < drop_type_pos,
+                "DROP DOMAIN should come before DROP TYPE"
+            );
+            assert!(
+                create_type_pos < create_domain_pos,
+                "CREATE TYPE should come before CREATE DOMAIN"
+            );
+
+            Ok(())
+        })
+        .await
+    })
+    .await
 }
