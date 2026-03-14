@@ -7,7 +7,7 @@ use crate::render::quote_ident;
 #[derive(Debug, Clone)]
 pub struct ConstraintIdentifier {
     pub schema: String,
-    pub table: String,
+    pub table_name: String,
     pub name: String,
 }
 
@@ -15,7 +15,7 @@ impl ConstraintIdentifier {
     pub fn from_constraint(constraint: &Constraint) -> Self {
         Self {
             schema: constraint.schema.clone(),
-            table: constraint.table.clone(),
+            table_name: constraint.table_name.clone(),
             name: constraint.name.clone(),
         }
     }
@@ -23,7 +23,7 @@ impl ConstraintIdentifier {
     pub fn to_db_object_id(&self) -> DbObjectId {
         DbObjectId::Constraint {
             schema: self.schema.clone(),
-            table: self.table.clone(),
+            table: self.table_name.clone(),
             name: self.name.clone(),
         }
     }
@@ -37,7 +37,7 @@ impl CommentTarget for ConstraintIdentifier {
             "{} ON {}.{}",
             quote_ident(&self.name),
             quote_ident(&self.schema),
-            quote_ident(&self.table)
+            quote_ident(&self.table_name)
         )
     }
 

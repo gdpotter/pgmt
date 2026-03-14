@@ -204,7 +204,7 @@ impl Catalog {
     ) -> Option<&constraint::Constraint> {
         self.constraints
             .iter()
-            .find(|c| c.schema == schema && c.table == table && c.name == name)
+            .find(|c| c.schema == schema && c.table_name == table && c.name == name)
     }
 
     pub fn find_function(
@@ -451,78 +451,42 @@ impl Catalog {
     pub fn contains_id(&self, id: &DbObjectId) -> bool {
         match id {
             DbObjectId::Schema { name } => self.schemas.iter().any(|s| &s.name == name),
-            DbObjectId::Table { schema, name } => self
-                .tables
-                .iter()
-                .any(|t| &t.schema == schema && &t.name == name),
-            DbObjectId::View { schema, name } => self
-                .views
-                .iter()
-                .any(|v| &v.schema == schema && &v.name == name),
-            DbObjectId::Type { schema, name } => self
-                .types
-                .iter()
-                .any(|t| &t.schema == schema && &t.name == name),
-            DbObjectId::Domain { schema, name } => self
-                .domains
-                .iter()
-                .any(|d| &d.schema == schema && &d.name == name),
+            DbObjectId::Table { schema, name } => self.find_table(schema, name).is_some(),
+            DbObjectId::View { schema, name } => self.find_view(schema, name).is_some(),
+            DbObjectId::Type { schema, name } => self.find_custom_type(schema, name).is_some(),
+            DbObjectId::Domain { schema, name } => self.find_domain(schema, name).is_some(),
             DbObjectId::Function {
                 schema,
                 name,
                 arguments,
-            } => self
-                .functions
-                .iter()
-                .any(|f| &f.schema == schema && &f.name == name && &f.arguments == arguments),
+            } => self.find_function(schema, name, arguments).is_some(),
             DbObjectId::Aggregate {
                 schema,
                 name,
                 arguments,
-            } => self
-                .aggregates
-                .iter()
-                .any(|a| &a.schema == schema && &a.name == name && &a.arguments == arguments),
-            DbObjectId::Sequence { schema, name } => self
-                .sequences
-                .iter()
-                .any(|s| &s.schema == schema && &s.name == name),
-            DbObjectId::Index { schema, name } => self
-                .indexes
-                .iter()
-                .any(|i| &i.schema == schema && &i.name == name),
+            } => self.find_aggregate(schema, name, arguments).is_some(),
+            DbObjectId::Sequence { schema, name } => self.find_sequence(schema, name).is_some(),
+            DbObjectId::Index { schema, name } => self.find_index(schema, name).is_some(),
             DbObjectId::Constraint {
                 schema,
                 table,
                 name,
-            } => self
-                .constraints
-                .iter()
-                .any(|c| &c.schema == schema && &c.table == table && &c.name == name),
+            } => self.find_constraint(schema, table, name).is_some(),
             DbObjectId::Trigger {
                 schema,
                 table,
                 name,
-            } => self
-                .triggers
-                .iter()
-                .any(|t| &t.schema == schema && &t.table_name == table && &t.name == name),
+            } => self.find_trigger(schema, table, name).is_some(),
             DbObjectId::Policy {
                 schema,
                 table,
                 name,
-            } => self
-                .policies
-                .iter()
-                .any(|p| &p.schema == schema && &p.table_name == table && &p.name == name),
+            } => self.find_policy(schema, table, name).is_some(),
             DbObjectId::Extension { name } => self.extensions.iter().any(|e| &e.name == name),
             DbObjectId::Grant { id } => self.grants.iter().any(|g| &g.id() == id),
             DbObjectId::Comment { object_id } => self.contains_id(object_id),
             // Column resolves to its parent table for containment checks
-            DbObjectId::Column { schema, table, .. } => self
-                .tables
-                .iter()
-                .any(|t| &t.schema == schema && &t.name == table),
+            DbObjectId::Column { schema, table, .. } => self.find_table(schema, table).is_some(),
         }
     }
 }

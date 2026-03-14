@@ -611,17 +611,18 @@ impl SchemaGenerator {
         use crate::diff::operations::ConstraintOperation;
         match op {
             ConstraintOperation::Create(constraint) => {
-                (constraint.schema.clone(), constraint.table.clone())
+                (constraint.schema.clone(), constraint.table_name.clone())
             }
-            ConstraintOperation::Drop(constraint_id) => {
-                (constraint_id.schema.clone(), constraint_id.table.clone())
-            }
+            ConstraintOperation::Drop(constraint_id) => (
+                constraint_id.schema.clone(),
+                constraint_id.table_name.clone(),
+            ),
             ConstraintOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.table.clone())
+                    (target.schema.clone(), target.table_name.clone())
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.table.clone())
+                    (target.schema.clone(), target.table_name.clone())
                 }
             },
         }

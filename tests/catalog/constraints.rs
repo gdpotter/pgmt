@@ -15,7 +15,7 @@ async fn test_fetch_unique_constraint() -> Result<()> {
 
         let constraint = &constraints[0];
         assert_eq!(constraint.schema, "public");
-        assert_eq!(constraint.table, "users");
+        assert_eq!(constraint.table_name, "users");
         assert!(constraint.name.contains("email"));
 
         match &constraint.constraint_type {
@@ -45,7 +45,7 @@ async fn test_fetch_foreign_key_constraint() -> Result<()> {
             .expect("Should have foreign key constraint");
 
         assert_eq!(fk_constraint.schema, "public");
-        assert_eq!(fk_constraint.table, "orders");
+        assert_eq!(fk_constraint.table_name, "orders");
 
         match &fk_constraint.constraint_type {
             ConstraintType::ForeignKey {
@@ -86,7 +86,7 @@ async fn test_fetch_check_constraint() -> Result<()> {
 
         let constraint = &constraints[0];
         assert_eq!(constraint.schema, "public");
-        assert_eq!(constraint.table, "products");
+        assert_eq!(constraint.table_name, "products");
         assert!(constraint.name.contains("check"));
 
         match &constraint.constraint_type {
@@ -125,7 +125,7 @@ async fn test_fetch_exclusion_constraint() -> Result<()> {
 
         let constraint = &constraints[0];
         assert_eq!(constraint.schema, "public");
-        assert_eq!(constraint.table, "reservations");
+        assert_eq!(constraint.table_name, "reservations");
         assert!(constraint.name.contains("excl"));
 
         match &constraint.constraint_type {

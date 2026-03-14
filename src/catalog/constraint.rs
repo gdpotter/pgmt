@@ -38,7 +38,7 @@ pub enum ConstraintType {
 #[derive(Debug, Clone)]
 pub struct Constraint {
     pub schema: String,
-    pub table: String,
+    pub table_name: String,
     pub name: String,
     pub constraint_type: ConstraintType,
     pub comment: Option<String>,
@@ -49,7 +49,7 @@ impl Constraint {
     pub fn id(&self) -> DbObjectId {
         DbObjectId::Constraint {
             schema: self.schema.clone(),
-            table: self.table.clone(),
+            table: self.table_name.clone(),
             name: self.name.clone(),
         }
     }
@@ -307,7 +307,7 @@ fn build_constraint_from_row(row: ConstraintRow) -> Result<Constraint> {
 
     Ok(Constraint {
         schema: row.schema_name,
-        table: row.table_name,
+        table_name: row.table_name,
         name: row.constraint_name,
         constraint_type,
         comment: row.constraint_comment,

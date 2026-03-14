@@ -120,9 +120,9 @@ impl ObjectFilter {
             .retain(|index| self.should_include_table(&index.schema, &index.table_name));
 
         // Filter constraints by table inclusion
-        catalog
-            .constraints
-            .retain(|constraint| self.should_include_table(&constraint.schema, &constraint.table));
+        catalog.constraints.retain(|constraint| {
+            self.should_include_table(&constraint.schema, &constraint.table_name)
+        });
 
         // Filter triggers by table inclusion
         catalog

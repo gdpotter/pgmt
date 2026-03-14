@@ -361,7 +361,7 @@ fn fk_constraints_affected_by_type_changes(
         } = &constraint.constraint_type
         {
             // Check if any referencing column is being type-changed
-            let table_key = (constraint.schema.clone(), constraint.table.clone());
+            let table_key = (constraint.schema.clone(), constraint.table_name.clone());
             if let Some(changing_cols) = columns_changing.get(&table_key)
                 && columns.iter().any(|col| changing_cols.contains(col))
             {

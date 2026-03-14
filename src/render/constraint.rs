@@ -16,7 +16,7 @@ impl SqlRenderer for ConstraintOperation {
                 vec![RenderedSql::new(
                     crate::render::sql::render_drop_constraint(
                         &identifier.schema,
-                        &identifier.table,
+                        &identifier.table_name,
                         &identifier.name,
                     ),
                 )]
@@ -44,7 +44,7 @@ mod tests {
     fn create_unique_constraint() -> Constraint {
         Constraint {
             schema: "public".to_string(),
-            table: "users".to_string(),
+            table_name: "users".to_string(),
             name: "users_email_key".to_string(),
             constraint_type: ConstraintType::Unique {
                 columns: vec!["email".to_string()],
@@ -57,7 +57,7 @@ mod tests {
     fn create_fk_constraint() -> Constraint {
         Constraint {
             schema: "public".to_string(),
-            table: "orders".to_string(),
+            table_name: "orders".to_string(),
             name: "orders_user_id_fkey".to_string(),
             constraint_type: ConstraintType::ForeignKey {
                 columns: vec!["user_id".to_string()],
@@ -102,7 +102,7 @@ mod tests {
     fn test_render_drop_constraint() {
         let identifier = ConstraintIdentifier {
             schema: "public".to_string(),
-            table: "users".to_string(),
+            table_name: "users".to_string(),
             name: "users_email_key".to_string(),
         };
         let op = ConstraintOperation::Drop(identifier);

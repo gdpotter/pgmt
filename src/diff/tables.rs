@@ -52,7 +52,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                     CommentOperation::Set {
                         target: ConstraintIdentifier {
                             schema: n.schema.clone(),
-                            table: n.name.clone(),
+                            table_name: n.name.clone(),
                             name: pk.name.clone(),
                         },
                         comment: comment.clone(),
@@ -198,7 +198,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                     // Primary key structure is the same but comment changed
                     let identifier = ConstraintIdentifier {
                         schema: n.schema.clone(),
-                        table: n.name.clone(),
+                        table_name: n.name.clone(),
                         name: n_pk.name.clone(),
                     };
 

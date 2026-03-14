@@ -12,7 +12,7 @@ fn test_shared_constraint_rendering_check_consistency() -> Result<()> {
     // Test CHECK constraint with simple expression (should be wrapped in CHECK)
     let constraint = Constraint {
         schema: "public".to_string(),
-        table: "users".to_string(),
+        table_name: "users".to_string(),
         name: "users_age_check".to_string(),
         constraint_type: ConstraintType::Check {
             expression: "age >= 0 AND age <= 150".to_string(),
@@ -48,7 +48,7 @@ fn test_shared_constraint_rendering_check_keyword_handling() -> Result<()> {
     // Test CHECK constraint with expression that already includes CHECK keyword
     let constraint = Constraint {
         schema: "public".to_string(),
-        table: "products".to_string(),
+        table_name: "products".to_string(),
         name: "products_price_check".to_string(),
         constraint_type: ConstraintType::Check {
             expression: "CHECK (price > 0::numeric)".to_string(),
@@ -78,7 +78,7 @@ fn test_shared_constraint_rendering_check_keyword_handling() -> Result<()> {
 fn test_shared_constraint_rendering_foreign_key_consistency() -> Result<()> {
     let constraint = Constraint {
         schema: "public".to_string(),
-        table: "posts".to_string(),
+        table_name: "posts".to_string(),
         name: "posts_user_id_fkey".to_string(),
         constraint_type: ConstraintType::ForeignKey {
             columns: vec!["user_id".to_string()],
@@ -132,7 +132,7 @@ fn test_shared_constraint_rendering_foreign_key_consistency() -> Result<()> {
 fn test_shared_constraint_rendering_unique_consistency() -> Result<()> {
     let constraint = Constraint {
         schema: "public".to_string(),
-        table: "users".to_string(),
+        table_name: "users".to_string(),
         name: "users_email_unique".to_string(),
         constraint_type: ConstraintType::Unique {
             columns: vec!["email".to_string(), "tenant_id".to_string()],
@@ -161,7 +161,7 @@ fn test_shared_constraint_rendering_unique_consistency() -> Result<()> {
 fn test_shared_constraint_rendering_exclusion_consistency() -> Result<()> {
     let constraint = Constraint {
         schema: "public".to_string(),
-        table: "reservations".to_string(),
+        table_name: "reservations".to_string(),
         name: "reservations_overlap_excl".to_string(),
         constraint_type: ConstraintType::Exclusion {
             elements: vec![

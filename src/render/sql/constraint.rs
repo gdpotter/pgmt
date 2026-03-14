@@ -18,7 +18,7 @@ pub fn render_create_constraint(constraint: &Constraint) -> String {
     let table_name = format!(
         "{}.{}",
         quote_ident(&constraint.schema),
-        quote_ident(&constraint.table)
+        quote_ident(&constraint.table_name)
     );
 
     let constraint_def = match &constraint.constraint_type {
@@ -144,7 +144,7 @@ mod tests {
     fn test_render_unique_constraint() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "users".to_string(),
+            table_name: "users".to_string(),
             name: "users_email_unique".to_string(),
             constraint_type: ConstraintType::Unique {
                 columns: vec!["email".to_string()],
@@ -164,7 +164,7 @@ mod tests {
     fn test_render_unique_constraint_multiple_columns() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "user_roles".to_string(),
+            table_name: "user_roles".to_string(),
             name: "user_roles_unique".to_string(),
             constraint_type: ConstraintType::Unique {
                 columns: vec!["user_id".to_string(), "role_id".to_string()],
@@ -184,7 +184,7 @@ mod tests {
     fn test_render_foreign_key_basic() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "posts".to_string(),
+            table_name: "posts".to_string(),
             name: "posts_user_id_fkey".to_string(),
             constraint_type: ConstraintType::ForeignKey {
                 columns: vec!["user_id".to_string()],
@@ -211,7 +211,7 @@ mod tests {
     fn test_render_foreign_key_with_actions() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "posts".to_string(),
+            table_name: "posts".to_string(),
             name: "posts_user_id_fkey".to_string(),
             constraint_type: ConstraintType::ForeignKey {
                 columns: vec!["user_id".to_string()],
@@ -238,7 +238,7 @@ mod tests {
     fn test_render_check_constraint_simple_expression() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "users".to_string(),
+            table_name: "users".to_string(),
             name: "users_age_check".to_string(),
             constraint_type: ConstraintType::Check {
                 expression: "age >= 0".to_string(),
@@ -258,7 +258,7 @@ mod tests {
     fn test_render_check_constraint_with_check_keyword() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "users".to_string(),
+            table_name: "users".to_string(),
             name: "users_age_check".to_string(),
             constraint_type: ConstraintType::Check {
                 expression: "CHECK (age >= 0 AND age <= 150)".to_string(),
@@ -278,7 +278,7 @@ mod tests {
     fn test_render_exclusion_constraint() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "reservations".to_string(),
+            table_name: "reservations".to_string(),
             name: "reservations_time_overlap_excl".to_string(),
             constraint_type: ConstraintType::Exclusion {
                 elements: vec![
@@ -305,7 +305,7 @@ mod tests {
     fn test_render_exclusion_constraint_with_predicate() {
         let constraint = Constraint {
             schema: "public".to_string(),
-            table: "bookings".to_string(),
+            table_name: "bookings".to_string(),
             name: "active_bookings_excl".to_string(),
             constraint_type: ConstraintType::Exclusion {
                 elements: vec![

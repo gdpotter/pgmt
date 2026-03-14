@@ -147,7 +147,7 @@ mod tests {
     fn test_foreign_key_diff() {
         let old_fk = Constraint {
             schema: "public".to_string(),
-            table: "orders".to_string(),
+            table_name: "orders".to_string(),
             name: "orders_user_id_fkey".to_string(),
             constraint_type: ConstraintType::ForeignKey {
                 columns: vec!["user_id".to_string()],
@@ -174,7 +174,7 @@ mod tests {
 
         let new_fk = Constraint {
             schema: "public".to_string(),
-            table: "orders".to_string(),
+            table_name: "orders".to_string(),
             name: "orders_user_id_fkey".to_string(),
             constraint_type: ConstraintType::ForeignKey {
                 columns: vec!["user_id".to_string()],
