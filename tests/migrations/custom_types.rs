@@ -3,9 +3,11 @@ use crate::helpers::migration::MigrationTestHelper;
 
 use anyhow::Result;
 
+use pgmt::catalog::Catalog;
 use pgmt::catalog::custom_type::{TypeKind, fetch};
 use pgmt::diff::custom_types::diff;
 use pgmt::diff::operations::{CommentOperation, MigrationStep, SqlRenderer, TypeOperation};
+use pgmt::diff::{cascade, diff_all, diff_order};
 
 #[tokio::test]
 async fn test_create_enum_migration() -> Result<()> {
@@ -555,4 +557,147 @@ async fn test_drop_type_comment_migration() -> Result<()> {
     ).await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_composite_type_cascades_to_dependent_composite_type() -> Result<()> {
+    with_test_db(async |initial_db| {
+        with_test_db(async |target_db| {
+            // Initial state: field_value_input composite type, and actionable_field_input
+            // that depends on it via an array reference
+            initial_db
+                .execute(
+                    "CREATE TYPE field_value_input AS (
+                        key TEXT,
+                        value TEXT
+                    )",
+                )
+                .await;
+            initial_db
+                .execute(
+                    "CREATE TYPE actionable_field_input AS (
+                        field_name TEXT,
+                        values field_value_input[]
+                    )",
+                )
+                .await;
+
+            // Target state: field_value_input has an added attribute
+            target_db
+                .execute(
+                    "CREATE TYPE field_value_input AS (
+                        key TEXT,
+                        value TEXT,
+                        label TEXT
+                    )",
+                )
+                .await;
+            target_db
+                .execute(
+                    "CREATE TYPE actionable_field_input AS (
+                        field_name TEXT,
+                        values field_value_input[]
+                    )",
+                )
+                .await;
+
+            // Load catalogs
+            let initial_catalog = Catalog::load(initial_db.pool()).await?;
+            let target_catalog = Catalog::load(target_db.pool()).await?;
+
+            // Run full migration pipeline
+            let mut steps = diff_all(&initial_catalog, &target_catalog);
+            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
+            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+
+            // Should have DROP + CREATE for both types (4 steps minimum)
+            assert!(
+                steps.len() >= 4,
+                "Expected at least 4 steps (drop+create for each type), got {}",
+                steps.len()
+            );
+
+            // Find positions of key steps
+            let drop_dependent_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. })
+                    if name == "actionable_field_input")
+                })
+                .expect("Should have DROP for dependent type actionable_field_input");
+
+            let drop_base_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. })
+                    if name == "field_value_input")
+                })
+                .expect("Should have DROP for base type field_value_input");
+
+            let create_base_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                    if name == "field_value_input")
+                })
+                .expect("Should have CREATE for base type field_value_input");
+
+            let create_dependent_pos = steps
+                .iter()
+                .position(|s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                    if name == "actionable_field_input")
+                })
+                .expect("Should have CREATE for dependent type actionable_field_input");
+
+            // Verify correct ordering:
+            // 1. Drop dependent first
+            // 2. Drop base
+            // 3. Create base
+            // 4. Create dependent last
+            assert!(
+                drop_dependent_pos < drop_base_pos,
+                "Dependent type should be dropped before base type"
+            );
+            assert!(
+                drop_base_pos < create_base_pos,
+                "Base type should be dropped before being recreated"
+            );
+            assert!(
+                create_base_pos < create_dependent_pos,
+                "Base type should be created before dependent type"
+            );
+
+            // Apply migration to initial DB
+            for step in &steps {
+                let sql_list = step.to_sql();
+                for rendered in sql_list {
+                    initial_db.execute(&rendered.sql).await;
+                }
+            }
+
+            // Verify final state
+            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            assert_eq!(final_catalog.types.len(), 2);
+
+            let base_type = final_catalog
+                .types
+                .iter()
+                .find(|t| t.name == "field_value_input")
+                .expect("field_value_input should exist");
+            assert_eq!(base_type.composite_attributes.len(), 3);
+            assert_eq!(base_type.composite_attributes[2].name, "label");
+
+            let dependent_type = final_catalog
+                .types
+                .iter()
+                .find(|t| t.name == "actionable_field_input")
+                .expect("actionable_field_input should exist");
+            assert_eq!(dependent_type.composite_attributes.len(), 2);
+
+            Ok(())
+        })
+        .await
+    })
+    .await
 }

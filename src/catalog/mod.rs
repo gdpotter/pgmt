@@ -3,8 +3,9 @@ use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::diff::grants::is_owner_grant;
 use crate::diff::operations::{GrantOperation, MigrationStep};
 use crate::diff::{
-    constraints as constraints_diff, functions as functions_diff, policies as policies_diff,
-    tables as tables_diff, triggers as triggers_diff, views as views_diff,
+    constraints as constraints_diff, custom_types as custom_types_diff,
+    functions as functions_diff, policies as policies_diff, tables as tables_diff,
+    triggers as triggers_diff, views as views_diff,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -236,6 +237,12 @@ impl Catalog {
         })
     }
 
+    pub fn find_custom_type(&self, schema: &str, name: &str) -> Option<&custom_type::CustomType> {
+        self.types
+            .iter()
+            .find(|t| t.schema == schema && t.name == name)
+    }
+
     pub fn find_trigger(
         &self,
         schema: &str,
@@ -333,6 +340,14 @@ impl Catalog {
 
                 steps.extend(triggers_diff::diff(Some(old_trigger), None));
                 steps.extend(triggers_diff::diff(None, Some(new_trigger)));
+            }
+
+            DbObjectId::Type { schema, name } => {
+                let old_type = self.find_custom_type(schema, name)?;
+                let new_type = new_catalog.find_custom_type(schema, name)?;
+
+                steps.extend(custom_types_diff::diff(Some(old_type), None));
+                steps.extend(custom_types_diff::diff(None, Some(new_type)));
             }
 
             // Other types don't need cascade support - they either don't depend on
