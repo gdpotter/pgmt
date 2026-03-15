@@ -63,36 +63,6 @@ fn validate_section(section: &MigrationSection) -> Result<()> {
         }
     }
 
-    // Validate batch config
-    if let Some(batch) = &section.batch_config {
-        if batch.size == 0 {
-            return Err(anyhow!(
-                "Section '{}' (line {}) has zero batch size",
-                section.name,
-                section.start_line
-            ));
-        }
-
-        if batch.size > 1_000_000 {
-            return Err(anyhow!(
-                "Section '{}' (line {}) has excessive batch size: {} (max: 1,000,000)",
-                section.name,
-                section.start_line,
-                batch.size
-            ));
-        }
-
-        // Batch processing requires autocommit mode
-        if section.mode != TransactionMode::Autocommit {
-            return Err(anyhow!(
-                "Section '{}' (line {}) has batch_size but mode is not 'autocommit'. \
-                 Batch processing requires autocommit mode to commit each batch independently.",
-                section.name,
-                section.start_line
-            ));
-        }
-    }
-
     // Validate SQL is not empty
     if section.sql.trim().is_empty() {
         return Err(anyhow!(
@@ -161,23 +131,6 @@ CREATE INDEX CONCURRENTLY idx_test ON users(email);
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("CONCURRENTLY"));
         assert!(err_msg.contains("non-transactional"));
-    }
-
-    #[test]
-    fn test_validate_batch_without_autocommit() {
-        let sql = r#"
--- pgmt:section name="test"
--- pgmt:  mode="transactional"
--- pgmt:  timeout="30s"
--- pgmt:  batch_size="5000"
-UPDATE users SET status = 'active';
-"#;
-
-        let sections = parse_migration_sections(Path::new("test.sql"), sql).unwrap();
-        let result = validate_sections(&sections);
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("autocommit"));
     }
 
     #[test]

@@ -14,14 +14,14 @@ pub struct MigrationSection {
     /// Transaction mode for this section
     pub mode: TransactionMode,
 
-    /// Maximum execution time for this section
+    /// Maximum execution time for this section (statement_timeout)
     pub timeout: Duration,
+
+    /// Maximum time to wait for locks (lock_timeout)
+    pub lock_timeout: Option<Duration>,
 
     /// Retry configuration (optional)
     pub retry_config: Option<RetryConfig>,
-
-    /// Batch processing configuration (optional)
-    pub batch_config: Option<BatchConfig>,
 
     /// The SQL to execute for this section
     pub sql: String,
@@ -75,16 +75,6 @@ pub enum LockTimeoutAction {
 
     /// Retry according to retry_config
     Retry,
-}
-
-/// Batch processing configuration
-#[derive(Debug, Clone, PartialEq)]
-pub struct BatchConfig {
-    /// Number of rows to process per batch
-    pub size: usize,
-
-    /// Optional delay between batches
-    pub delay: Option<Duration>,
 }
 
 impl Default for RetryConfig {
@@ -152,8 +142,8 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
             description: None,
             mode: TransactionMode::Transactional,
             timeout: Duration::from_secs(600), // 10 minute default
+            lock_timeout: None,
             retry_config: None,
-            batch_config: None,
             sql: sql.to_string(),
             start_line: 1,
         });
@@ -178,8 +168,7 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
             "retry_delay" => builder.retry_delay = Some(parse_duration(&value)?),
             "retry_backoff" => builder.retry_backoff = Some(parse_backoff(&value)?),
             "on_lock_timeout" => builder.on_lock_timeout = Some(parse_lock_action(&value)?),
-            "batch_size" => builder.batch_size = Some(value.parse()?),
-            "batch_delay" => builder.batch_delay = Some(parse_duration(&value)?),
+            "lock_timeout" => builder.lock_timeout = Some(parse_duration(&value)?),
             _ => {
                 return Err(anyhow!(
                     "Unknown section attribute '{}' at line {}",
@@ -336,12 +325,11 @@ struct SectionBuilder {
     description: Option<String>,
     mode: Option<TransactionMode>,
     timeout: Option<Duration>,
+    lock_timeout: Option<Duration>,
     retry_attempts: Option<u32>,
     retry_delay: Option<Duration>,
     retry_backoff: Option<BackoffStrategy>,
     on_lock_timeout: Option<LockTimeoutAction>,
-    batch_size: Option<usize>,
-    batch_delay: Option<Duration>,
 }
 
 impl SectionBuilder {
@@ -352,12 +340,11 @@ impl SectionBuilder {
             description: None,
             mode: None,
             timeout: None,
+            lock_timeout: None,
             retry_attempts: None,
             retry_delay: None,
             retry_backoff: None,
             on_lock_timeout: None,
-            batch_size: None,
-            batch_delay: None,
         }
     }
 
@@ -389,19 +376,13 @@ impl SectionBuilder {
             None
         };
 
-        // Build batch config if specified
-        let batch_config = self.batch_size.map(|size| BatchConfig {
-            size,
-            delay: self.batch_delay,
-        });
-
         Ok(MigrationSection {
             name,
             description: self.description,
             mode,
             timeout,
+            lock_timeout: self.lock_timeout,
             retry_config,
-            batch_config,
             sql: sql.trim().to_string(),
             start_line: self.start_line,
         })
@@ -562,20 +543,17 @@ ALTER TABLE users ADD COLUMN test TEXT;
     }
 
     #[test]
-    fn test_parse_section_with_batch_config() {
+    fn test_parse_section_with_lock_timeout() {
         let sql = r#"
--- pgmt:section name="batch_update"
--- pgmt:  mode="autocommit"
--- pgmt:  timeout="1h"
--- pgmt:  batch_size="5000"
--- pgmt:  batch_delay="100ms"
-UPDATE users SET status = 'active' WHERE status IS NULL;
+-- pgmt:section name="add_column"
+-- pgmt:  mode="transactional"
+-- pgmt:  timeout="30s"
+-- pgmt:  lock_timeout="2s"
+ALTER TABLE users ADD COLUMN status TEXT;
 "#;
 
         let sections = parse_migration_sections(Path::new("test.sql"), sql).unwrap();
-        let batch = sections[0].batch_config.as_ref().unwrap();
-        assert_eq!(batch.size, 5000);
-        assert_eq!(batch.delay, Some(Duration::from_millis(100)));
+        assert_eq!(sections[0].lock_timeout, Some(Duration::from_secs(2)));
     }
 
     #[test]

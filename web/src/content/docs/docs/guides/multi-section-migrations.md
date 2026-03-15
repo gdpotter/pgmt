@@ -30,7 +30,8 @@ ALTER TABLE users ALTER COLUMN status SET NOT NULL;
 -- pgmt:section name="add_column"
 ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';
 
--- pgmt:section name="create_index" mode="non-transactional" retry_attempts="10" retry_delay="5s"
+-- pgmt:section name="create_index" mode="non-transactional" lock_timeout="2s" retry_attempts="10" retry_delay="5s" on_lock_timeout="retry"
+DROP INDEX CONCURRENTLY IF EXISTS idx_users_status;
 CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 
 -- pgmt:section name="add_constraint"
@@ -59,7 +60,8 @@ Each section can have its own transaction mode, timeout, and retry logic. Sectio
 | ----------------- | --------------- | ----------------------------------------------------- |
 | `name`            | required        | Section identifier                                    |
 | `mode`            | `transactional` | `transactional`, `non-transactional`, or `autocommit` |
-| `timeout`         | `600s`          | Max execution time per attempt                        |
+| `timeout`         | `600s`          | Max execution time (`statement_timeout`)               |
+| `lock_timeout`    | none            | Max time to wait for locks (`lock_timeout`)            |
 | `retry_attempts`  | `1`             | Number of attempts                                    |
 | `retry_delay`     | `0s`            | Wait between retries                                  |
 | `retry_backoff`   | `none`          | `none` or `exponential`                               |
@@ -89,23 +91,26 @@ No transaction wrapper. Required for concurrent operations.
 
 ```sql
 -- pgmt:section name="concurrent_index" mode="non-transactional" retry_attempts="10" retry_delay="5s"
+DROP INDEX CONCURRENTLY IF EXISTS idx_users_email;
 CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
 ```
 
 Use for: `CREATE INDEX CONCURRENTLY`, `ALTER TYPE ... ADD VALUE`, long-running operations.
 
-Note: No automatic rollback. If it fails partway, you may need manual cleanup.
+:::caution
+A failed `CREATE INDEX CONCURRENTLY` leaves an **invalid index** behind. If pgmt retries, the retry will fail with "relation already exists". Always include `DROP INDEX CONCURRENTLY IF EXISTS` before `CREATE INDEX CONCURRENTLY` to ensure retries work correctly.
+:::
 
 ### `autocommit`
 
-Each statement commits independently. Good for batched operations.
+Each statement commits independently.
 
 ```sql
 -- pgmt:section name="backfill" mode="autocommit" timeout="30m"
 UPDATE users SET status = 'active' WHERE status IS NULL;
 ```
 
-Use for: large updates where you want progress saved incrementally.
+Use for: large updates, operations where you don't need transactional atomicity.
 
 ## Retry Logic
 
@@ -114,14 +119,19 @@ Concurrent operations often fail due to lock contention. Add retry logic:
 ```sql
 -- pgmt:section name="create_index"
 -- pgmt:  mode="non-transactional"
--- pgmt:  timeout="2s"
+-- pgmt:  lock_timeout="2s"
 -- pgmt:  retry_attempts="10"
 -- pgmt:  retry_delay="5s"
 -- pgmt:  on_lock_timeout="retry"
+DROP INDEX CONCURRENTLY IF EXISTS idx_users_status;
 CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 ```
 
-Execution: Try with 2s timeout → if lock timeout, wait 5s → retry up to 10 times.
+Execution: Try with 2s lock timeout → if lock timeout, wait 5s → retry up to 10 times.
+
+:::tip
+`lock_timeout` controls how long to wait for a lock before giving up (PostgreSQL `lock_timeout`). This is different from `timeout` which controls total execution time (PostgreSQL `statement_timeout`). For lock-sensitive operations, use `lock_timeout` with `on_lock_timeout="retry"`.
+:::
 
 ### Exponential Backoff
 
@@ -166,14 +176,15 @@ pgmt migrate status --sections
 -- pgmt:section name="add_nullable_column" timeout="5s"
 ALTER TABLE orders ADD COLUMN priority TEXT;
 
--- pgmt:section name="backfill" mode="autocommit" timeout="30m" batch_size="10000"
+-- pgmt:section name="backfill" mode="autocommit" timeout="30m"
 UPDATE orders SET priority = CASE
     WHEN total > 1000 THEN 'high'
     WHEN total > 100 THEN 'medium'
     ELSE 'low'
 END WHERE priority IS NULL;
 
--- pgmt:section name="create_index" mode="non-transactional" retry_attempts="15" retry_delay="10s"
+-- pgmt:section name="create_index" mode="non-transactional" lock_timeout="2s" retry_attempts="15" retry_delay="10s" on_lock_timeout="retry"
+DROP INDEX CONCURRENTLY IF EXISTS idx_orders_priority;
 CREATE INDEX CONCURRENTLY idx_orders_priority ON orders(priority);
 
 -- pgmt:section name="add_constraint" timeout="10s"
@@ -187,7 +198,7 @@ Why: Add nullable first (fast), backfill data, create index without blocking wri
 `ALTER TYPE ... ADD VALUE` cannot run in a transaction:
 
 ```sql
--- pgmt:section name="add_enum_value" mode="non-transactional" retry_attempts="5" retry_delay="3s"
+-- pgmt:section name="add_enum_value" mode="non-transactional" lock_timeout="2s" retry_attempts="5" retry_delay="3s" on_lock_timeout="retry"
 ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'moderator';
 
 -- pgmt:section name="update_users" timeout="5m"
@@ -220,6 +231,12 @@ pgmt migrate validate --sections
 
 - pgmt tracks progress - just run `migrate apply` again
 - Use `--force-restart` only if you need to re-run from scratch
+
+**"relation already exists" on retry of `CREATE INDEX CONCURRENTLY`:**
+
+- A failed `CREATE INDEX CONCURRENTLY` leaves an invalid index behind
+- Add `DROP INDEX CONCURRENTLY IF EXISTS <index_name>;` before the `CREATE` statement
+- This ensures retries (and re-runs via `migrate apply`) work correctly
 
 **"Cannot use CONCURRENTLY in transaction":**
 

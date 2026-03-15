@@ -6,6 +6,7 @@ use crate::migration::section_parser::{
 use crate::migration_tracking::section_tracking::*;
 use crate::progress::SectionReporter;
 use anyhow::Result;
+use sqlx::postgres::PgDatabaseError;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 
@@ -112,16 +113,21 @@ impl SectionExecutor {
         )
         .await?;
 
-        // Set statement timeout
-        let timeout_ms = section.timeout.as_millis();
-
         // Begin transaction
         let mut tx = self.pool.begin().await?;
 
-        // Set timeout for this transaction
+        // Set timeouts for this transaction
+        let timeout_ms = section.timeout.as_millis();
         sqlx::query(&format!("SET LOCAL statement_timeout = '{}'", timeout_ms))
             .execute(&mut *tx)
             .await?;
+
+        if let Some(lock_timeout) = section.lock_timeout {
+            let lock_timeout_ms = lock_timeout.as_millis();
+            sqlx::query(&format!("SET LOCAL lock_timeout = '{}'", lock_timeout_ms))
+                .execute(&mut *tx)
+                .await?;
+        }
 
         // Execute SQL - use raw execute to support multiple statements
         use sqlx::Executor;
@@ -191,11 +197,18 @@ impl SectionExecutor {
         for attempt in 1..=retry_config.attempts {
             self.reporter.attempt(attempt, retry_config.attempts);
 
-            // Set statement timeout for this attempt
+            // Set timeouts for this attempt
             let timeout_ms = section.timeout.as_millis();
             sqlx::query(&format!("SET statement_timeout = '{}'", timeout_ms))
                 .execute(&self.pool)
                 .await?;
+
+            if let Some(lock_timeout) = section.lock_timeout {
+                let lock_timeout_ms = lock_timeout.as_millis();
+                sqlx::query(&format!("SET lock_timeout = '{}'", lock_timeout_ms))
+                    .execute(&self.pool)
+                    .await?;
+            }
 
             // Execute SQL - use raw execute to support multiple statements
             use sqlx::Executor;
@@ -225,7 +238,8 @@ impl SectionExecutor {
                     return Ok(());
                 }
                 Err(e) => {
-                    let is_lock_timeout = is_lock_timeout_error(&e);
+                    let is_lock_timeout =
+                        classify_timeout_error(&e) == Some(TimeoutKind::Lock);
                     let should_retry = attempt < retry_config.attempts
                         && (retry_config.on_lock_timeout == LockTimeoutAction::Retry
                             || !is_lock_timeout);
@@ -275,7 +289,19 @@ impl SectionExecutor {
         )
         .await?;
 
-        // For now, execute normally without batching
+        // Set timeouts
+        let timeout_ms = section.timeout.as_millis();
+        sqlx::query(&format!("SET statement_timeout = '{}'", timeout_ms))
+            .execute(&self.pool)
+            .await?;
+
+        if let Some(lock_timeout) = section.lock_timeout {
+            let lock_timeout_ms = lock_timeout.as_millis();
+            sqlx::query(&format!("SET lock_timeout = '{}'", lock_timeout_ms))
+                .execute(&self.pool)
+                .await?;
+        }
+
         let result = sqlx::query(&section.sql)
             .execute(&self.pool)
             .await
@@ -323,10 +349,27 @@ impl SectionExecutor {
     }
 }
 
-/// Check if error is a lock timeout
-fn is_lock_timeout_error(error: &sqlx::Error) -> bool {
-    let err_str = error.to_string().to_lowercase();
-    err_str.contains("timeout") || err_str.contains("lock")
+/// PostgreSQL error classification for timeout errors
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeoutKind {
+    /// Lock not available (error code 55P03)
+    Lock,
+    /// Query/statement cancelled (error code 57014)
+    Statement,
+}
+
+/// Classify a timeout error using PostgreSQL error codes
+fn classify_timeout_error(error: &sqlx::Error) -> Option<TimeoutKind> {
+    if let Some(db_error) = error.as_database_error()
+        && let Some(pg_error) = db_error.try_downcast_ref::<PgDatabaseError>()
+    {
+        return match pg_error.code() {
+            "55P03" => Some(TimeoutKind::Lock),
+            "57014" => Some(TimeoutKind::Statement),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// Calculate retry delay with optional exponential backoff
@@ -345,22 +388,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_lock_timeout_error() {
-        // Test the string matching logic
-        // Real database lock errors will contain "lock" or "timeout" in their messages
-        // For unit testing, we verify the logic works correctly
+    fn test_classify_timeout_error_non_database_errors() {
+        // Non-database errors should return None
+        let config_error = sqlx::Error::Configuration("statement timeout".into());
+        assert_eq!(classify_timeout_error(&config_error), None);
 
-        // Configuration error with "timeout" keyword should be detected
-        let timeout_error = sqlx::Error::Configuration("statement timeout".into());
-        assert!(is_lock_timeout_error(&timeout_error));
+        let other_error = sqlx::Error::Configuration("lock not available".into());
+        assert_eq!(classify_timeout_error(&other_error), None);
 
-        // Configuration error with "lock" keyword should be detected
-        let lock_error = sqlx::Error::Configuration("lock not available".into());
-        assert!(is_lock_timeout_error(&lock_error));
-
-        // Error without keywords should not be detected
-        let other_error = sqlx::Error::Configuration("invalid syntax".into());
-        assert!(!is_lock_timeout_error(&other_error));
+        let syntax_error = sqlx::Error::Configuration("invalid syntax".into());
+        assert_eq!(classify_timeout_error(&syntax_error), None);
     }
 
     #[test]
