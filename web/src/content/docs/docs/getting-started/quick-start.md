@@ -3,7 +3,7 @@ title: Quick Start
 description: See why pgmt is different in 10 minutes. Install, create schema, and experience automatic dependency handling.
 ---
 
-Get started with pgmt in 10 minutes and see what makes it different from other migration tools.
+By the end of this guide, you'll change one file and watch pgmt automatically cascade changes through your entire dependency graph. Takes about 10 minutes.
 
 ## Install pgmt
 

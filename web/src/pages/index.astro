@@ -62,36 +62,33 @@ import { links } from '../config/links';
             marginX: 'auto',
           })}
         >
-          A schema-as-code tool for PostgreSQL with dependency tracking, instant
-          apply, and production-ready migrations.
+          Your schema files are the source of truth. pgmt tracks dependencies,
+          applies changes instantly, and generates production-ready migrations.
         </p>
       </div>
 
-      <!-- Demo terminal -->
+      <!-- Demo gif -->
       <div class={css({ marginBottom: 'lg' })}>
-        <Terminal title="terminal">
-          <pre><span class="prompt">$</span> git diff schema/functions/calculate_score.sql
-  CREATE OR REPLACE FUNCTION calculate_score(
-<span class="removed">-   user_id INTEGER</span>
-<span class="added">+   user_id INTEGER,</span>
-<span class="added">+   include_bonus BOOLEAN DEFAULT false</span>
-  )
-
-<span class="prompt">$</span> pgmt apply
-
-📋 8 changes
-
-  ✓ Drop view public.executive_dashboard
-  ✓ Drop view public.daily_stats
-  ✓ Drop view public.user_rankings
-  ✓ Update function public.calculate_score(integer)
-  ✓ Create function public.calculate_score(integer, boolean)
-  ✓ Create view public.user_rankings
-  ✓ Create view public.daily_stats
-  ✓ Create view public.executive_dashboard
-
-✅ Applied 8 changes</pre>
-        </Terminal>
+        <div
+          class={css({
+            borderRadius: 'lg',
+            overflow: 'hidden',
+            border: '1px solid',
+            borderColor: 'border',
+          })}
+        >
+          <img
+            src="/demo.gif"
+            alt="pgmt demo: editing a function and running pgmt apply, which automatically detects 3 dependent views, drops them in order, applies the update, and recreates everything"
+            width="1000"
+            height="600"
+            class={css({
+              width: '100%',
+              height: 'auto',
+              display: 'block',
+            })}
+          />
+        </div>
       </div>
 
       <!-- Context row: dependency tree + caption -->
@@ -469,7 +466,8 @@ CREATE VIEW executive_dashboard AS ...`}
             Drift Detection
           </p>
           <p class={css({ fontSize: 'xs', color: 'text.muted' })}>
-            Detect unauthorized production changes with CI-ready JSON output
+            Compare production against your schema files. Catch unauthorized
+            changes before they cause issues. CI-ready with JSON output.
           </p>
         </div>
         <div class={css({ textAlign: 'center' })}>
@@ -484,7 +482,8 @@ CREATE VIEW executive_dashboard AS ...`}
             Easy Rebase
           </p>
           <p class={css({ fontSize: 'xs', color: 'text.muted' })}>
-            Branch behind? Regenerate your migration with one command
+            Branch behind? One command regenerates your migration against the
+            latest main. No manual conflict resolution.
           </p>
         </div>
         <div class={css({ textAlign: 'center' })}>
@@ -499,7 +498,8 @@ CREATE VIEW executive_dashboard AS ...`}
             Full PostgreSQL
           </p>
           <p class={css({ fontSize: 'xs', color: 'text.muted' })}>
-            Triggers, RLS, grants, custom types, extensions — not just tables
+            Views, functions, triggers, RLS policies, grants, custom types,
+            domains, extensions, sequences — everything, not just tables.
           </p>
         </div>
         <div class={css({ textAlign: 'center' })}>
@@ -514,8 +514,8 @@ CREATE VIEW executive_dashboard AS ...`}
             Any Framework
           </p>
           <p class={css({ fontSize: 'xs', color: 'text.muted' })}>
-            Works alongside Rails, Django, Go, Node — pgmt manages the schema,
-            your app reads it
+            Works alongside Rails, Django, Go, Node, or no framework at all.
+            pgmt manages the schema — your app just connects.
           </p>
         </div>
       </div>

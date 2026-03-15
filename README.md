@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/pgmt)](https://crates.io/crates/pgmt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Edit database objects like code. pgmt tracks dependencies, applies changes instantly, and generates production-ready migrations.
+Your schema files are the source of truth. pgmt tracks dependencies, applies changes instantly, and generates production-ready migrations.
 
 > **Status: Alpha** — API may change. Production use requires careful evaluation.
 

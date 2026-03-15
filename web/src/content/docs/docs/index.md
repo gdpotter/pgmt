@@ -3,28 +3,26 @@ title: pgmt Documentation
 description: PostgreSQL migration tool for schema-as-code development with explicit migrations.
 ---
 
-pgmt lets you manage your PostgreSQL schema like code — edit database objects directly, see changes instantly, and generate explicit migrations when you're ready to deploy.
+Edit SQL files. Let pgmt figure out the dependencies, generate the migrations, and keep your environments in sync.
 
-> **Status: Alpha** — Core features are functional, but the API may evolve.
-
-## Start here
-
-**[Quick Start Guide](/docs/getting-started/quick-start)** — Install pgmt, set up a project, and apply your first schema change in under 10 minutes.
-
-Already have a database? See [Adopt Existing Database](/docs/guides/existing-database) to import your schema.
+Most people start with the **[Quick Start](/docs/getting-started/quick-start)** — you'll have automatic dependency tracking working in under 10 minutes. Already have a database? See [Adopt Existing Database](/docs/guides/existing-database) to import your schema.
 
 ## What's in these docs
 
-**[Using pgmt](/docs/guides/schema-organization)** — How to organize schema files, the day-to-day migration workflow, and managing roles and permissions.
+**[Using pgmt](/docs/guides/schema-organization)**: Organize schema files like code, iterate instantly with `pgmt apply`, and manage roles and permissions.
 
-**[Going to Production](/docs/guides/multi-section-migrations)** — Multi-section migrations with per-section timeouts and retries, CI/CD integration, and baseline management.
+**[Going to Production](/docs/guides/multi-section-migrations)**: Handle the hard stuff. Concurrent indexes, data backfills, per-section timeouts, CI/CD integration, and baseline management.
 
-**[Under the Hood](/docs/concepts/philosophy)** — How the schema diffing engine works, shadow database validation, and automatic dependency tracking.
+**[How It Works](/docs/concepts/philosophy)**: Why pgmt can handle complex dependency chains that break other tools, and why explicit migrations matter.
 
-**[Reference](/docs/cli/)** — CLI commands, configuration options, and the full list of supported PostgreSQL features.
+**[Reference](/docs/cli/)**: CLI commands, configuration options, and the full list of supported PostgreSQL features.
 
 ## Get help
 
 - **[Troubleshooting](/docs/guides/troubleshooting)** — Common issues and solutions
 - **[GitHub Discussions](https://github.com/gdpotter/pgmt/discussions)** — Ask questions
 - **[GitHub Issues](https://github.com/gdpotter/pgmt/issues)** — Report bugs
+
+:::note
+**Status: Alpha** — Core features are functional, but the API may evolve.
+:::

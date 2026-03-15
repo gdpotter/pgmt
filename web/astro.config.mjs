@@ -73,6 +73,10 @@ export default defineConfig({
             },
             { label: 'CI/CD Integration', link: '/docs/guides/ci-cd' },
             {
+              label: 'Production Operations',
+              link: '/docs/guides/production-operations',
+            },
+            {
               label: 'Baseline Management',
               link: '/docs/guides/baseline-management',
             },
@@ -92,7 +96,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Under the Hood',
+          label: 'How It Works',
           items: [
             {
               label: 'Why Schema-as-Code?',
