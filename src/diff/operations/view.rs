@@ -37,6 +37,8 @@ pub enum ViewOperation {
         schema: String,
         name: String,
         definition: String,
+        security_invoker: bool,
+        security_barrier: bool,
     },
     SetOption {
         schema: String,

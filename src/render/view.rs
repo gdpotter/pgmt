@@ -47,15 +47,34 @@ impl SqlRenderer for ViewOperation {
                 schema,
                 name,
                 definition,
-            } => vec![RenderedSql {
-                sql: format!(
-                    "CREATE OR REPLACE VIEW {}.{} AS\n{};",
-                    quote_ident(schema),
-                    quote_ident(name),
-                    definition.trim_end_matches(';'),
-                ),
-                safety: Safety::Safe,
-            }],
+                security_invoker,
+                security_barrier,
+            } => {
+                let mut with_options = Vec::new();
+                if *security_invoker {
+                    with_options.push("security_invoker = true");
+                }
+                if *security_barrier {
+                    with_options.push("security_barrier = true");
+                }
+
+                let with_clause = if !with_options.is_empty() {
+                    format!(" WITH ({})", with_options.join(", "))
+                } else {
+                    String::new()
+                };
+
+                vec![RenderedSql {
+                    sql: format!(
+                        "CREATE OR REPLACE VIEW {}.{}{} AS\n{};",
+                        quote_ident(schema),
+                        quote_ident(name),
+                        with_clause,
+                        definition.trim_end_matches(';'),
+                    ),
+                    safety: Safety::Safe,
+                }]
+            }
             ViewOperation::SetOption {
                 schema,
                 name,
@@ -153,6 +172,8 @@ mod tests {
             schema: "public".to_string(),
             name: "user_summary".to_string(),
             definition: "SELECT id, name FROM users".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
         let rendered = op.to_sql();
         assert_eq!(rendered.len(), 1);
@@ -161,6 +182,23 @@ mod tests {
             "CREATE OR REPLACE VIEW \"public\".\"user_summary\" AS\nSELECT id, name FROM users;"
         );
         assert_eq!(rendered[0].safety, Safety::Safe);
+    }
+
+    #[test]
+    fn test_render_replace_view_with_security_options() {
+        let op = ViewOperation::Replace {
+            schema: "public".to_string(),
+            name: "user_summary".to_string(),
+            definition: "SELECT id, name FROM users".to_string(),
+            security_invoker: true,
+            security_barrier: true,
+        };
+        let rendered = op.to_sql();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(
+            rendered[0].sql,
+            "CREATE OR REPLACE VIEW \"public\".\"user_summary\" WITH (security_invoker = true, security_barrier = true) AS\nSELECT id, name FROM users;"
+        );
     }
 
     #[test]
@@ -180,6 +218,8 @@ mod tests {
             schema: "s".to_string(),
             name: "v".to_string(),
             definition: "SELECT 2".to_string(),
+            security_invoker: false,
+            security_barrier: false,
         };
 
         // Views can be recreated from schema, so DROP VIEW is not destructive

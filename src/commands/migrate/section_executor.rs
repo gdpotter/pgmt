@@ -6,8 +6,8 @@ use crate::migration::section_parser::{
 use crate::migration_tracking::section_tracking::*;
 use crate::progress::SectionReporter;
 use anyhow::Result;
-use sqlx::postgres::PgDatabaseError;
 use sqlx::PgPool;
+use sqlx::postgres::PgDatabaseError;
 use std::time::{Duration, Instant};
 
 /// Format a SQL execution error with rich PostgreSQL context (DETAIL, HINT, etc.)
@@ -238,8 +238,7 @@ impl SectionExecutor {
                     return Ok(());
                 }
                 Err(e) => {
-                    let is_lock_timeout =
-                        classify_timeout_error(&e) == Some(TimeoutKind::Lock);
+                    let is_lock_timeout = classify_timeout_error(&e) == Some(TimeoutKind::Lock);
                     let should_retry = attempt < retry_config.attempts
                         && (retry_config.on_lock_timeout == LockTimeoutAction::Retry
                             || !is_lock_timeout);

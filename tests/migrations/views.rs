@@ -805,6 +805,46 @@ async fn test_enable_security_barrier() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_replace_view_preserves_security_invoker() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    // security_invoker option requires PostgreSQL 15+
+    if helper.pg_major_version().await < 15 {
+        return Ok(());
+    }
+
+    helper.run_migration_test(
+        &[
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT, active BOOLEAN DEFAULT true)",
+        ],
+        &["CREATE VIEW user_view WITH (security_invoker = true) AS SELECT id, name FROM users"],
+        &["CREATE VIEW user_view WITH (security_invoker = true) AS SELECT id, name FROM users WHERE active"],
+        |steps, _final_catalog| {
+            assert!(!steps.is_empty());
+
+            // Should have a Replace step with security_invoker in the SQL
+            let replace_step = steps.iter().find(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::Replace { .. }))
+            }).expect("Should have Replace step");
+
+            let sql = replace_step.to_sql();
+            assert!(sql[0].sql.contains("CREATE OR REPLACE VIEW"));
+            assert!(sql[0].sql.contains("security_invoker = true"), "Replace should include security_invoker in WITH clause");
+
+            // Should NOT have a separate SetOption step
+            let has_set_option = steps.iter().any(|s| {
+                matches!(s, MigrationStep::View(ViewOperation::SetOption { .. }))
+            });
+            assert!(!has_set_option, "Should not need a separate SetOption step");
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_disable_security_barrier() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 

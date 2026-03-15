@@ -68,25 +68,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                     schema: n.schema.clone(),
                     name: n.name.clone(),
                     definition: n.definition.clone(),
+                    security_invoker: n.security_invoker,
+                    security_barrier: n.security_barrier,
                 }));
-
-                // Handle security option changes for replaced views
-                if o.security_invoker != n.security_invoker {
-                    steps.push(MigrationStep::View(ViewOperation::SetOption {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        option: ViewOption::SecurityInvoker,
-                        enabled: n.security_invoker,
-                    }));
-                }
-                if o.security_barrier != n.security_barrier {
-                    steps.push(MigrationStep::View(ViewOperation::SetOption {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        option: ViewOption::SecurityBarrier,
-                        enabled: n.security_barrier,
-                    }));
-                }
 
                 // Handle comment changes for replaced views
                 let comment_ops =
