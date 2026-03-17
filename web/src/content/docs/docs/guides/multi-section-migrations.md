@@ -60,8 +60,8 @@ Each section can have its own transaction mode, timeout, and retry logic. Sectio
 | ----------------- | --------------- | ----------------------------------------------------- |
 | `name`            | required        | Section identifier                                    |
 | `mode`            | `transactional` | `transactional`, `non-transactional`, or `autocommit` |
-| `timeout`         | `600s`          | Max execution time (`statement_timeout`)               |
-| `lock_timeout`    | none            | Max time to wait for locks (`lock_timeout`)            |
+| `timeout`         | `600s`          | Max execution time (`statement_timeout`)              |
+| `lock_timeout`    | none            | Max time to wait for locks (`lock_timeout`)           |
 | `retry_attempts`  | `1`             | Number of attempts                                    |
 | `retry_delay`     | `0s`            | Wait between retries                                  |
 | `retry_backoff`   | `none`          | `none` or `exponential`                               |
