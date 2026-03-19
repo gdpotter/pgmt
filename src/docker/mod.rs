@@ -6,12 +6,14 @@
 use anyhow::{Result, anyhow};
 use bollard::Docker;
 use bollard::container::LogOutput;
-use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum};
+use bollard::models::{
+    ContainerCreateBody, ContainerInspectResponse, ContainerStateStatusEnum, HostConfig,
+    PortBinding,
+};
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
     LogsOptionsBuilder, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
-use bollard::secret::{ContainerInspectResponse, HostConfig, PortBinding};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;

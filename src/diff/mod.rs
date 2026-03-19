@@ -134,20 +134,33 @@ pub fn diff_list<T, I: Eq + Ord + Clone, R>(
     diff_fn: impl Fn(Option<&T>, Option<&T>) -> Vec<R>,
 ) -> Vec<R> {
     let mut old_map = BTreeMap::new();
-    let mut new_map = BTreeMap::new();
     for o in old {
         old_map.insert(id_of(o), o);
     }
+    let mut new_map = BTreeMap::new();
     for n in new {
         new_map.insert(id_of(n), n);
     }
 
-    let all_ids: BTreeSet<_> = old_map.keys().chain(new_map.keys()).cloned().collect();
+    let mut results = Vec::new();
 
-    all_ids
-        .into_iter()
-        .flat_map(|id| diff_fn(old_map.get(&id).cloned(), new_map.get(&id).cloned()))
-        .collect()
+    // Drops first: items in old but not in new, preserving old-list order
+    for o in old {
+        let id = id_of(o);
+        if !new_map.contains_key(&id) {
+            results.extend(diff_fn(Some(o), None));
+        }
+    }
+
+    // Modifications and additions: iterate new list to preserve positional order.
+    // This is critical for columns — ADD COLUMN always appends in PostgreSQL,
+    // so the order of ADD COLUMN statements determines physical column order.
+    for n in new {
+        let id = id_of(n);
+        results.extend(diff_fn(old_map.get(&id).cloned(), Some(n)));
+    }
+
+    results
 }
 
 /// Topo-sort the steps by their `dependencies()` using a multi-phase approach

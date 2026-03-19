@@ -1,6 +1,7 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::config::ColumnOrderMode;
+use pgmt::diff::operations::{ColumnAction, MigrationStep, TableOperation};
 use pgmt::validation::{apply_column_order_validation, validate_column_order};
 
 /// Tests for column order validation during migration generation.
@@ -207,6 +208,51 @@ async fn test_column_order_multiple_tables_validated() -> Result<()> {
                 assert_eq!(violations[0].table, "posts");
                 assert_eq!(violations[0].new_column, "content");
                 assert_eq!(violations[0].old_column_after, "title");
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that ADD COLUMN statements are emitted in schema-definition order,
+/// not alphabetical order. This matters because PostgreSQL's ADD COLUMN always
+/// appends, so the statement order determines the physical column order.
+#[tokio::test]
+async fn test_add_columns_preserve_schema_order() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            // Initial: table with just id
+            &["CREATE TABLE users (id SERIAL PRIMARY KEY)"],
+            // Target: add columns in non-alphabetical order (zebra, alpha, middle)
+            &["CREATE TABLE users (id SERIAL PRIMARY KEY, zebra TEXT, alpha TEXT, middle TEXT)"],
+            |steps, _final_catalog| {
+                // Find the ALTER TABLE step with ADD COLUMN actions
+                let add_names: Vec<&str> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Table(TableOperation::Alter { actions, .. }) => {
+                            Some(actions)
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter_map(|a| match a {
+                        ColumnAction::Add { column } => Some(column.name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+
+                // Must be in schema order, NOT alphabetical
+                assert_eq!(
+                    add_names,
+                    vec!["zebra", "alpha", "middle"],
+                    "ADD COLUMN statements should preserve schema-definition order, not alphabetical"
+                );
                 Ok(())
             },
         )
