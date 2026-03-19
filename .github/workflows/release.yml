@@ -199,8 +199,8 @@ jobs:
         run: |
           for pkg in npm/cli-linux-x64 npm/cli-linux-arm64 npm/cli-darwin-x64 npm/cli-darwin-arm64 npm/cli-win32-x64; do
             echo "Publishing $pkg..."
-            npm publish "$pkg" --provenance --access public
+            npm publish "./$pkg" --provenance --access public
           done
 
       - name: Publish main package
-        run: npm publish npm/pgmt --provenance --access public
+        run: npm publish ./npm/pgmt --provenance --access public
