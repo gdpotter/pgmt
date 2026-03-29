@@ -70,6 +70,7 @@ pgmt migrate baseline list
 When you create a baseline and delete old migrations, teammates on other branches may have migrations with versions that predate the baseline. pgmt handles this gracefully:
 
 1. **pgmt detects it:** When a pre-baseline migration is found, pgmt warns:
+
    ```
    Warning: Migration 1764034955 predates baseline 1773798334 and will be skipped.
    Run 'pgmt migrate update 1764034955' to renumber it.
@@ -84,7 +85,7 @@ This works because schema files are the source of truth. The migration is regene
 ```yaml
 # pgmt.yaml
 migration:
-  create_baselines_by_default: false  # for migrate new
+  create_baselines_by_default: false # for migrate new
 ```
 
 By default, `migrate new` doesn't create baselines. Use `--create-baseline` when you want one.
