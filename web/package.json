@@ -19,7 +19,7 @@
     "@astrojs/check": "^0.9.6",
     "@astrojs/sitemap": "^3.7.0",
     "@astrojs/starlight": "^0.35.3",
-    "astro": "^5.17.2",
+    "astro": "^5.18.1",
     "rehype-mermaid": "^2.1.0",
     "shiki": "^3.22.0",
     "typescript": "^5.9.3"
