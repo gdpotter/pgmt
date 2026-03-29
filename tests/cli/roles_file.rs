@@ -242,7 +242,7 @@ GRANT SELECT ON orders TO test_validate_role;"#,
 
             helper
                 .command()
-                .args(["baseline", "create"])
+                .args(["migrate", "baseline", "--keep-migrations"])
                 .assert()
                 .success();
 

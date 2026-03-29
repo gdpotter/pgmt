@@ -19,7 +19,7 @@ async fn test_baseline_extension_first() -> Result<()> {
         // Use --force because extensions can cause minor validation inconsistencies
         helper
             .command()
-            .args(["baseline", "create", "--force"])
+            .args(["migrate", "baseline", "--force", "--keep-migrations"])
             .assert()
             .success();
 
@@ -94,7 +94,7 @@ async fn test_baseline_multiple_extensions_ordering() -> Result<()> {
         // Use --force because extensions can cause minor validation inconsistencies
         helper
             .command()
-            .args(["baseline", "create", "--force"])
+            .args(["migrate", "baseline", "--force", "--keep-migrations"])
             .assert()
             .success();
 
@@ -253,7 +253,7 @@ async fn test_extension_with_schema_ordering() -> Result<()> {
         // Use --force because extensions can cause minor validation inconsistencies
         helper
             .command()
-            .args(["baseline", "create", "--force"])
+            .args(["migrate", "baseline", "--force", "--keep-migrations"])
             .assert()
             .success();
 

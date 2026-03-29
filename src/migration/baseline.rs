@@ -147,7 +147,10 @@ pub async fn get_migration_starting_state(
 
         // Warn about pre-baseline migrations that will be skipped
         let all_migrations = discover_migrations(migrations_dir)?;
-        for m in all_migrations.iter().filter(|m| m.version <= baseline.version) {
+        for m in all_migrations
+            .iter()
+            .filter(|m| m.version <= baseline.version)
+        {
             eprintln!(
                 "Warning: Migration {} predates baseline {} and will be skipped. \
                  Run 'pgmt migrate update {}' to renumber it.",

@@ -198,8 +198,10 @@ pub async fn cmd_migrate_baseline(
 
         if deleted_migrations > 0 || deleted_baselines > 0 {
             println!();
-            println!("Cleaned up {} migration(s) and {} old baseline(s)",
-                deleted_migrations, deleted_baselines);
+            println!(
+                "Cleaned up {} migration(s) and {} old baseline(s)",
+                deleted_migrations, deleted_baselines
+            );
         }
     } else {
         display_baseline_usage_info();
@@ -244,12 +246,7 @@ pub async fn cmd_baseline_list(config: &Config, root_dir: &std::path::Path) -> R
             .unwrap_or_else(|_| "unknown".to_string());
 
         let size = format_size(metadata.len());
-        let filename = baseline
-            .path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let filename = baseline.path.file_name().unwrap().to_str().unwrap();
 
         println!("  {} - {} ({})", baseline.version, filename, created);
         println!("    Path: {}", baseline.path.display());
