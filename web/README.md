@@ -9,20 +9,20 @@ web/
 ├── public/                  # Static assets (images, favicons, etc.)
 ├── src/
 │   ├── content/
-│   │   ├── config.ts       # Content collections configuration
 │   │   └── docs/           # Starlight documentation files (.md/.mdx)
 │   ├── components/         # Reusable Astro components
 │   ├── layouts/            # Page layouts
 │   ├── pages/              # Custom pages (marketing, landing, etc.)
-│   └── *.svg              # Logo files
+│   ├── content.config.ts   # Content collections configuration
+│   └── *.svg               # Logo files
 ├── theme/                  # Panda CSS theme configuration
-│   ├── tokens.ts          # Design tokens (colors, spacing, etc.)
-│   ├── semanticTokens.ts  # Semantic token mappings
-│   ├── recipes/           # Component style recipes
-│   └── patterns.ts        # Layout patterns
+│   ├── tokens.ts           # Design tokens (colors, spacing, etc.)
+│   ├── semanticTokens.ts   # Semantic token mappings
+│   ├── recipes/            # Component style recipes
+│   └── patterns.ts         # Layout patterns
 ├── styled-system/          # Generated Panda CSS output (don't edit)
-├── astro.config.mjs       # Astro + Starlight configuration
-├── panda.config.ts        # Panda CSS configuration
+├── astro.config.mjs        # Astro + Starlight configuration
+├── panda.content.config.ts # Panda CSS configuration
 └── package.json
 ```
 
