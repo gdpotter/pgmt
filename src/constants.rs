@@ -8,7 +8,7 @@ pub const WATCH_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 pub const LOCK_FILE_STALE_TIMEOUT: Duration = Duration::from_secs(600);
 
 // Migration file naming conventions
-pub const BASELINE_FILENAME_PREFIX: &str = "baseline_V";
+pub const BASELINE_FILENAME_PREFIX: &str = "baseline_";
 
 // Configuration file name
 pub const CONFIG_FILENAME: &str = "pgmt.yaml";

@@ -462,7 +462,7 @@ async fn process_imported_catalog(
             println!("  1. Fix dependencies in schema files (add '-- require:' statements)");
             println!("  2. Test with: pgmt apply --dry-run");
             println!("  3. Repeat until validation passes");
-            println!("  4. Create baseline: pgmt baseline create\n");
+            println!("  4. Create baseline: pgmt migrate baseline\n");
             return Ok(BaselineResult::Failed(e.to_string()));
         }
     }
@@ -589,7 +589,7 @@ fn handle_baseline_failure(error: &anyhow::Error) {
     }
 
     println!("\n⚠️  Skipping baseline creation due to errors.");
-    println!("💡 After fixing the dependency issues, run: pgmt baseline create");
+    println!("💡 After fixing the dependency issues, run: pgmt migrate baseline");
 }
 
 /// Create baseline from imported catalog during init and sync migration state
@@ -696,7 +696,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                 "  1. Move one foreign key from the cycle to a separate file (e.g., schema/constraints/)"
             );
             println!("  2. Test with: pgmt apply --dry-run");
-            println!("  3. Create baseline: pgmt baseline create");
+            println!("  3. Create baseline: pgmt migrate baseline");
             println!("  💻 Run 'pgmt apply' to sync your dev database");
             println!("  🚀 Run 'pgmt migrate new \"description\"' to create migrations");
         }
@@ -715,7 +715,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                 println!("   1. Fix schema dependencies (see error above)");
                 println!("   2. Test with: pgmt apply --dry-run");
                 println!("   3. Repeat until validation passes");
-                println!("   4. Create baseline: pgmt baseline create");
+                println!("   4. Create baseline: pgmt migrate baseline");
             } else {
                 // Check if baseline was explicitly requested via CLI
                 let was_explicit_request =
@@ -737,7 +737,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                     println!("  🔧 Fix the baseline creation issue:");
                     println!("     • Check database connectivity and permissions");
                     println!("     • Review schema file dependencies");
-                    println!("     • Consider running 'pgmt baseline create' manually");
+                    println!("     • Consider running 'pgmt migrate baseline' manually");
                     println!("  💻 Run 'pgmt apply' to sync your dev database");
                     println!("  🚀 Run 'pgmt migrate new \"description\"' to create migrations");
                 } else {
@@ -754,7 +754,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                     println!("  ⚠️ Baseline creation failed (see error above)");
 
                     println!("\nNext steps:");
-                    println!("  💡 Fix the issue and create baseline: pgmt baseline create");
+                    println!("  💡 Fix the issue and create baseline: pgmt migrate baseline");
                     println!("  💻 Run 'pgmt apply' to sync your dev database");
                     println!("  🚀 Run 'pgmt migrate new \"description\"' to create migrations");
                 }

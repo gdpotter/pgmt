@@ -159,7 +159,7 @@ Your schema must be a directed acyclic graph (DAG) - no circular dependencies. I
 
 ## Troubleshooting Dependencies
 
-If `pgmt baseline create` or `pgmt migrate new` fails with dependency errors, use the debug command:
+If `pgmt migrate baseline` or `pgmt migrate new` fails with dependency errors, use the debug command:
 
 ```bash
 # View full dependency graph

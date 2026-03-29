@@ -207,6 +207,16 @@ async fn reconstruct_expected_state_from_schema_files(
         .map(|b| b.version)
         .unwrap_or(0);
 
+    for migration_file in &sorted_migrations {
+        if migration_file.version <= baseline_version {
+            eprintln!(
+                "Warning: Migration {} predates baseline {} and will be skipped. \
+                 Run 'pgmt migrate update {}' to renumber it.",
+                migration_file.version, baseline_version, migration_file.version
+            );
+        }
+    }
+
     for migration_file in sorted_migrations {
         if migration_file.version > baseline_version {
             let migration_sql = std::fs::read_to_string(&migration_file.path).context(format!(

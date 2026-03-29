@@ -53,7 +53,7 @@ pgmt apply --dry-run
 Once it passes, create the baseline:
 
 ```bash
-pgmt baseline create
+pgmt migrate baseline
 ```
 
 ## Make Your First Change

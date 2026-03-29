@@ -43,7 +43,8 @@ pub fn parse_migration_filename(filename: &str) -> Option<(u64, String)> {
     Some((version, description))
 }
 
-/// Parse a baseline filename like "baseline_V1734567890.sql"
+/// Parse a baseline filename like "baseline_1734567890.sql" or "baseline_V1734567890.sql"
+/// Accepts files with or without the V prefix for backwards compatibility.
 pub fn parse_baseline_filename(filename: &str) -> Option<u64> {
     if !filename.starts_with(BASELINE_FILENAME_PREFIX) || !filename.ends_with(".sql") {
         return None;
@@ -52,6 +53,9 @@ pub fn parse_baseline_filename(filename: &str) -> Option<u64> {
     let version_str = filename
         .strip_prefix(BASELINE_FILENAME_PREFIX)?
         .strip_suffix(".sql")?;
+
+    // Strip optional V prefix for backwards compatibility with old baseline files
+    let version_str = version_str.strip_prefix('V').unwrap_or(version_str);
 
     version_str.parse::<u64>().ok()
 }
@@ -240,7 +244,17 @@ mod tests {
 
     #[test]
     fn test_parse_baseline_filename() {
-        // Valid baseline filenames
+        // Valid baseline filenames (new format, no V prefix)
+        assert_eq!(
+            parse_baseline_filename("baseline_1734567890.sql"),
+            Some(1734567890)
+        );
+        assert_eq!(
+            parse_baseline_filename("baseline_1234567890.sql"),
+            Some(1234567890)
+        );
+
+        // Valid baseline filenames (old format with V prefix, backwards compat)
         assert_eq!(
             parse_baseline_filename("baseline_V1734567890.sql"),
             Some(1734567890)
@@ -252,7 +266,6 @@ mod tests {
 
         // Invalid baseline filenames
         assert_eq!(parse_baseline_filename("V1734567890_description.sql"), None); // Migration, not baseline
-        assert_eq!(parse_baseline_filename("baseline_1734567890.sql"), None); // Missing V prefix
         assert_eq!(parse_baseline_filename("baseline_V1734567890"), None); // Missing .sql suffix
         assert_eq!(parse_baseline_filename("baseline_Vabc.sql"), None); // Invalid version
     }
@@ -261,7 +274,7 @@ mod tests {
     fn test_generate_filenames() {
         assert_eq!(
             generate_baseline_filename(1734567890),
-            "baseline_V1734567890.sql"
+            "baseline_1734567890.sql"
         );
     }
 
@@ -310,15 +323,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        // Create test baseline files
+        // Create test baseline files (mix of old V-prefix and new format)
         std::fs::write(
             temp_dir.join("baseline_V1000000000.sql"),
-            "-- First baseline",
+            "-- First baseline (old format)",
         )
         .unwrap();
         std::fs::write(
-            temp_dir.join("baseline_V2000000000.sql"),
-            "-- Second baseline",
+            temp_dir.join("baseline_2000000000.sql"),
+            "-- Second baseline (new format)",
         )
         .unwrap();
         std::fs::write(

@@ -41,7 +41,7 @@ pgmt debug dependencies --object public.users
 pgmt debug dependencies --format text
 ```
 
-If `pgmt baseline create` or `pgmt migrate new` fails with ordering errors, use the debug command to inspect which objects depend on which, and add `-- require:` headers to your schema files as needed.
+If `pgmt migrate baseline` or `pgmt migrate new` fails with ordering errors, use the debug command to inspect which objects depend on which, and add `-- require:` headers to your schema files as needed.
 
 ## Common Setup Issues
 

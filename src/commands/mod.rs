@@ -10,7 +10,7 @@ pub mod validate;
 
 // Re-export all command functions
 pub use apply::{cmd_apply, cmd_apply_watch};
-pub use baseline::{cmd_baseline_clean, cmd_baseline_create, cmd_baseline_list};
+pub use baseline::{cmd_baseline_list, cmd_migrate_baseline};
 pub use config::cmd_config;
 pub use debug::cmd_debug_dependencies;
 pub use diff::cmd_diff;

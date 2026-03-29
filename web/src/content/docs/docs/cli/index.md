@@ -16,9 +16,8 @@ description: Complete command reference for pgmt.
 | `pgmt migrate status`     | Show migration status               |
 | `pgmt migrate validate`   | Validate migrations match schema    |
 | `pgmt migrate diff`       | Detect drift in target database     |
-| `pgmt baseline create`    | Create baseline snapshot            |
-| `pgmt baseline list`      | List baselines                      |
-| `pgmt baseline clean`     | Remove old baselines                |
+| `pgmt migrate baseline`      | Create baseline / consolidate migrations |
+| `pgmt migrate baseline list` | List baselines                           |
 | `pgmt debug dependencies` | Analyze object dependencies         |
 
 ## Global Options
@@ -347,67 +346,38 @@ pgmt migrate diff --format sql --output-sql fix-drift.sql
 
 ---
 
-## pgmt baseline create
+## pgmt migrate baseline
 
-Create a baseline snapshot from current schema files.
+Create a baseline from current schema files. By default, deletes all existing migrations and old baselines since the baseline supersedes them.
 
 ```bash
-pgmt baseline create [OPTIONS]
+pgmt migrate baseline [OPTIONS]
 ```
 
 **Options:**
 
 ```bash
---description <DESC>          # Custom description
+--force                       # Skip baseline validation
+--keep-migrations             # Don't delete old migrations
+--dry-run                     # Preview what would happen
 ```
 
 **Examples:**
 
 ```bash
-pgmt baseline create
-pgmt baseline create --description "Production v2.0"
+pgmt migrate baseline                      # Baseline + clean up migrations
+pgmt migrate baseline --keep-migrations    # Baseline only, keep migrations
+pgmt migrate baseline --dry-run            # Preview what would be deleted
 ```
 
 ---
 
-## pgmt baseline list
+## pgmt migrate baseline list
 
 List existing baselines.
 
 ```bash
-pgmt baseline list [OPTIONS]
-```
-
-**Options:**
-
-```bash
---format <FORMAT>             # table | json
-```
-
----
-
-## pgmt baseline clean
-
-Remove old baselines.
-
-```bash
-pgmt baseline clean [OPTIONS]
-```
-
-**Options:**
-
-```bash
---keep <N>                    # Keep N most recent (default: 5)
---older-than <DAYS>           # Remove baselines older than N days
---dry-run                     # Preview what would be deleted
-```
-
-**Examples:**
-
-```bash
-pgmt baseline clean --keep 5
-pgmt baseline clean --older-than 30
-pgmt baseline clean --keep 3 --dry-run
+pgmt migrate baseline list
 ```
 
 ---

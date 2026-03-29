@@ -130,12 +130,6 @@ enum Commands {
         command: MigrateCommands,
     },
 
-    /// Baseline commands
-    Baseline {
-        #[command(subcommand)]
-        command: BaselineCommands,
-    },
-
     /// Compare schema files with dev database (preview what apply would do)
     Diff(DiffArgs),
 
@@ -235,34 +229,39 @@ enum MigrateCommands {
         #[arg(long, value_delimiter = ',')]
         ignore_migrations: Vec<String>,
     },
+
+    /// Create a baseline and optionally consolidate old migrations
+    Baseline(MigrateBaselineArgs),
+}
+
+#[derive(clap::Args)]
+struct MigrateBaselineArgs {
+    #[command(subcommand)]
+    command: Option<MigrateBaselineSubcommands>,
+
+    /// Skip safety checks and force baseline creation
+    #[arg(long)]
+    force: bool,
+
+    /// Don't delete old migrations after creating the baseline
+    #[arg(long)]
+    keep_migrations: bool,
+
+    /// Preview what would happen without making changes
+    #[arg(long)]
+    dry_run: bool,
+
+    #[command(flatten)]
+    database_args: config::DatabaseArgs,
+
+    #[command(flatten)]
+    directory_args: config::DirectoryArgs,
 }
 
 #[derive(Subcommand)]
-enum BaselineCommands {
-    /// Create baseline schema snapshot
-    Create {
-        /// Skip safety checks and force baseline creation
-        #[arg(long)]
-        force: bool,
-    },
-
+enum MigrateBaselineSubcommands {
     /// List existing baselines
     List,
-
-    /// Clean up old baseline files
-    Clean {
-        /// Keep the N most recent baselines
-        #[arg(long, default_value = "5")]
-        keep: usize,
-
-        /// Remove baselines older than N days
-        #[arg(long)]
-        older_than: Option<u64>,
-
-        /// Preview what would be deleted without actually deleting
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -573,38 +572,40 @@ async fn run_main(cli: Cli) -> Result<()> {
                         commands::cmd_migrate_validate(&config, &root_dir, &validation_options)
                             .await
                     }
-                },
-                Commands::Baseline { command } => {
-                    let config = config::ConfigBuilder::new()
-                        .with_file(file_config.clone())
-                        .resolve()?;
+                    MigrateCommands::Baseline(args) => {
+                        let cli_config = config::ConfigInput {
+                            databases: Some(args.database_args.clone().into()),
+                            directories: Some(args.directory_args.clone().into()),
+                            objects: None,
+                            migration: None,
+                            schema: None,
+                            docker: None,
+                        };
 
-                    match command {
-                        BaselineCommands::Create { force } => {
-                            info!("Creating baseline schema snapshot");
-                            commands::cmd_baseline_create(&config, &root_dir, *force).await
-                        }
-                        BaselineCommands::List => {
-                            info!("Listing existing baselines");
-                            commands::cmd_baseline_list(&config, &root_dir).await
-                        }
-                        BaselineCommands::Clean {
-                            keep,
-                            older_than,
-                            dry_run,
-                        } => {
-                            info!("Cleaning up old baseline files");
-                            commands::cmd_baseline_clean(
-                                &config,
-                                &root_dir,
-                                *keep,
-                                *older_than,
-                                *dry_run,
-                            )
-                            .await
+                        let config = config::ConfigBuilder::new()
+                            .with_file(file_config.clone())
+                            .with_cli_args(cli_config)
+                            .resolve()?;
+
+                        match &args.command {
+                            Some(MigrateBaselineSubcommands::List) => {
+                                info!("Listing existing baselines");
+                                commands::cmd_baseline_list(&config, &root_dir).await
+                            }
+                            None => {
+                                info!("Creating baseline");
+                                commands::cmd_migrate_baseline(
+                                    &config,
+                                    &root_dir,
+                                    args.force,
+                                    args.keep_migrations,
+                                    args.dry_run,
+                                )
+                                .await
+                            }
                         }
                     }
-                }
+                },
                 Commands::Diff(args) => {
                     let cli_config = config::ConfigInput {
                         databases: Some(args.database_args.clone().into()),

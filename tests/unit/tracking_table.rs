@@ -25,6 +25,7 @@ fn test_tracking_table_configuration_parsing() -> Result<()> {
             }),
             column_order: None,
             filename_prefix: None,
+
         }),
         schema: None,
         docker: None,
@@ -55,6 +56,7 @@ fn test_tracking_table_partial_configuration() -> Result<()> {
             }),
             column_order: None,
             filename_prefix: None,
+
         }),
         schema: None,
         docker: None,

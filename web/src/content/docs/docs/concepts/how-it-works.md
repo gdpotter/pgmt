@@ -79,7 +79,7 @@ For `pgmt migrate new`, there's no target database specified. Instead, pgmt reco
 
 This is why you can `git clone` a pgmt project and run `pgmt migrate new` without any database set up - pgmt reconstructs the state from baselines and migration history.
 
-**Baselines:** Over time, you might accumulate hundreds of migrations. You can run `pgmt baseline create` to snapshot the current state and clean up old migrations. See the [Baseline Management](../guides/baseline-management) guide.
+**Baselines:** Over time, you might accumulate hundreds of migrations. You can run `pgmt migrate baseline` to snapshot the current state and clean up old migrations. See the [Baseline Management](../guides/baseline-management) guide.
 
 **Merge conflicts:** If you rebase and someone else changed the same view, you'll have a git conflict in your schema files. Resolve the conflict, then run `pgmt migrate new` again to regenerate the migration.
 
