@@ -276,6 +276,14 @@ pgmt migrate status
 
 See which migrations have been applied to your database.
 
+### Using pgmt with AI Coding Agents
+
+If you use Claude Code or another agent compatible with the [skills.sh](https://skills.sh) ecosystem, install the pgmt skill so the agent knows how to edit schema files and generate migrations correctly instead of hand-writing migration SQL:
+
+```bash
+npx skills add gdpotter/pgmt
+```
+
 ## Next Steps
 
 ### Learn the Workflow
