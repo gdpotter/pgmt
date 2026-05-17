@@ -26,11 +26,14 @@ fn emit_initial_attribute_comments(ty: &CustomType) -> Vec<MigrationStep> {
 /// Diff per-attribute comments between two composite types whose attributes are otherwise identical.
 fn diff_attribute_comments(old: &CustomType, new: &CustomType) -> Vec<MigrationStep> {
     let mut steps = Vec::new();
-    let by_name_old: std::collections::HashMap<&str, &crate::catalog::custom_type::CompositeAttribute> =
-        old.composite_attributes
-            .iter()
-            .map(|a| (a.name.as_str(), a))
-            .collect();
+    let by_name_old: std::collections::HashMap<
+        &str,
+        &crate::catalog::custom_type::CompositeAttribute,
+    > = old
+        .composite_attributes
+        .iter()
+        .map(|a| (a.name.as_str(), a))
+        .collect();
 
     for new_attr in &new.composite_attributes {
         let Some(old_attr) = by_name_old.get(new_attr.name.as_str()) else {
