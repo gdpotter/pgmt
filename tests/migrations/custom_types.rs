@@ -701,3 +701,107 @@ async fn test_composite_type_cascades_to_dependent_composite_type() -> Result<()
     })
     .await
 }
+
+#[tokio::test]
+async fn test_composite_attribute_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE TYPE test_schema.address AS (street TEXT, city TEXT, postal_code TEXT)",
+        ],
+        // Initial DB only: nothing
+        &[],
+        // Target DB only: add comment on composite attribute
+        &["COMMENT ON COLUMN test_schema.address.street IS 'Street line of the address'"],
+        |steps, final_catalog| {
+            let all_sql: Vec<String> = steps
+                .iter()
+                .flat_map(|s| s.to_sql())
+                .map(|r| r.sql)
+                .collect();
+            let has_attr_comment = all_sql.iter().any(|sql| {
+                sql.contains("COMMENT ON COLUMN")
+                    && sql.contains("address")
+                    && sql.contains("\"street\"")
+                    && sql.contains("Street line of the address")
+            });
+            assert!(
+                has_attr_comment,
+                "Expected COMMENT ON COLUMN for composite attribute, got: {:?}",
+                all_sql
+            );
+
+            let ty = final_catalog
+                .types
+                .iter()
+                .find(|t| t.schema == "test_schema" && t.name == "address")
+                .expect("address type should exist");
+            let street = ty
+                .composite_attributes
+                .iter()
+                .find(|a| a.name == "street")
+                .expect("street attribute should exist");
+            assert_eq!(
+                street.comment,
+                Some("Street line of the address".to_string()),
+                "Composite attribute comment should round-trip"
+            );
+
+            Ok(())
+        },
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_composite_attribute_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE TYPE test_schema.address AS (street TEXT, city TEXT, postal_code TEXT)",
+        ],
+        // Initial DB only: has comment
+        &["COMMENT ON COLUMN test_schema.address.street IS 'Street line of the address'"],
+        // Target DB only: no comment
+        &[],
+        |steps, final_catalog| {
+            let all_sql: Vec<String> = steps
+                .iter()
+                .flat_map(|s| s.to_sql())
+                .map(|r| r.sql)
+                .collect();
+            let has_drop_comment = all_sql.iter().any(|sql| {
+                sql.contains("COMMENT ON COLUMN")
+                    && sql.contains("address")
+                    && sql.contains("\"street\"")
+                    && sql.contains("NULL")
+            });
+            assert!(
+                has_drop_comment,
+                "Expected COMMENT ON COLUMN ... IS NULL for composite attribute, got: {:?}",
+                all_sql
+            );
+
+            let ty = final_catalog
+                .types
+                .iter()
+                .find(|t| t.schema == "test_schema" && t.name == "address")
+                .expect("address type should exist");
+            let street = ty
+                .composite_attributes
+                .iter()
+                .find(|a| a.name == "street")
+                .expect("street attribute should exist");
+            assert_eq!(street.comment, None);
+
+            Ok(())
+        },
+    ).await?;
+
+    Ok(())
+}

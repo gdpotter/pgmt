@@ -1,6 +1,73 @@
 use crate::catalog::custom_type::{CustomType, TypeKind};
 use crate::diff::comment_utils;
-use crate::diff::operations::{MigrationStep, TypeIdentifier, TypeOperation};
+use crate::diff::operations::{
+    CommentOperation, CompositeAttributeIdentifier, MigrationStep, TypeIdentifier, TypeOperation,
+};
+
+/// Emit SET steps for all non-empty attribute comments on a (newly created or recreated) composite type.
+fn emit_initial_attribute_comments(ty: &CustomType) -> Vec<MigrationStep> {
+    ty.composite_attributes
+        .iter()
+        .filter_map(|attr| {
+            attr.comment.as_ref().map(|c| {
+                MigrationStep::Type(TypeOperation::AttributeComment(CommentOperation::Set {
+                    target: CompositeAttributeIdentifier {
+                        schema: ty.schema.clone(),
+                        type_name: ty.name.clone(),
+                        attribute: attr.name.clone(),
+                    },
+                    comment: c.clone(),
+                }))
+            })
+        })
+        .collect()
+}
+
+/// Diff per-attribute comments between two composite types whose attributes are otherwise identical.
+fn diff_attribute_comments(old: &CustomType, new: &CustomType) -> Vec<MigrationStep> {
+    let mut steps = Vec::new();
+    let by_name_old: std::collections::HashMap<&str, &crate::catalog::custom_type::CompositeAttribute> =
+        old.composite_attributes
+            .iter()
+            .map(|a| (a.name.as_str(), a))
+            .collect();
+
+    for new_attr in &new.composite_attributes {
+        let Some(old_attr) = by_name_old.get(new_attr.name.as_str()) else {
+            continue;
+        };
+        let target = || CompositeAttributeIdentifier {
+            schema: new.schema.clone(),
+            type_name: new.name.clone(),
+            attribute: new_attr.name.clone(),
+        };
+        match (&old_attr.comment, &new_attr.comment) {
+            (None, Some(c)) => {
+                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
+                    CommentOperation::Set {
+                        target: target(),
+                        comment: c.clone(),
+                    },
+                )));
+            }
+            (Some(old_c), Some(new_c)) if old_c != new_c => {
+                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
+                    CommentOperation::Set {
+                        target: target(),
+                        comment: new_c.clone(),
+                    },
+                )));
+            }
+            (Some(_), None) => {
+                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
+                    CommentOperation::Drop { target: target() },
+                )));
+            }
+            _ => {}
+        }
+    }
+    steps
+}
 
 /// Diff a single custom type
 pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<MigrationStep> {
@@ -59,6 +126,8 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     ) {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
+
+                    steps.extend(emit_initial_attribute_comments(n));
 
                     steps
                 }
@@ -233,7 +302,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     }
                 }
                 TypeKind::Composite => {
-                    // For composite types, we'll check if attributes changed
+                    // For composite types, we'll check if attributes changed (structurally — name + type)
                     let old_attrs: Vec<(&String, &String)> = o
                         .composite_attributes
                         .iter()
@@ -246,17 +315,17 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                         .collect();
 
                     if old_attrs != new_attrs {
-                        // Attributes changed - requires drop and recreate
-                        return vec![
-                            MigrationStep::Type(TypeOperation::Drop {
-                                schema: o.schema.clone(),
-                                name: o.name.clone(),
-                            }),
-                            diff(None, Some(n))[0].clone(),
-                        ];
+                        // Attributes changed - drop and recreate. diff(None, Some(n)) re-emits
+                        // attribute comments along with the create.
+                        let mut steps = vec![MigrationStep::Type(TypeOperation::Drop {
+                            schema: o.schema.clone(),
+                            name: o.name.clone(),
+                        })];
+                        steps.extend(diff(None, Some(n)));
+                        return steps;
                     }
 
-                    // No composite attribute changes, check for comment changes
+                    // No composite attribute structure changes — diff type and attribute comments
                     let comment_ops =
                         comment_utils::handle_comment_diff(Some(o), Some(n), || TypeIdentifier {
                             schema: n.schema.clone(),
@@ -266,6 +335,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     for comment_op in comment_ops {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
+                    steps.extend(diff_attribute_comments(o, n));
                     steps
                 }
                 _ => {

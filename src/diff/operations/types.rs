@@ -24,6 +24,7 @@ pub enum TypeOperation {
         definition: String,
     },
     Comment(CommentOperation<TypeIdentifier>),
+    AttributeComment(CommentOperation<CompositeAttributeIdentifier>),
 }
 
 impl TypeOperation {
@@ -33,6 +34,7 @@ impl TypeOperation {
             Self::Drop { .. } => OperationKind::Drop,
             Self::Alter { .. } => OperationKind::Alter,
             Self::Comment(_) => OperationKind::Alter,
+            Self::AttributeComment(_) => OperationKind::Alter,
         }
     }
 }
@@ -54,6 +56,34 @@ impl CommentTarget for TypeIdentifier {
         DbObjectId::Type {
             schema: self.schema.clone(),
             name: self.name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeAttributeIdentifier {
+    pub schema: String,
+    pub type_name: String,
+    pub attribute: String,
+}
+
+impl CommentTarget for CompositeAttributeIdentifier {
+    // PostgreSQL syntax: COMMENT ON COLUMN <type>.<attr> IS ...
+    const OBJECT_TYPE: &'static str = "COLUMN";
+
+    fn identifier(&self) -> String {
+        format!(
+            "{}.{}.{}",
+            quote_ident(&self.schema),
+            quote_ident(&self.type_name),
+            quote_ident(&self.attribute)
+        )
+    }
+
+    fn db_object_id(&self) -> DbObjectId {
+        DbObjectId::Type {
+            schema: self.schema.clone(),
+            name: self.type_name.clone(),
         }
     }
 }

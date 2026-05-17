@@ -62,6 +62,7 @@ impl SqlRenderer for TypeOperation {
                 safety: Safety::Safe,
             }],
             TypeOperation::Comment(op) => op.to_sql(),
+            TypeOperation::AttributeComment(op) => op.to_sql(),
         }
     }
 
@@ -74,6 +75,7 @@ impl SqlRenderer for TypeOperation {
                 name: name.clone(),
             },
             TypeOperation::Comment(op) => op.db_object_id(),
+            TypeOperation::AttributeComment(op) => op.db_object_id(),
         }
     }
 }

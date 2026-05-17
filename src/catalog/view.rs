@@ -13,6 +13,7 @@ use tracing::info;
 pub struct ViewColumn {
     pub name: String,
     pub type_: Option<String>, // PostgreSQL doesn't always expose this directly
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,7 +171,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                 ELSE t.typname
             END AS "type_name?",
             -- Check if type (or element type for arrays) is from an extension
-            ext_types.extname IS NOT NULL AS "is_extension_type!: bool"
+            ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
+            d.description AS "comment?"
         FROM pg_attribute a
         JOIN pg_class c ON a.attrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -186,6 +188,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             JOIN pg_extension e ON dep.refobjid = e.oid
             WHERE dep.deptype = 'e'
         ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(t.typelem, 0::oid), t.oid)
+        -- Per-column comment (objsubid = attnum)
+        LEFT JOIN pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum
         WHERE c.relkind = 'v'
           AND a.attnum > 0
           AND NOT a.attisdropped
@@ -209,6 +213,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
         columns_by_view.entry(key).or_default().push(ViewColumn {
             name: col.column_name,
             type_: Some(type_str),
+            comment: col.comment,
         });
     }
 

@@ -43,6 +43,7 @@ pub struct CompositeAttribute {
     pub raw_type_name: Option<String>,
     #[allow(dead_code)] // Used in SQL query but not in rendering; kept for potential future use
     pub attndims: i32,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,7 +165,10 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
             CASE
                 WHEN attr_t.typelem != 0 THEN elem_t.typtype::text
                 ELSE attr_t.typtype::text
-            END AS "attr_type_typtype?"
+            END AS "attr_type_typtype?",
+            -- Per-attribute comment (objsubid = attnum). Composite types live in pg_type;
+            -- per-attribute comments are recorded against the row type's relfilenode entry in pg_class.
+            d.description AS "attr_comment?"
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         JOIN pg_class c ON t.typrelid = c.oid
@@ -181,6 +185,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
             JOIN pg_extension e ON dep.refobjid = e.oid
             WHERE dep.deptype = 'e'
         ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(attr_t.typelem, 0::oid), attr_t.oid)
+        -- Per-attribute comment lives on the type's pg_class entry (c.oid) with objsubid = attnum
+        LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = a.attnum
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND t.typtype = 'c'  -- composite
           AND a.attnum > 0
@@ -221,6 +227,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                     type_schema: attr.attr_type_schema,
                     raw_type_name: attr.attr_type_name,
                     attndims: attr.attr_attndims,
+                    comment: attr.attr_comment,
                 },
                 attr.is_extension_type,
                 attr.extension_name,
@@ -314,6 +321,7 @@ mod tests {
                 type_schema: None,
                 raw_type_name: None,
                 attndims: 0,
+                comment: None,
             })
             .collect();
 

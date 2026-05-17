@@ -873,3 +873,145 @@ async fn test_disable_security_barrier() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_view_column_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
+            "CREATE VIEW test_schema.user_summary AS SELECT id, name FROM test_schema.users",
+        ],
+        // Initial DB only: nothing extra (no column comment)
+        &[],
+        // Target DB only: add column comment on the view
+        &["COMMENT ON COLUMN test_schema.user_summary.name IS 'Full name of the user'"],
+        |steps, final_catalog| {
+            // Migration should produce SQL that sets the column comment on the view
+            let all_sql: Vec<String> = steps
+                .iter()
+                .flat_map(|s| s.to_sql())
+                .map(|r| r.sql)
+                .collect();
+            let has_column_comment = all_sql.iter().any(|sql| {
+                sql.contains("COMMENT ON COLUMN")
+                    && sql.contains("user_summary")
+                    && sql.contains("\"name\"")
+                    && sql.contains("Full name of the user")
+            });
+            assert!(
+                has_column_comment,
+                "Expected COMMENT ON COLUMN for view column, got: {:?}",
+                all_sql
+            );
+
+            // After applying the migration to a fresh DB, the view's column should have the comment
+            let view = final_catalog
+                .views
+                .iter()
+                .find(|v| v.schema == "test_schema" && v.name == "user_summary")
+                .expect("user_summary view should exist");
+            let name_col = view
+                .columns
+                .iter()
+                .find(|c| c.name == "name")
+                .expect("name column should exist on view");
+            assert_eq!(
+                name_col.comment,
+                Some("Full name of the user".to_string()),
+                "View column comment should round-trip through introspection"
+            );
+
+            Ok(())
+        },
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_view_column_comment_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
+            "CREATE VIEW test_schema.user_summary AS SELECT id, name FROM test_schema.users",
+        ],
+        // Initial DB only: has the column comment
+        &["COMMENT ON COLUMN test_schema.user_summary.name IS 'Full name of the user'"],
+        // Target DB only: no column comment
+        &[],
+        |steps, final_catalog| {
+            // Migration should produce SQL that drops the column comment on the view
+            let all_sql: Vec<String> = steps
+                .iter()
+                .flat_map(|s| s.to_sql())
+                .map(|r| r.sql)
+                .collect();
+            let has_drop_comment = all_sql.iter().any(|sql| {
+                sql.contains("COMMENT ON COLUMN")
+                    && sql.contains("user_summary")
+                    && sql.contains("\"name\"")
+                    && sql.contains("NULL")
+            });
+            assert!(
+                has_drop_comment,
+                "Expected COMMENT ON COLUMN ... IS NULL for view column drop, got: {:?}",
+                all_sql
+            );
+
+            // Final state: comment should be gone
+            let view = final_catalog
+                .views
+                .iter()
+                .find(|v| v.schema == "test_schema" && v.name == "user_summary")
+                .expect("user_summary view should exist");
+            let name_col = view
+                .columns
+                .iter()
+                .find(|c| c.name == "name")
+                .expect("name column should exist on view");
+            assert_eq!(name_col.comment, None);
+
+            Ok(())
+        },
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_view_with_column_comments_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        &[
+            "CREATE SCHEMA test_schema",
+            "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
+        ],
+        &[],
+        &[
+            "CREATE VIEW test_schema.user_summary AS SELECT id, name FROM test_schema.users",
+            "COMMENT ON COLUMN test_schema.user_summary.id IS 'View id column'",
+            "COMMENT ON COLUMN test_schema.user_summary.name IS 'View name column'",
+        ],
+        |_steps, final_catalog| {
+            let view = final_catalog
+                .views
+                .iter()
+                .find(|v| v.schema == "test_schema" && v.name == "user_summary")
+                .expect("user_summary view should exist");
+            let id_col = view.columns.iter().find(|c| c.name == "id").unwrap();
+            let name_col = view.columns.iter().find(|c| c.name == "name").unwrap();
+            assert_eq!(id_col.comment, Some("View id column".to_string()));
+            assert_eq!(name_col.comment, Some("View name column".to_string()));
+            Ok(())
+        },
+    ).await?;
+
+    Ok(())
+}

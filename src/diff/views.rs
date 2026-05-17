@@ -1,6 +1,72 @@
-use crate::catalog::view::View;
+use crate::catalog::view::{View, ViewColumn};
 use crate::diff::comment_utils;
-use crate::diff::operations::{MigrationStep, ViewIdentifier, ViewOperation, ViewOption};
+use crate::diff::operations::{
+    CommentOperation, MigrationStep, ViewColumnIdentifier, ViewIdentifier, ViewOperation,
+    ViewOption,
+};
+
+/// Emit SET steps for all non-empty column comments on a (newly created or recreated) view.
+fn emit_initial_column_comments(view: &View) -> Vec<MigrationStep> {
+    view.columns
+        .iter()
+        .filter_map(|col| {
+            col.comment.as_ref().map(|c| {
+                MigrationStep::View(ViewOperation::ColumnComment(CommentOperation::Set {
+                    target: ViewColumnIdentifier {
+                        schema: view.schema.clone(),
+                        view: view.name.clone(),
+                        name: col.name.clone(),
+                    },
+                    comment: c.clone(),
+                }))
+            })
+        })
+        .collect()
+}
+
+/// Diff per-column comments between two views (assumes columns are otherwise identical).
+fn diff_column_comments(old: &View, new: &View) -> Vec<MigrationStep> {
+    let mut steps = Vec::new();
+    let by_name_old: std::collections::HashMap<&str, &ViewColumn> =
+        old.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    for new_col in &new.columns {
+        let Some(old_col) = by_name_old.get(new_col.name.as_str()) else {
+            continue;
+        };
+        let target = || ViewColumnIdentifier {
+            schema: new.schema.clone(),
+            view: new.name.clone(),
+            name: new_col.name.clone(),
+        };
+        match (&old_col.comment, &new_col.comment) {
+            (None, Some(c)) => {
+                steps.push(MigrationStep::View(ViewOperation::ColumnComment(
+                    CommentOperation::Set {
+                        target: target(),
+                        comment: c.clone(),
+                    },
+                )));
+            }
+            (Some(old_c), Some(new_c)) if old_c != new_c => {
+                steps.push(MigrationStep::View(ViewOperation::ColumnComment(
+                    CommentOperation::Set {
+                        target: target(),
+                        comment: new_c.clone(),
+                    },
+                )));
+            }
+            (Some(_), None) => {
+                steps.push(MigrationStep::View(ViewOperation::ColumnComment(
+                    CommentOperation::Drop { target: target() },
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    steps
+}
 
 /// Diff a single view
 pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
@@ -26,6 +92,8 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
             }
 
+            steps.extend(emit_initial_column_comments(n));
+
             steps
         }
         // DROP removed view
@@ -38,7 +106,15 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
         (Some(o), Some(n)) => {
             let mut steps = Vec::new();
 
-            if o.columns != n.columns {
+            // Compare column structure ignoring comments — comments are handled separately
+            // so a comment-only column change doesn't force a drop/recreate.
+            let structural_columns_changed = o.columns.len() != n.columns.len()
+                || o.columns
+                    .iter()
+                    .zip(n.columns.iter())
+                    .any(|(a, b)| a.name != b.name || a.type_ != b.type_);
+
+            if structural_columns_changed {
                 steps.extend(vec![
                     MigrationStep::View(ViewOperation::Drop {
                         schema: o.schema.clone(),
@@ -63,6 +139,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 ) {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
+
+                // Column comments are dropped along with the view; re-emit any present on the new view.
+                steps.extend(emit_initial_column_comments(n));
             } else if o.definition != n.definition {
                 steps.push(MigrationStep::View(ViewOperation::Replace {
                     schema: n.schema.clone(),
@@ -81,6 +160,8 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
+
+                steps.extend(diff_column_comments(o, n));
             } else {
                 // Check for security option changes even when definition is unchanged
                 if o.security_invoker != n.security_invoker {
@@ -109,6 +190,8 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
+
+                steps.extend(diff_column_comments(o, n));
             }
 
             steps

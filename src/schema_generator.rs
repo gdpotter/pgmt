@@ -428,6 +428,14 @@ impl SchemaGenerator {
                     (target.schema.clone(), target.name.clone())
                 }
             },
+            ViewOperation::ColumnComment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.view.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.view.clone())
+                }
+            },
         }
     }
 
@@ -514,6 +522,14 @@ impl SchemaGenerator {
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
                     (target.schema.clone(), target.name.clone())
+                }
+            },
+            TypeOperation::AttributeComment(comment_op) => match comment_op {
+                crate::diff::operations::CommentOperation::Set { target, .. } => {
+                    (target.schema.clone(), target.type_name.clone())
+                }
+                crate::diff::operations::CommentOperation::Drop { target } => {
+                    (target.schema.clone(), target.type_name.clone())
                 }
             },
         }

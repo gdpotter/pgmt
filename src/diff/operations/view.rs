@@ -47,6 +47,7 @@ pub enum ViewOperation {
         enabled: bool,
     },
     Comment(CommentOperation<ViewIdentifier>),
+    ColumnComment(CommentOperation<ViewColumnIdentifier>),
 }
 
 impl ViewOperation {
@@ -57,6 +58,7 @@ impl ViewOperation {
             Self::Replace { .. } => OperationKind::Alter,
             Self::SetOption { .. } => OperationKind::Alter,
             Self::Comment(_) => OperationKind::Alter,
+            Self::ColumnComment(_) => OperationKind::Alter,
         }
     }
 }
@@ -78,6 +80,33 @@ impl CommentTarget for ViewIdentifier {
         DbObjectId::View {
             schema: self.schema.clone(),
             name: self.name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewColumnIdentifier {
+    pub schema: String,
+    pub view: String,
+    pub name: String,
+}
+
+impl CommentTarget for ViewColumnIdentifier {
+    const OBJECT_TYPE: &'static str = "COLUMN";
+
+    fn identifier(&self) -> String {
+        format!(
+            "{}.{}.{}",
+            quote_ident(&self.schema),
+            quote_ident(&self.view),
+            quote_ident(&self.name)
+        )
+    }
+
+    fn db_object_id(&self) -> DbObjectId {
+        DbObjectId::View {
+            schema: self.schema.clone(),
+            name: self.view.clone(),
         }
     }
 }
