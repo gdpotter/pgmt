@@ -19,14 +19,14 @@
     "@astrojs/check": "^0.9.8",
     "@astrojs/sitemap": "^3.7.2",
     "@astrojs/starlight": "^0.38.2",
-    "astro": "^6.1.1",
+    "astro": "^6.3.5",
     "rehype-mermaid": "^2.1.0",
     "shiki": "^3.22.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@pandacss/dev": "^1.10.0",
+    "@pandacss/dev": "^1.11.1",
     "@typescript-eslint/eslint-plugin": "^8.55.0",
     "@typescript-eslint/parser": "^8.55.0",
     "eslint": "^9.39.2",
