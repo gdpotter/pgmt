@@ -741,6 +741,13 @@ impl SchemaGenerator {
                 schema: schema.clone(),
                 name: name.clone(),
             },
+            // Column grants are written alongside their parent relation. relkind
+            // isn't carried here; column grants are overwhelmingly on tables, so
+            // route to the table file.
+            ObjectType::Column { schema, table, .. } => GrantTarget::Table {
+                schema: schema.clone(),
+                name: table.clone(),
+            },
         }
     }
 

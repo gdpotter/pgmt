@@ -52,6 +52,57 @@ async fn test_fetch_table_grants() {
 }
 
 #[tokio::test]
+async fn test_fetch_column_grants() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA test_col").await;
+        db.execute("CREATE TABLE test_col.users (id SERIAL, email TEXT, ssn TEXT)")
+            .await;
+        // Column-level grants: SELECT+UPDATE on email, SELECT on ssn.
+        db.execute("GRANT SELECT (email), UPDATE (email) ON test_col.users TO test_app_user")
+            .await;
+        db.execute("GRANT SELECT (ssn) ON test_col.users TO test_read_only")
+            .await;
+
+        let grants = fetch(&mut *db.conn().await).await.unwrap();
+
+        let column_grants: Vec<_> = grants
+            .iter()
+            .filter(|g| {
+                matches!(&g.object, ObjectType::Column { schema, table, .. }
+                if schema == "test_col" && table == "users")
+            })
+            .collect();
+
+        // email/test_app_user and ssn/test_read_only
+        let email_grant = column_grants
+            .iter()
+            .find(|g| {
+                matches!(&g.object, ObjectType::Column { column, .. } if column == "email")
+                    && matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+            })
+            .expect("Should have column grant on email for test_app_user");
+        assert!(email_grant.privileges.contains(&"SELECT".to_string()));
+        assert!(email_grant.privileges.contains(&"UPDATE".to_string()));
+
+        let ssn_grant = column_grants
+            .iter()
+            .find(|g| {
+                matches!(&g.object, ObjectType::Column { column, .. } if column == "ssn")
+                    && matches!(&g.grantee, GranteeType::Role(n) if n == "test_read_only")
+            })
+            .expect("Should have column grant on ssn for test_read_only");
+        assert_eq!(ssn_grant.privileges, vec!["SELECT".to_string()]);
+
+        // Column grant depends on its parent table for ordering.
+        assert!(email_grant.depends_on().contains(&DbObjectId::Table {
+            schema: "test_col".to_string(),
+            name: "users".to_string(),
+        }));
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn test_fetch_schema_grants() {
     with_test_db(async |db| {
         // Create test schema and grant usage

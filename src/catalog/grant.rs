@@ -51,6 +51,13 @@ pub enum ObjectType {
         schema: String,
         name: String,
     },
+    /// A column-level privilege target (e.g. GRANT SELECT (col) ON table).
+    /// The parent relation may be a table or a view; both render the same way.
+    Column {
+        schema: String,
+        table: String,
+        column: String,
+    },
 }
 
 impl ObjectType {
@@ -104,6 +111,15 @@ impl ObjectType {
                 schema: schema.clone(),
                 name: name.clone(),
             },
+            ObjectType::Column {
+                schema,
+                table,
+                column,
+            } => DbObjectId::Column {
+                schema: schema.clone(),
+                table: table.clone(),
+                column: column.clone(),
+            },
         }
     }
 
@@ -120,6 +136,7 @@ impl ObjectType {
             ObjectType::Sequence { schema, .. } => schema,
             ObjectType::Type { schema, .. } => schema,
             ObjectType::Domain { schema, .. } => schema,
+            ObjectType::Column { schema, .. } => schema,
         }
     }
 }
@@ -168,6 +185,11 @@ impl Grant {
             ObjectType::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
             ObjectType::Type { schema, name } => format!("type:{}.{}", schema, name),
             ObjectType::Domain { schema, name } => format!("domain:{}.{}", schema, name),
+            ObjectType::Column {
+                schema,
+                table,
+                column,
+            } => format!("column:{}.{}.{}", schema, table, column),
         };
 
         format!("{}@{}", grantee_str, object_str)
@@ -194,6 +216,10 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Grant>> {
     // Fetch view privileges
     info!("Fetching view grants...");
     grants.extend(fetch_view_privileges(&mut *conn).await?);
+
+    // Fetch column privileges (table and view columns)
+    info!("Fetching column grants...");
+    grants.extend(fetch_column_privileges(&mut *conn).await?);
 
     // Fetch schema privileges
     info!("Fetching schema grants...");
@@ -378,6 +404,118 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
                     depends_on,
                     object_owner: row.object_owner.clone(),
                     is_default_acl: row.is_default_acl,
+                });
+            }
+        }
+    }
+
+    if let Some(grant) = current_grant {
+        result.push(grant);
+    }
+
+    Ok(result)
+}
+
+async fn fetch_column_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
+    // Column privileges live in pg_attribute.attacl, which is NULL unless an
+    // explicit column grant has been made — so there is no default ACL to
+    // expand, and every row here is an explicit grant. attnum is a physical
+    // coordinate and never enters the model: we resolve to attname here and key
+    // grants on the column name only.
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            n.nspname as "schema_name!",
+            c.relname as "table_name!",
+            a.attname as "column_name!",
+            c.relkind::text as "relkind!",
+            CASE
+                WHEN acl.grantee = 0 THEN 'PUBLIC'
+                ELSE r.rolname
+            END as "grantee!",
+            acl.privilege_type as "privilege_type!",
+            CASE WHEN acl.is_grantable THEN 'YES' ELSE 'NO' END as "is_grantable!",
+            owner_role.rolname as "object_owner!"
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        JOIN pg_roles owner_role ON c.relowner = owner_role.oid
+        JOIN pg_attribute a ON a.attrelid = c.oid
+        CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+        LEFT JOIN pg_roles r ON r.oid = acl.grantee
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          AND c.relkind IN ('r', 'v', 'm', 'p') -- tables, views, matviews, partitioned tables
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attacl IS NOT NULL
+          -- Exclude relations that belong to extensions
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend dep
+              WHERE dep.objid = c.oid
+              AND dep.deptype = 'e'
+          )
+        ORDER BY n.nspname, c.relname, a.attname,
+                 CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END,
+                 acl.privilege_type
+        "#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let mut result = Vec::new();
+    let mut current_grant: Option<Grant> = None;
+
+    for row in rows {
+        let grantee = if row.grantee == "PUBLIC" {
+            GranteeType::Public
+        } else {
+            GranteeType::Role(row.grantee.clone())
+        };
+
+        let object = ObjectType::Column {
+            schema: row.schema_name.clone(),
+            table: row.table_name.clone(),
+            column: row.column_name.clone(),
+        };
+
+        // A column grant is ordered relative to its parent relation, which may be
+        // a table or a view.
+        let parent = if row.relkind == "v" || row.relkind == "m" {
+            DbObjectId::View {
+                schema: row.schema_name.clone(),
+                name: row.table_name.clone(),
+            }
+        } else {
+            DbObjectId::Table {
+                schema: row.schema_name.clone(),
+                name: row.table_name.clone(),
+            }
+        };
+
+        let with_grant_option = row.is_grantable == "YES";
+
+        match &mut current_grant {
+            Some(grant)
+                if grant.grantee == grantee
+                    && grant.object == object
+                    && grant.with_grant_option == with_grant_option =>
+            {
+                grant.privileges.push(row.privilege_type);
+            }
+            _ => {
+                if let Some(grant) = current_grant.take() {
+                    result.push(grant);
+                }
+
+                current_grant = Some(Grant {
+                    grantee,
+                    object,
+                    privileges: vec![row.privilege_type],
+                    with_grant_option,
+                    depends_on: vec![parent],
+                    object_owner: row.object_owner.clone(),
+                    // attacl is never NULL here (filtered above), so these are
+                    // always explicit grants.
+                    is_default_acl: false,
                 });
             }
         }

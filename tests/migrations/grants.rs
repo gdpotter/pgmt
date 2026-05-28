@@ -48,6 +48,93 @@ async fn test_grant_table_privilege_migration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_grant_column_privilege_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table
+            &["CREATE TABLE users (id SERIAL, email TEXT, ssn TEXT)"],
+            // Initial DB only: no grants
+            &[],
+            // Target DB only: column-level grants
+            &[
+                "GRANT SELECT (email), UPDATE (email) ON users TO test_app_user",
+                "GRANT SELECT (ssn) ON users TO test_read_only",
+            ],
+            |steps, final_catalog| {
+                use pgmt::catalog::grant::{GranteeType, ObjectType};
+
+                let has_column_grant_step = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Grant(GrantOperation::Grant { grant })
+                        if matches!(&grant.object, ObjectType::Column { column, .. } if column == "email"))
+                });
+                assert!(has_column_grant_step, "Should have a column GRANT step");
+
+                // Round-trip: the migration was applied to a fresh DB, so the
+                // re-fetched catalog must reflect the column grant.
+                let email_grant = final_catalog
+                    .grants
+                    .iter()
+                    .find(|g| {
+                        matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                            && matches!(&g.object, ObjectType::Column { schema, table, column }
+                                if schema == "public" && table == "users" && column == "email")
+                    })
+                    .expect("email column grant should exist after migration");
+                assert!(email_grant.privileges.contains(&"SELECT".to_string()));
+                assert!(email_grant.privileges.contains(&"UPDATE".to_string()));
+
+                let ssn_grant_exists = final_catalog.grants.iter().any(|g| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_read_only")
+                        && matches!(&g.object, ObjectType::Column { column, .. } if column == "ssn")
+                });
+                assert!(ssn_grant_exists, "ssn column grant should exist after migration");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_revoke_column_privilege_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table
+            &["CREATE TABLE users (id SERIAL, email TEXT)"],
+            // Initial DB only: has column grant
+            &["GRANT SELECT (email) ON users TO test_app_user"],
+            // Target DB only: nothing (grant removed)
+            &[],
+            |steps, final_catalog| {
+                use pgmt::catalog::grant::{GranteeType, ObjectType};
+
+                let has_revoke_step = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
+                        if matches!(&grant.object, ObjectType::Column { column, .. } if column == "email"))
+                });
+                assert!(has_revoke_step, "Should have a column REVOKE step");
+
+                let grant_exists = final_catalog.grants.iter().any(|g| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                        && matches!(&g.object, ObjectType::Column { column, .. } if column == "email")
+                });
+                assert!(!grant_exists, "column grant should be revoked after migration");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_revoke_table_privilege_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 

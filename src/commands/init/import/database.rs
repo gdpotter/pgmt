@@ -159,6 +159,9 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
                     }
                     | ObjectType::Domain {
                         schema: obj_schema, ..
+                    }
+                    | ObjectType::Column {
+                        schema: obj_schema, ..
                     } => obj_schema == &schema.name,
                     ObjectType::Schema { name } => name == &schema.name,
                 }
@@ -457,7 +460,8 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
             | ObjectType::Aggregate { schema, .. }
             | ObjectType::Sequence { schema, .. }
             | ObjectType::Type { schema, .. }
-            | ObjectType::Domain { schema, .. } => schema_set.contains(schema),
+            | ObjectType::Domain { schema, .. }
+            | ObjectType::Column { schema, .. } => schema_set.contains(schema),
             ObjectType::Schema { name } => schema_set.contains(name),
         }
     });

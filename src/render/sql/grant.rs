@@ -15,18 +15,18 @@ use crate::render::quote_ident;
 /// - WITH GRANT OPTION clause
 /// - Proper SQL formatting and identifier quoting
 pub fn render_grant_statement(grant: &Grant) -> String {
-    let privileges = grant.privileges.join(", ");
     let grantee = match &grant.grantee {
         GranteeType::Role(name) => quote_ident(name),
         GranteeType::Public => "PUBLIC".to_string(),
     };
 
-    let object_clause = render_grant_object_clause(&grant.object);
     let grant_option = if grant.with_grant_option {
         " WITH GRANT OPTION"
     } else {
         ""
     };
+
+    let (privileges, object_clause) = render_privileges_and_object(grant);
 
     format!(
         "GRANT {} ON {} TO {}{};",
@@ -36,18 +36,41 @@ pub fn render_grant_statement(grant: &Grant) -> String {
 
 /// Render a complete REVOKE statement for the given grant.
 pub fn render_revoke_statement(grant: &Grant) -> String {
-    let privileges = grant.privileges.join(", ");
     let grantee = match &grant.grantee {
         GranteeType::Role(name) => quote_ident(name),
         GranteeType::Public => "PUBLIC".to_string(),
     };
 
-    let object_clause = render_grant_object_clause(&grant.object);
+    let (privileges, object_clause) = render_privileges_and_object(grant);
 
     format!(
         "REVOKE {} ON {} FROM {};",
         privileges, object_clause, grantee
     )
+}
+
+/// Render the privilege list and object clause for a grant. Column grants attach
+/// the column to each privilege (`SELECT (col), UPDATE (col)`) and reference the
+/// bare relation; all other objects list privileges plainly.
+fn render_privileges_and_object(grant: &Grant) -> (String, String) {
+    match &grant.object {
+        ObjectType::Column {
+            schema,
+            table,
+            column,
+        } => {
+            let col = quote_ident(column);
+            let privileges = grant
+                .privileges
+                .iter()
+                .map(|p| format!("{} ({})", p, col))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let object_clause = format!("{}.{}", quote_ident(schema), quote_ident(table));
+            (privileges, object_clause)
+        }
+        other => (grant.privileges.join(", "), render_grant_object_clause(other)),
+    }
 }
 
 /// Render the object clause for GRANT/REVOKE statements.
@@ -113,6 +136,11 @@ pub fn render_grant_object_clause(object: &ObjectType) -> String {
         }
         ObjectType::Domain { schema, name } => {
             format!("DOMAIN {}.{}", quote_ident(schema), quote_ident(name))
+        }
+        ObjectType::Column { schema, table, .. } => {
+            // Column grants reference the bare relation; the column is attached to
+            // each privilege by render_privileges_and_object.
+            format!("{}.{}", quote_ident(schema), quote_ident(table))
         }
     }
 }
@@ -375,6 +403,52 @@ mod tests {
         assert_eq!(
             sql,
             "GRANT USAGE ON SEQUENCE \"public\".\"users_id_seq\" TO \"app_user\";"
+        );
+    }
+
+    #[test]
+    fn test_render_grant_on_column() {
+        let grant = Grant {
+            object: ObjectType::Column {
+                schema: "public".to_string(),
+                table: "users".to_string(),
+                column: "email".to_string(),
+            },
+            grantee: GranteeType::Role("app_user".to_string()),
+            privileges: vec!["SELECT".to_string(), "UPDATE".to_string()],
+            with_grant_option: false,
+            depends_on: vec![],
+            object_owner: "postgres".to_string(),
+            is_default_acl: false,
+        };
+
+        let sql = render_grant_statement(&grant);
+        assert_eq!(
+            sql,
+            "GRANT SELECT (\"email\"), UPDATE (\"email\") ON \"public\".\"users\" TO \"app_user\";"
+        );
+    }
+
+    #[test]
+    fn test_render_revoke_on_column() {
+        let grant = Grant {
+            object: ObjectType::Column {
+                schema: "public".to_string(),
+                table: "users".to_string(),
+                column: "ssn".to_string(),
+            },
+            grantee: GranteeType::Role("app_user".to_string()),
+            privileges: vec!["SELECT".to_string()],
+            with_grant_option: false,
+            depends_on: vec![],
+            object_owner: "postgres".to_string(),
+            is_default_acl: false,
+        };
+
+        let sql = render_revoke_statement(&grant);
+        assert_eq!(
+            sql,
+            "REVOKE SELECT (\"ssn\") ON \"public\".\"users\" FROM \"app_user\";"
         );
     }
 

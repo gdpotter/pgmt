@@ -214,6 +214,11 @@ fn object_key(object: &ObjectType) -> String {
         ObjectType::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
         ObjectType::Type { schema, name } => format!("type:{}.{}", schema, name),
         ObjectType::Domain { schema, name } => format!("domain:{}.{}", schema, name),
+        ObjectType::Column {
+            schema,
+            table,
+            column,
+        } => format!("column:{}.{}.{}", schema, table, column),
     }
 }
 
@@ -231,11 +236,13 @@ fn get_default_public_privileges(object: &ObjectType) -> Vec<String> {
         ObjectType::Type { .. } | ObjectType::Domain { .. } => {
             vec!["USAGE".to_string()]
         }
-        // Tables, views, sequences, schemas: no PUBLIC defaults (owner only)
+        // Tables, views, sequences, schemas: no PUBLIC defaults (owner only).
+        // Columns never have default privileges (attacl is NULL by default).
         ObjectType::Table { .. }
         | ObjectType::View { .. }
         | ObjectType::Sequence { .. }
-        | ObjectType::Schema { .. } => {
+        | ObjectType::Schema { .. }
+        | ObjectType::Column { .. } => {
             vec![]
         }
     }
