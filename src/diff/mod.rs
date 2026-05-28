@@ -9,6 +9,7 @@ pub mod extensions;
 pub mod functions;
 pub mod grants;
 pub mod indexes;
+pub mod namespace;
 pub mod operations;
 pub mod policies;
 pub mod schemas;
@@ -367,6 +368,46 @@ fn order_steps_by_dependencies(
                     let from = node_indices[drop_i];
                     let to = node_indices[create_i];
                     graph.add_edge(from, to, ());
+                }
+            }
+        }
+    }
+
+    // Same-slot DROP-before-CREATE across object types. PostgreSQL enforces name
+    // uniqueness over a coarser key than identity (e.g. a CONSTRAINT and an INDEX
+    // of the same name collide in pg_class), and there is no pg_depend edge
+    // between such pairs. Force the drop ahead of the create whenever two steps
+    // occupy the same NamespaceSlot. Edges only ever point drop -> create, so
+    // they cannot by themselves introduce a cycle.
+    {
+        let mut slot_drops: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
+        let mut slot_creates: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
+
+        for (i, step) in steps.iter().enumerate() {
+            let slots = namespace::namespace_slots(&step.id());
+            match step.operation_kind() {
+                OperationKind::Drop => {
+                    for slot in slots {
+                        slot_drops.entry(slot).or_default().push(i);
+                    }
+                }
+                OperationKind::Create => {
+                    for slot in slots {
+                        slot_creates.entry(slot).or_default().push(i);
+                    }
+                }
+                OperationKind::Alter => {}
+            }
+        }
+
+        for (slot, drops) in &slot_drops {
+            if let Some(creates) = slot_creates.get(slot) {
+                for &drop_i in drops {
+                    for &create_i in creates {
+                        if drop_i != create_i {
+                            graph.add_edge(node_indices[drop_i], node_indices[create_i], ());
+                        }
+                    }
                 }
             }
         }
