@@ -48,6 +48,59 @@ async fn test_grant_table_privilege_migration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_grant_procedure_privilege_migration() -> Result<()> {
+    // Procedures are a distinct DbObjectId variant; a grant on one must render
+    // `ON PROCEDURE` (not `ON FUNCTION`). Applying to a fresh DB also fails at
+    // apply time if the wrong keyword is emitted.
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE SCHEMA test_schema",
+                "CREATE PROCEDURE test_schema.do_thing(x integer) LANGUAGE plpgsql AS $$ BEGIN END $$",
+            ],
+            // Initial DB only: no grant
+            &[],
+            // Target DB only: grant EXECUTE on the procedure
+            &["GRANT EXECUTE ON PROCEDURE test_schema.do_thing(integer) TO test_app_user"],
+            |steps, final_catalog| {
+                use pgmt::catalog::grant::GranteeType;
+                use pgmt::catalog::id::DbObjectId;
+
+                // The grant step for test_app_user must render the PROCEDURE keyword.
+                let grant_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(s, MigrationStep::Grant(GrantOperation::Grant { grant })
+                            if matches!(&grant.grantee, GranteeType::Role(n) if n == "test_app_user")
+                                && matches!(&grant.target.object, DbObjectId::Procedure { .. }))
+                    })
+                    .expect("Should have a procedure grant step for test_app_user");
+
+                let sql = grant_step.to_sql();
+                assert!(
+                    sql.iter().any(|r| r.sql.contains("ON PROCEDURE")),
+                    "expected GRANT ... ON PROCEDURE, got: {:?}",
+                    sql.iter().map(|r| &r.sql).collect::<Vec<_>>()
+                );
+
+                // Round-trip: the grant exists on the procedure after applying.
+                let exists = final_catalog.grants.iter().any(|g| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                        && matches!(&g.target.object, DbObjectId::Procedure { name, .. } if name == "do_thing")
+                });
+                assert!(exists, "procedure grant should exist after migration");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_grant_column_privilege_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
