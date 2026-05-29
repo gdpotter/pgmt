@@ -1,5 +1,5 @@
 use crate::catalog;
-use crate::catalog::grant::ObjectType;
+use crate::catalog::id::DbObjectId;
 use crate::config::types::{ObjectExclude, ObjectInclude, Objects, TrackingTable};
 use glob::Pattern;
 
@@ -133,11 +133,11 @@ impl ObjectFilter {
         catalog.grants.retain(|grant| {
             // For table/view grants, check both schema and table exclusion patterns
             // For other objects, just check schema inclusion
-            match &grant.object {
-                ObjectType::Table { schema, name } | ObjectType::View { schema, name } => {
+            match &grant.target.object {
+                DbObjectId::Table { schema, name } | DbObjectId::View { schema, name } => {
                     self.should_include_table(schema, name)
                 }
-                _ => self.should_include_schema(grant.object.schema()),
+                _ => self.should_include_schema(&grant.target.schema()),
             }
         });
 
@@ -303,7 +303,8 @@ mod tests {
     #[test]
     fn test_grant_filtering() {
         use crate::catalog::Catalog;
-        use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+        use crate::catalog::grant::{Grant, GranteeType};
+        use crate::catalog::target::AttrTarget;
 
         let objects = Objects {
             include: ObjectInclude {
@@ -319,9 +320,9 @@ mod tests {
         let filter = ObjectFilter::new(&objects, &create_test_tracking_table());
 
         // Helper to create a test grant
-        let make_grant = |object: ObjectType| Grant {
+        let make_grant = |target: AttrTarget| Grant {
             grantee: GranteeType::Public,
-            object,
+            target,
             privileges: vec!["EXECUTE".to_string()],
             with_grant_option: false,
             depends_on: vec![],
@@ -332,35 +333,35 @@ mod tests {
         let mut catalog = Catalog::empty();
         catalog.grants = vec![
             // Should be kept - public schema function
-            make_grant(ObjectType::Function {
+            make_grant(AttrTarget::object(DbObjectId::Function {
                 schema: "public".into(),
                 name: "my_func".into(),
                 arguments: "".into(),
-            }),
+            })),
             // Should be filtered - excluded schema function
-            make_grant(ObjectType::Function {
+            make_grant(AttrTarget::object(DbObjectId::Function {
                 schema: "excluded_schema".into(),
                 name: "notify_watchers".into(),
                 arguments: "".into(),
-            }),
+            })),
             // Should be filtered - excluded table
-            make_grant(ObjectType::Table {
+            make_grant(AttrTarget::object(DbObjectId::Table {
                 schema: "public".into(),
                 name: "excluded_table".into(),
-            }),
+            })),
             // Should be kept - non-excluded table
-            make_grant(ObjectType::Table {
+            make_grant(AttrTarget::object(DbObjectId::Table {
                 schema: "public".into(),
                 name: "users".into(),
-            }),
+            })),
             // Should be filtered - grant on excluded schema itself
-            make_grant(ObjectType::Schema {
+            make_grant(AttrTarget::object(DbObjectId::Schema {
                 name: "excluded_schema".into(),
-            }),
+            })),
             // Should be kept - grant on included schema
-            make_grant(ObjectType::Schema {
+            make_grant(AttrTarget::object(DbObjectId::Schema {
                 name: "public".into(),
-            }),
+            })),
         ];
 
         let filtered = filter.filter_catalog(catalog);

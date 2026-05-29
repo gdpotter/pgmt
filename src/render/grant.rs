@@ -31,16 +31,18 @@ impl SqlRenderer for GrantOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+    use crate::catalog::grant::{Grant, GranteeType};
+    use crate::catalog::id::DbObjectId;
+    use crate::catalog::target::AttrTarget;
     use crate::render::Safety;
 
     fn create_table_grant() -> Grant {
         Grant {
             grantee: GranteeType::Role("app_user".to_string()),
-            object: ObjectType::Table {
+            target: AttrTarget::object(DbObjectId::Table {
                 schema: "public".to_string(),
                 name: "users".to_string(),
-            },
+            }),
             privileges: vec!["SELECT".to_string(), "INSERT".to_string()],
             with_grant_option: false,
             depends_on: vec![],
@@ -74,11 +76,11 @@ mod tests {
     fn test_render_grant_to_public() {
         let grant = Grant {
             grantee: GranteeType::Public,
-            object: ObjectType::Function {
+            target: AttrTarget::object(DbObjectId::Function {
                 schema: "public".to_string(),
                 name: "my_func".to_string(),
                 arguments: "integer".to_string(),
-            },
+            }),
             privileges: vec!["EXECUTE".to_string()],
             with_grant_option: false,
             depends_on: vec![],

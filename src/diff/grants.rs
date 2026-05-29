@@ -1,6 +1,7 @@
 //! Diff grants between catalogs
 
-use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+use crate::catalog::grant::{Grant, GranteeType, target_key};
+use crate::catalog::id::DbObjectId;
 use crate::diff::operations::{GrantOperation, MigrationStep};
 use std::collections::BTreeMap;
 
@@ -123,7 +124,7 @@ fn generate_revoke_for_new_explicit_acls(
     let mut old_by_object: BTreeMap<String, Vec<&Grant>> = BTreeMap::new();
     for grant in old_grants {
         old_by_object
-            .entry(object_key(&grant.object))
+            .entry(target_key(&grant.target))
             .or_default()
             .push(grant);
     }
@@ -132,7 +133,7 @@ fn generate_revoke_for_new_explicit_acls(
     let mut new_by_object: BTreeMap<String, Vec<&Grant>> = BTreeMap::new();
     for grant in new_grants {
         new_by_object
-            .entry(object_key(&grant.object))
+            .entry(target_key(&grant.target))
             .or_default()
             .push(grant);
     }
@@ -160,7 +161,8 @@ fn generate_revoke_for_new_explicit_acls(
         // Object either didn't exist or had default ACL before, now has explicit ACL
         // Generate REVOKEs for missing PUBLIC privileges
         let sample_grant = new_object_grants[0];
-        let expected_public_privileges = get_default_public_privileges(&sample_grant.object);
+        let expected_public_privileges =
+            get_default_public_privileges(&sample_grant.target.object);
 
         for privilege in expected_public_privileges {
             // Check if this default PUBLIC grant exists in new state
@@ -172,10 +174,10 @@ fn generate_revoke_for_new_explicit_acls(
                 // Default was revoked - generate REVOKE statement
                 let revoke_grant = Grant {
                     grantee: GranteeType::Public,
-                    object: sample_grant.object.clone(),
+                    target: sample_grant.target.clone(),
                     privileges: vec![privilege],
                     with_grant_option: false,
-                    depends_on: vec![sample_grant.object.db_object_id()],
+                    depends_on: vec![sample_grant.target.db_object_id()],
                     object_owner: sample_grant.object_owner.clone(),
                     is_default_acl: false,
                 };
@@ -190,59 +192,23 @@ fn generate_revoke_for_new_explicit_acls(
     steps
 }
 
-/// Generate a unique key for an object (for grouping grants)
-fn object_key(object: &ObjectType) -> String {
-    match object {
-        ObjectType::Table { schema, name } => format!("table:{}.{}", schema, name),
-        ObjectType::View { schema, name } => format!("view:{}.{}", schema, name),
-        ObjectType::Schema { name } => format!("schema:{}", name),
-        ObjectType::Function {
-            schema,
-            name,
-            arguments,
-        } => format!("function:{}.{}({})", schema, name, arguments),
-        ObjectType::Procedure {
-            schema,
-            name,
-            arguments,
-        } => format!("procedure:{}.{}({})", schema, name, arguments),
-        ObjectType::Aggregate {
-            schema,
-            name,
-            arguments,
-        } => format!("aggregate:{}.{}({})", schema, name, arguments),
-        ObjectType::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
-        ObjectType::Type { schema, name } => format!("type:{}.{}", schema, name),
-        ObjectType::Domain { schema, name } => format!("domain:{}.{}", schema, name),
-        ObjectType::Column {
-            schema,
-            table,
-            column,
-        } => format!("column:{}.{}.{}", schema, table, column),
-    }
-}
-
-/// Get the default PUBLIC privileges for an object type.
+/// Get the default PUBLIC privileges for an object kind.
 /// These are the privileges that PostgreSQL grants to PUBLIC by default.
-fn get_default_public_privileges(object: &ObjectType) -> Vec<String> {
+fn get_default_public_privileges(object: &DbObjectId) -> Vec<String> {
     match object {
-        // Functions and procedures: PUBLIC has EXECUTE by default
-        ObjectType::Function { .. }
-        | ObjectType::Procedure { .. }
-        | ObjectType::Aggregate { .. } => {
+        // Functions, procedures, and aggregates: PUBLIC has EXECUTE by default
+        DbObjectId::Function { .. }
+        | DbObjectId::Procedure { .. }
+        | DbObjectId::Aggregate { .. } => {
             vec!["EXECUTE".to_string()]
         }
         // Types and domains: PUBLIC has USAGE by default
-        ObjectType::Type { .. } | ObjectType::Domain { .. } => {
+        DbObjectId::Type { .. } | DbObjectId::Domain { .. } => {
             vec!["USAGE".to_string()]
         }
-        // Tables, views, sequences, schemas: no PUBLIC defaults (owner only).
-        // Columns never have default privileges (attacl is NULL by default).
-        ObjectType::Table { .. }
-        | ObjectType::View { .. }
-        | ObjectType::Sequence { .. }
-        | ObjectType::Schema { .. }
-        | ObjectType::Column { .. } => {
+        // Everything else has no PUBLIC defaults (owner only). Columns never have
+        // default privileges (attacl is NULL by default).
+        _ => {
             vec![]
         }
     }

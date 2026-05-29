@@ -3,7 +3,8 @@
 //! This module provides consistent grant rendering across both schema generation
 //! and migration operations to ensure identical SQL output.
 
-use crate::catalog::grant::{Grant, GranteeType, ObjectType};
+use crate::catalog::grant::{Grant, GranteeType};
+use crate::catalog::id::DbObjectId;
 use crate::render::quote_ident;
 
 /// Render a complete GRANT statement for the given grant.
@@ -53,24 +54,23 @@ pub fn render_revoke_statement(grant: &Grant) -> String {
 /// the column to each privilege (`SELECT (col), UPDATE (col)`) and reference the
 /// bare relation; all other objects list privileges plainly.
 fn render_privileges_and_object(grant: &Grant) -> (String, String) {
-    match &grant.object {
-        ObjectType::Column {
-            schema,
-            table,
-            column,
-        } => {
-            let col = quote_ident(column);
-            let privileges = grant
-                .privileges
-                .iter()
-                .map(|p| format!("{} ({})", p, col))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let object_clause = format!("{}.{}", quote_ident(schema), quote_ident(table));
-            (privileges, object_clause)
-        }
-        other => (grant.privileges.join(", "), render_grant_object_clause(other)),
+    if let Some(column) = grant.target.column_name() {
+        // Column grants attach the column to each privilege and reference the bare relation.
+        let col = quote_ident(column);
+        let privileges = grant
+            .privileges
+            .iter()
+            .map(|p| format!("{} ({})", p, col))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (schema, table) = grant.target.schema_and_name();
+        let object_clause = format!("{}.{}", quote_ident(&schema), quote_ident(&table));
+        return (privileges, object_clause);
     }
+    (
+        grant.privileges.join(", "),
+        render_grant_object_clause(&grant.target.object),
+    )
 }
 
 /// Render the object clause for GRANT/REVOKE statements.
@@ -78,69 +78,64 @@ fn render_privileges_and_object(grant: &Grant) -> (String, String) {
 /// PostgreSQL GRANT syntax rules:
 /// - Tables and views: No object type keyword (just schema.name)
 /// - Other objects: Require object type keyword (e.g., SCHEMA name, FUNCTION schema.name)
-pub fn render_grant_object_clause(object: &ObjectType) -> String {
+pub fn render_grant_object_clause(object: &DbObjectId) -> String {
     match object {
-        ObjectType::Table { schema, name } => {
-            // PostgreSQL grants on tables don't require the TABLE keyword
+        // Tables and views don't require a keyword.
+        DbObjectId::Table { schema, name } | DbObjectId::View { schema, name } => {
             format!("{}.{}", quote_ident(schema), quote_ident(name))
         }
-        ObjectType::View { schema, name } => {
-            // PostgreSQL grants on views don't require the VIEW keyword
-            format!("{}.{}", quote_ident(schema), quote_ident(name))
-        }
-        ObjectType::Schema { name } => {
-            format!("SCHEMA {}", quote_ident(name))
-        }
-        ObjectType::Function {
+        DbObjectId::Schema { name } => format!("SCHEMA {}", quote_ident(name)),
+        DbObjectId::Function {
             schema,
             name,
             arguments,
-        } => {
-            format!(
-                "FUNCTION {}.{}({})",
-                quote_ident(schema),
-                quote_ident(name),
-                arguments
-            )
-        }
-        ObjectType::Procedure {
+        } => format!(
+            "FUNCTION {}.{}({})",
+            quote_ident(schema),
+            quote_ident(name),
+            arguments
+        ),
+        DbObjectId::Procedure {
             schema,
             name,
             arguments,
-        } => {
-            format!(
-                "PROCEDURE {}.{}({})",
-                quote_ident(schema),
-                quote_ident(name),
-                arguments
-            )
-        }
-        ObjectType::Aggregate {
+        } => format!(
+            "PROCEDURE {}.{}({})",
+            quote_ident(schema),
+            quote_ident(name),
+            arguments
+        ),
+        // PostgreSQL grants on aggregates use the FUNCTION keyword, not AGGREGATE.
+        DbObjectId::Aggregate {
             schema,
             name,
             arguments,
-        } => {
-            // PostgreSQL grants on aggregates use FUNCTION keyword, not AGGREGATE
-            format!(
-                "FUNCTION {}.{}({})",
-                quote_ident(schema),
-                quote_ident(name),
-                arguments
-            )
-        }
-        ObjectType::Sequence { schema, name } => {
+        } => format!(
+            "FUNCTION {}.{}({})",
+            quote_ident(schema),
+            quote_ident(name),
+            arguments
+        ),
+        DbObjectId::Sequence { schema, name } => {
             format!("SEQUENCE {}.{}", quote_ident(schema), quote_ident(name))
         }
-        ObjectType::Type { schema, name } => {
+        DbObjectId::Type { schema, name } => {
             format!("TYPE {}.{}", quote_ident(schema), quote_ident(name))
         }
-        ObjectType::Domain { schema, name } => {
+        DbObjectId::Domain { schema, name } => {
             format!("DOMAIN {}.{}", quote_ident(schema), quote_ident(name))
         }
-        ObjectType::Column { schema, table, .. } => {
-            // Column grants reference the bare relation; the column is attached to
-            // each privilege by render_privileges_and_object.
-            format!("{}.{}", quote_ident(schema), quote_ident(table))
+        // Columns are handled by render_privileges_and_object; the rest are not
+        // grantable object kinds.
+        DbObjectId::Index { .. }
+        | DbObjectId::Constraint { .. }
+        | DbObjectId::Trigger { .. }
+        | DbObjectId::Policy { .. }
+        | DbObjectId::Extension { .. }
+        | DbObjectId::Grant { .. }
+        | DbObjectId::Comment { .. }
+        | DbObjectId::Column { .. } => {
+            unreachable!("not a grantable object kind: {object}")
         }
     }
 }
@@ -148,14 +143,15 @@ pub fn render_grant_object_clause(object: &ObjectType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::target::AttrTarget;
 
     #[test]
     fn test_render_grant_on_table() {
         let grant = Grant {
-            object: ObjectType::Table {
+            target: AttrTarget::object(DbObjectId::Table {
                 schema: "public".to_string(),
                 name: "users".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["SELECT".to_string(), "INSERT".to_string()],
             with_grant_option: false,
@@ -174,10 +170,10 @@ mod tests {
     #[test]
     fn test_render_grant_on_view_no_view_keyword() {
         let grant = Grant {
-            object: ObjectType::View {
+            target: AttrTarget::object(DbObjectId::View {
                 schema: "public".to_string(),
                 name: "current_subscriptions".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("postgres".to_string()),
             privileges: vec!["SELECT".to_string()],
             with_grant_option: false,
@@ -198,10 +194,10 @@ mod tests {
     #[test]
     fn test_render_grant_on_view_all_privileges() {
         let grant = Grant {
-            object: ObjectType::View {
+            target: AttrTarget::object(DbObjectId::View {
                 schema: "public".to_string(),
                 name: "current_subscriptions".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("postgres".to_string()),
             privileges: vec![
                 "DELETE".to_string(),
@@ -230,9 +226,9 @@ mod tests {
     #[test]
     fn test_render_grant_on_schema() {
         let grant = Grant {
-            object: ObjectType::Schema {
+            target: AttrTarget::object(DbObjectId::Schema {
                 name: "analytics".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("data_analyst".to_string()),
             privileges: vec!["USAGE".to_string()],
             with_grant_option: false,
@@ -251,11 +247,11 @@ mod tests {
     #[test]
     fn test_render_grant_on_function() {
         let grant = Grant {
-            object: ObjectType::Function {
+            target: AttrTarget::object(DbObjectId::Function {
                 schema: "public".to_string(),
                 name: "calculate_total".to_string(),
                 arguments: "integer, numeric".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["EXECUTE".to_string()],
             with_grant_option: false,
@@ -274,11 +270,11 @@ mod tests {
     #[test]
     fn test_render_grant_on_procedure() {
         let grant = Grant {
-            object: ObjectType::Procedure {
+            target: AttrTarget::object(DbObjectId::Procedure {
                 schema: "public".to_string(),
                 name: "analyze_database".to_string(),
                 arguments: "".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["EXECUTE".to_string()],
             with_grant_option: false,
@@ -297,11 +293,11 @@ mod tests {
     #[test]
     fn test_render_grant_on_aggregate() {
         let grant = Grant {
-            object: ObjectType::Aggregate {
+            target: AttrTarget::object(DbObjectId::Aggregate {
                 schema: "public".to_string(),
                 name: "array_agg_custom".to_string(),
                 arguments: "integer".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["EXECUTE".to_string()],
             with_grant_option: false,
@@ -321,10 +317,10 @@ mod tests {
     #[test]
     fn test_render_grant_with_grant_option() {
         let grant = Grant {
-            object: ObjectType::Table {
+            target: AttrTarget::object(DbObjectId::Table {
                 schema: "public".to_string(),
                 name: "orders".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("manager".to_string()),
             privileges: vec!["ALL".to_string()],
             with_grant_option: true,
@@ -343,10 +339,10 @@ mod tests {
     #[test]
     fn test_render_grant_to_public() {
         let grant = Grant {
-            object: ObjectType::View {
+            target: AttrTarget::object(DbObjectId::View {
                 schema: "public".to_string(),
                 name: "public_stats".to_string(),
-            },
+            }),
             grantee: GranteeType::Public,
             privileges: vec!["SELECT".to_string()],
             with_grant_option: false,
@@ -365,10 +361,10 @@ mod tests {
     #[test]
     fn test_render_revoke_statement() {
         let grant = Grant {
-            object: ObjectType::Table {
+            target: AttrTarget::object(DbObjectId::Table {
                 schema: "public".to_string(),
                 name: "sensitive_data".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("temp_user".to_string()),
             privileges: vec!["SELECT".to_string(), "INSERT".to_string()],
             with_grant_option: false,
@@ -387,10 +383,10 @@ mod tests {
     #[test]
     fn test_render_grant_on_sequence() {
         let grant = Grant {
-            object: ObjectType::Sequence {
+            target: AttrTarget::object(DbObjectId::Sequence {
                 schema: "public".to_string(),
                 name: "users_id_seq".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["USAGE".to_string()],
             with_grant_option: false,
@@ -409,11 +405,7 @@ mod tests {
     #[test]
     fn test_render_grant_on_column() {
         let grant = Grant {
-            object: ObjectType::Column {
-                schema: "public".to_string(),
-                table: "users".to_string(),
-                column: "email".to_string(),
-            },
+            target: AttrTarget::column(DbObjectId::Table { schema: "public".to_string(), name: "users".to_string() }, "email"),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["SELECT".to_string(), "UPDATE".to_string()],
             with_grant_option: false,
@@ -432,11 +424,7 @@ mod tests {
     #[test]
     fn test_render_revoke_on_column() {
         let grant = Grant {
-            object: ObjectType::Column {
-                schema: "public".to_string(),
-                table: "users".to_string(),
-                column: "ssn".to_string(),
-            },
+            target: AttrTarget::column(DbObjectId::Table { schema: "public".to_string(), name: "users".to_string() }, "ssn"),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["SELECT".to_string()],
             with_grant_option: false,
@@ -455,10 +443,10 @@ mod tests {
     #[test]
     fn test_render_grant_on_type() {
         let grant = Grant {
-            object: ObjectType::Type {
+            target: AttrTarget::object(DbObjectId::Type {
                 schema: "public".to_string(),
                 name: "status_enum".to_string(),
-            },
+            }),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["USAGE".to_string()],
             with_grant_option: false,

@@ -4,6 +4,7 @@ use sqlx::postgres::PgConnection;
 use tracing::info;
 
 use super::id::{DbObjectId, DependsOn};
+use super::target::AttrTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GranteeType {
@@ -11,140 +12,10 @@ pub enum GranteeType {
     Public,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ObjectType {
-    Table {
-        schema: String,
-        name: String,
-    },
-    View {
-        schema: String,
-        name: String,
-    },
-    Schema {
-        name: String,
-    },
-    Function {
-        schema: String,
-        name: String,
-        arguments: String,
-    },
-    Procedure {
-        schema: String,
-        name: String,
-        arguments: String,
-    },
-    Aggregate {
-        schema: String,
-        name: String,
-        arguments: String,
-    },
-    Sequence {
-        schema: String,
-        name: String,
-    },
-    Type {
-        schema: String,
-        name: String,
-    },
-    Domain {
-        schema: String,
-        name: String,
-    },
-    /// A column-level privilege target (e.g. GRANT SELECT (col) ON table).
-    /// The parent relation may be a table or a view; both render the same way.
-    Column {
-        schema: String,
-        table: String,
-        column: String,
-    },
-}
-
-impl ObjectType {
-    pub fn db_object_id(&self) -> DbObjectId {
-        match self {
-            ObjectType::Table { schema, name } => DbObjectId::Table {
-                schema: schema.clone(),
-                name: name.clone(),
-            },
-            ObjectType::View { schema, name } => DbObjectId::View {
-                schema: schema.clone(),
-                name: name.clone(),
-            },
-            ObjectType::Schema { name } => DbObjectId::Schema { name: name.clone() },
-            ObjectType::Function {
-                schema,
-                name,
-                arguments,
-            } => DbObjectId::Function {
-                schema: schema.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-            },
-            ObjectType::Procedure {
-                schema,
-                name,
-                arguments,
-            } => DbObjectId::Procedure {
-                schema: schema.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-            },
-            ObjectType::Aggregate {
-                schema,
-                name,
-                arguments,
-            } => DbObjectId::Aggregate {
-                schema: schema.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-            },
-            ObjectType::Sequence { schema, name } => DbObjectId::Sequence {
-                schema: schema.clone(),
-                name: name.clone(),
-            },
-            ObjectType::Type { schema, name } => DbObjectId::Type {
-                schema: schema.clone(),
-                name: name.clone(),
-            },
-            ObjectType::Domain { schema, name } => DbObjectId::Domain {
-                schema: schema.clone(),
-                name: name.clone(),
-            },
-            ObjectType::Column {
-                schema,
-                table,
-                column,
-            } => DbObjectId::Column {
-                schema: schema.clone(),
-                table: table.clone(),
-                column: column.clone(),
-            },
-        }
-    }
-
-    /// Returns the schema this object belongs to.
-    /// For Schema objects, returns the schema name itself.
-    pub fn schema(&self) -> &str {
-        match self {
-            ObjectType::Table { schema, .. } => schema,
-            ObjectType::View { schema, .. } => schema,
-            ObjectType::Schema { name } => name,
-            ObjectType::Function { schema, .. } => schema,
-            ObjectType::Procedure { schema, .. } => schema,
-            ObjectType::Aggregate { schema, .. } => schema,
-            ObjectType::Sequence { schema, .. } => schema,
-            ObjectType::Type { schema, .. } => schema,
-            ObjectType::Domain { schema, .. } => schema,
-            ObjectType::Column { schema, .. } => schema,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Grant {
     pub grantee: GranteeType,
-    pub object: ObjectType,
+    pub target: AttrTarget,
     pub privileges: Vec<String>, // e.g., ["SELECT", "INSERT"]
     pub with_grant_option: bool,
     pub depends_on: Vec<DbObjectId>,
@@ -155,44 +26,47 @@ pub struct Grant {
     pub is_default_acl: bool,
 }
 
+/// A stable, unique key for a grant's target, used for grant identity and for
+/// grouping grants by object. Mirrors the historical `type:schema.name` form.
+pub fn target_key(target: &AttrTarget) -> String {
+    if let Some(column) = target.column_name() {
+        let (schema, relation) = target.schema_and_name();
+        return format!("column:{}.{}.{}", schema, relation, column);
+    }
+    match &target.object {
+        DbObjectId::Table { schema, name } => format!("table:{}.{}", schema, name),
+        DbObjectId::View { schema, name } => format!("view:{}.{}", schema, name),
+        DbObjectId::Schema { name } => format!("schema:{}", name),
+        DbObjectId::Function {
+            schema,
+            name,
+            arguments,
+        } => format!("function:{}.{}({})", schema, name, arguments),
+        DbObjectId::Procedure {
+            schema,
+            name,
+            arguments,
+        } => format!("procedure:{}.{}({})", schema, name, arguments),
+        DbObjectId::Aggregate {
+            schema,
+            name,
+            arguments,
+        } => format!("aggregate:{}.{}({})", schema, name, arguments),
+        DbObjectId::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
+        DbObjectId::Type { schema, name } => format!("type:{}.{}", schema, name),
+        DbObjectId::Domain { schema, name } => format!("domain:{}.{}", schema, name),
+        // Not grantable object kinds.
+        other => other.to_string(),
+    }
+}
+
 impl Grant {
     pub fn id(&self) -> String {
-        // Create a unique identifier for this grant
         let grantee_str = match &self.grantee {
             GranteeType::Role(name) => name.clone(),
             GranteeType::Public => "public".to_string(),
         };
-
-        let object_str = match &self.object {
-            ObjectType::Table { schema, name } => format!("table:{}.{}", schema, name),
-            ObjectType::View { schema, name } => format!("view:{}.{}", schema, name),
-            ObjectType::Schema { name } => format!("schema:{}", name),
-            ObjectType::Function {
-                schema,
-                name,
-                arguments,
-            } => format!("function:{}.{}({})", schema, name, arguments),
-            ObjectType::Procedure {
-                schema,
-                name,
-                arguments,
-            } => format!("procedure:{}.{}({})", schema, name, arguments),
-            ObjectType::Aggregate {
-                schema,
-                name,
-                arguments,
-            } => format!("aggregate:{}.{}({})", schema, name, arguments),
-            ObjectType::Sequence { schema, name } => format!("sequence:{}.{}", schema, name),
-            ObjectType::Type { schema, name } => format!("type:{}.{}", schema, name),
-            ObjectType::Domain { schema, name } => format!("domain:{}.{}", schema, name),
-            ObjectType::Column {
-                schema,
-                table,
-                column,
-            } => format!("column:{}.{}.{}", schema, table, column),
-        };
-
-        format!("{}@{}", grantee_str, object_str)
+        format!("{}@{}", grantee_str, target_key(&self.target))
     }
 }
 
@@ -283,10 +157,10 @@ async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Table {
+        let target = AttrTarget::object(DbObjectId::Table {
             schema: row.schema_name.clone(),
             name: row.table_name.clone(),
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
@@ -294,7 +168,7 @@ async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -306,11 +180,11 @@ async fn fetch_table_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,
@@ -371,10 +245,10 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::View {
+        let target = AttrTarget::object(DbObjectId::View {
             schema: row.schema_name.clone(),
             name: row.view_name.clone(),
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
@@ -382,7 +256,7 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -394,11 +268,11 @@ async fn fetch_view_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,
@@ -471,12 +345,6 @@ async fn fetch_column_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Column {
-            schema: row.schema_name.clone(),
-            table: row.table_name.clone(),
-            column: row.column_name.clone(),
-        };
-
         // A column grant is ordered relative to its parent relation, which may be
         // a table or a view.
         let parent = if row.relkind == "v" || row.relkind == "m" {
@@ -491,12 +359,14 @@ async fn fetch_column_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
             }
         };
 
+        let target = AttrTarget::column(parent.clone(), row.column_name.clone());
+
         let with_grant_option = row.is_grantable == "YES";
 
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -508,7 +378,7 @@ async fn fetch_column_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on: vec![parent],
@@ -564,16 +434,16 @@ async fn fetch_schema_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Schema {
+        let target = AttrTarget::object(DbObjectId::Schema {
             name: row.schema_name.clone(),
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -585,11 +455,11 @@ async fn fetch_schema_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> 
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,
@@ -653,30 +523,30 @@ async fn fetch_function_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
 
         // Use appropriate variant based on prokind:
         // 'a' = aggregate, 'p' = procedure, others = function
-        let object = match row.prokind.as_str() {
-            "a" => ObjectType::Aggregate {
+        let target = AttrTarget::object(match row.prokind.as_str() {
+            "a" => DbObjectId::Aggregate {
                 schema: row.schema_name.clone(),
                 name: row.function_name.clone(),
                 arguments: row.arguments.clone(),
             },
-            "p" => ObjectType::Procedure {
+            "p" => DbObjectId::Procedure {
                 schema: row.schema_name.clone(),
                 name: row.function_name.clone(),
                 arguments: row.arguments.clone(),
             },
-            _ => ObjectType::Function {
+            _ => DbObjectId::Function {
                 schema: row.schema_name.clone(),
                 name: row.function_name.clone(),
                 arguments: row.arguments.clone(),
             },
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -688,11 +558,11 @@ async fn fetch_function_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,
@@ -753,17 +623,17 @@ async fn fetch_sequence_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
             GranteeType::Role(row.grantee.clone())
         };
 
-        let object = ObjectType::Sequence {
+        let target = AttrTarget::object(DbObjectId::Sequence {
             schema: row.schema_name.clone(),
             name: row.sequence_name.clone(),
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -775,11 +645,11 @@ async fn fetch_sequence_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,
@@ -850,24 +720,24 @@ async fn fetch_type_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
         };
 
         // Distinguish between domains and other types (typtype: 'd' for domain)
-        let object = if row.type_kind == b'd' as i8 {
-            ObjectType::Domain {
+        let target = AttrTarget::object(if row.type_kind == b'd' as i8 {
+            DbObjectId::Domain {
                 schema: row.schema_name.clone(),
                 name: row.type_name.clone(),
             }
         } else {
-            ObjectType::Type {
+            DbObjectId::Type {
                 schema: row.schema_name.clone(),
                 name: row.type_name.clone(),
             }
-        };
+        });
 
         let with_grant_option = row.is_grantable == "YES";
 
         match &mut current_grant {
             Some(grant)
                 if grant.grantee == grantee
-                    && grant.object == object
+                    && grant.target == target
                     && grant.with_grant_option == with_grant_option =>
             {
                 grant.privileges.push(row.privilege_type);
@@ -879,11 +749,11 @@ async fn fetch_type_privileges(conn: &mut PgConnection) -> Result<Vec<Grant>> {
 
                 // Grants only depend on the target object, not the grantee role
                 // (roles are assumed to exist externally to pgmt)
-                let depends_on = vec![object.db_object_id()];
+                let depends_on = vec![target.db_object_id()];
 
                 current_grant = Some(Grant {
                     grantee,
-                    object,
+                    target,
                     privileges: vec![row.privilege_type],
                     with_grant_option,
                     depends_on,

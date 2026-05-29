@@ -697,53 +697,63 @@ impl SchemaGenerator {
     }
 
     fn extract_grant_target(&self, op: &crate::diff::operations::GrantOperation) -> GrantTarget {
-        use crate::catalog::grant::ObjectType;
+        use crate::catalog::id::DbObjectId;
         use crate::diff::operations::GrantOperation;
 
-        let object_type = match op {
-            GrantOperation::Grant { grant } => &grant.object,
-            GrantOperation::Revoke { grant } => &grant.object,
+        let target = match op {
+            GrantOperation::Grant { grant } => &grant.target,
+            GrantOperation::Revoke { grant } => &grant.target,
         };
 
-        match object_type {
-            ObjectType::Table { schema, name } => GrantTarget::Table {
+        // Column grants are written alongside their parent relation.
+        if target.column_name().is_some() {
+            let (schema, name) = target.schema_and_name();
+            return GrantTarget::Table { schema, name };
+        }
+
+        match &target.object {
+            DbObjectId::Table { schema, name } => GrantTarget::Table {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ObjectType::View { schema, name } => GrantTarget::View {
+            DbObjectId::View { schema, name } => GrantTarget::View {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ObjectType::Function { schema, name, .. } => GrantTarget::Function {
+            DbObjectId::Function { schema, name, .. } => GrantTarget::Function {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ObjectType::Procedure { schema, name, .. } => GrantTarget::Procedure {
+            DbObjectId::Procedure { schema, name, .. } => GrantTarget::Procedure {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ObjectType::Aggregate { schema, name, .. } => GrantTarget::Aggregate {
+            DbObjectId::Aggregate { schema, name, .. } => GrantTarget::Aggregate {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ObjectType::Schema { .. } => GrantTarget::Schema,
-            ObjectType::Type { schema, .. } => GrantTarget::Type {
+            DbObjectId::Schema { .. } => GrantTarget::Schema,
+            DbObjectId::Type { schema, .. } => GrantTarget::Type {
                 schema: schema.clone(),
             },
-            ObjectType::Domain { schema, .. } => GrantTarget::Domain {
+            DbObjectId::Domain { schema, .. } => GrantTarget::Domain {
                 schema: schema.clone(),
             },
-            ObjectType::Sequence { schema, name } => GrantTarget::Sequence {
+            DbObjectId::Sequence { schema, name } => GrantTarget::Sequence {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            // Column grants are written alongside their parent relation. relkind
-            // isn't carried here; column grants are overwhelmingly on tables, so
-            // route to the table file.
-            ObjectType::Column { schema, table, .. } => GrantTarget::Table {
-                schema: schema.clone(),
-                name: table.clone(),
-            },
+            // Not grantable object kinds.
+            DbObjectId::Index { .. }
+            | DbObjectId::Constraint { .. }
+            | DbObjectId::Trigger { .. }
+            | DbObjectId::Policy { .. }
+            | DbObjectId::Extension { .. }
+            | DbObjectId::Grant { .. }
+            | DbObjectId::Comment { .. }
+            | DbObjectId::Column { .. } => {
+                unreachable!("not a grantable object kind: {:?}", target.object)
+            }
         }
     }
 

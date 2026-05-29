@@ -133,39 +133,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
         let grants_count = catalog
             .grants
             .iter()
-            .filter(|g| {
-                use crate::catalog::grant::ObjectType;
-                match &g.object {
-                    ObjectType::Table {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::View {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Function {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Procedure {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Aggregate {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Sequence {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Type {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Domain {
-                        schema: obj_schema, ..
-                    }
-                    | ObjectType::Column {
-                        schema: obj_schema, ..
-                    } => obj_schema == &schema.name,
-                    ObjectType::Schema { name } => name == &schema.name,
-                }
-            })
+            .filter(|g| g.target.schema() == schema.name)
             .count();
 
         let total_objects = tables_count
@@ -450,20 +418,8 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
         .extensions
         .retain(|e| schema_set.contains(&e.schema));
     catalog.grants.retain(|g| {
-        // Grants are more complex - check if they reference selected schemas
-        use crate::catalog::grant::ObjectType;
-        match &g.object {
-            ObjectType::Table { schema, .. }
-            | ObjectType::View { schema, .. }
-            | ObjectType::Function { schema, .. }
-            | ObjectType::Procedure { schema, .. }
-            | ObjectType::Aggregate { schema, .. }
-            | ObjectType::Sequence { schema, .. }
-            | ObjectType::Type { schema, .. }
-            | ObjectType::Domain { schema, .. }
-            | ObjectType::Column { schema, .. } => schema_set.contains(schema),
-            ObjectType::Schema { name } => schema_set.contains(name),
-        }
+        // Grants reference selected schemas via their target object's schema.
+        schema_set.contains(&g.target.schema())
     });
 
     // Rebuild dependency maps after filtering

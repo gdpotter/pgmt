@@ -1,7 +1,7 @@
 use crate::helpers::harness::with_test_db;
 
 use pgmt::catalog::Catalog;
-use pgmt::catalog::grant::{GranteeType, ObjectType, fetch};
+use pgmt::catalog::grant::{GranteeType, fetch};
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 
 #[tokio::test]
@@ -23,7 +23,7 @@ async fn test_fetch_table_grants() {
         let table_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Table { schema, name }
+                matches!(&g.target.object, DbObjectId::Table { schema, name }
                 if schema == "test_schema" && name == "users")
             })
             .collect();
@@ -68,8 +68,8 @@ async fn test_fetch_column_grants() {
         let column_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Column { schema, table, .. }
-                if schema == "test_col" && table == "users")
+                g.target.column_name().is_some()
+                    && g.target.schema_and_name() == ("test_col".to_string(), "users".to_string())
             })
             .collect();
 
@@ -77,7 +77,7 @@ async fn test_fetch_column_grants() {
         let email_grant = column_grants
             .iter()
             .find(|g| {
-                matches!(&g.object, ObjectType::Column { column, .. } if column == "email")
+                g.target.column_name() == Some("email")
                     && matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
             })
             .expect("Should have column grant on email for test_app_user");
@@ -87,7 +87,7 @@ async fn test_fetch_column_grants() {
         let ssn_grant = column_grants
             .iter()
             .find(|g| {
-                matches!(&g.object, ObjectType::Column { column, .. } if column == "ssn")
+                g.target.column_name() == Some("ssn")
                     && matches!(&g.grantee, GranteeType::Role(n) if n == "test_read_only")
             })
             .expect("Should have column grant on ssn for test_read_only");
@@ -117,7 +117,7 @@ async fn test_fetch_schema_grants() {
         let schema_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Schema { name }
+                matches!(&g.target.object, DbObjectId::Schema { name }
                 if name == "test_grants_schema")
             })
             .collect();
@@ -151,7 +151,7 @@ async fn test_fetch_public_grants() {
         let public_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Table { schema, name }
+                matches!(&g.target.object, DbObjectId::Table { schema, name }
                 if schema == "test_public_schema" && name == "public_table")
             })
             .filter(|g| matches!(&g.grantee, GranteeType::Public))
@@ -184,7 +184,7 @@ async fn test_fetch_grant_with_grant_option() {
         let admin_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Table { schema, name }
+                matches!(&g.target.object, DbObjectId::Table { schema, name }
                 if schema == "test_grant_option_schema" && name == "admin_table")
             })
             .filter(|g| matches!(&g.grantee, GranteeType::Role(name) if name == "test_admin_user"))
@@ -218,7 +218,7 @@ async fn test_fetch_function_grants() {
         let function_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                matches!(&g.target.object, DbObjectId::Function { schema, name, .. }
                 if schema == "test_func_schema" && name == "test_func")
             })
             .collect();
@@ -247,7 +247,7 @@ async fn test_grant_dependencies() {
         let table_grant = grants
             .iter()
             .find(|g| {
-                matches!(&g.object, ObjectType::Table { schema, name }
+                matches!(&g.target.object, DbObjectId::Table { schema, name }
                 if schema == "test_dep_schema" && name == "dep_table")
             })
             .expect("Should have table grant");
@@ -303,7 +303,7 @@ async fn test_function_grant_with_custom_type_arguments_match() {
             .grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                matches!(&g.target.object, DbObjectId::Function { schema, name, .. }
                 if schema == "test_custom_type_schema" && name == "process_status")
             })
             .collect();
@@ -316,7 +316,7 @@ async fn test_function_grant_with_custom_type_arguments_match() {
         // The key assertion: Grant's arguments should match function's arguments
         // Before the fix, these could differ in schema qualification (e.g., "public.status_enum" vs "status_enum")
         for grant in function_grants {
-            if let ObjectType::Function { arguments, .. } = &grant.object {
+            if let DbObjectId::Function { arguments, .. } = &grant.target.object {
                 assert_eq!(
                     arguments, &function.arguments,
                     "Grant arguments '{}' should match function arguments '{}'",
@@ -369,7 +369,7 @@ async fn test_function_grant_is_default_acl() {
         let default_grant = grants
             .iter()
             .find(|g| {
-                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                matches!(&g.target.object, DbObjectId::Function { schema, name, .. }
                 if schema == "test_default_acl_schema" && name == "func_with_defaults")
                     && matches!(&g.grantee, GranteeType::Public)
             })
@@ -382,7 +382,7 @@ async fn test_function_grant_is_default_acl() {
 
         // func_revoked should NOT have a PUBLIC grant (it was revoked)
         let revoked_public_grant = grants.iter().find(|g| {
-            matches!(&g.object, ObjectType::Function { schema, name, .. }
+            matches!(&g.target.object, DbObjectId::Function { schema, name, .. }
             if schema == "test_default_acl_schema" && name == "func_revoked")
                 && matches!(&g.grantee, GranteeType::Public)
         });
@@ -397,7 +397,7 @@ async fn test_function_grant_is_default_acl() {
         let revoked_grants: Vec<_> = grants
             .iter()
             .filter(|g| {
-                matches!(&g.object, ObjectType::Function { schema, name, .. }
+                matches!(&g.target.object, DbObjectId::Function { schema, name, .. }
                 if schema == "test_default_acl_schema" && name == "func_revoked")
             })
             .collect();

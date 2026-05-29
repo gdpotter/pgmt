@@ -253,8 +253,8 @@ async fn test_serial_sequence_default_grants_no_drift() -> Result<()> {
                     .grants
                     .iter()
                     .filter(|g| {
-                        matches!(&g.object,
-                    pgmt::catalog::grant::ObjectType::Sequence { schema, name }
+                        matches!(&g.target.object,
+                    pgmt::catalog::id::DbObjectId::Sequence { schema, name }
                     if schema == "test_schema" && name == "users_id_seq")
                     })
                     .collect();

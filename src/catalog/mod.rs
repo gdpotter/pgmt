@@ -421,7 +421,7 @@ impl Catalog {
         // DROP implicitly revokes all grants, so we need to re-apply them.
         // Filter to grants on this specific object, skipping owner grants (implicit in PostgreSQL).
         for grant in &new_catalog.grants {
-            if &grant.object.db_object_id() == id && !is_owner_grant(grant) {
+            if &grant.target.db_object_id() == id && !is_owner_grant(grant) {
                 steps.push(MigrationStep::Grant(GrantOperation::Grant {
                     grant: grant.clone(),
                 }));

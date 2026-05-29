@@ -1,7 +1,9 @@
 //! Tests for shared grant rendering consistency between schema generator and diff operations
 
 use anyhow::Result;
-use pgmt::catalog::grant::{Grant, GranteeType, ObjectType};
+use pgmt::catalog::grant::{Grant, GranteeType};
+use pgmt::catalog::id::DbObjectId;
+use pgmt::catalog::target::AttrTarget;
 use pgmt::diff::operations::SqlRenderer;
 use pgmt::diff::operations::grant::GrantOperation;
 use pgmt::render::sql::render_grant_statement;
@@ -11,10 +13,10 @@ use pgmt::render::sql::render_grant_statement;
 fn test_shared_grant_rendering_view_no_view_keyword() -> Result<()> {
     // This specifically tests the original issue: GRANT on VIEW should not include VIEW keyword
     let grant = Grant {
-        object: ObjectType::View {
+        target: AttrTarget::object(DbObjectId::View {
             schema: "public".to_string(),
             name: "current_subscriptions".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("postgres".to_string()),
         privileges: vec![
             "DELETE".to_string(),
@@ -68,10 +70,10 @@ fn test_shared_grant_rendering_view_no_view_keyword() -> Result<()> {
 #[test]
 fn test_shared_grant_rendering_table_consistency() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::Table {
+        target: AttrTarget::object(DbObjectId::Table {
             schema: "public".to_string(),
             name: "users".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("app_user".to_string()),
         privileges: vec![
             "SELECT".to_string(),
@@ -109,10 +111,10 @@ fn test_shared_grant_rendering_table_consistency() -> Result<()> {
 #[test]
 fn test_shared_grant_rendering_with_grant_option() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::Table {
+        target: AttrTarget::object(DbObjectId::Table {
             schema: "public".to_string(),
             name: "orders".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("manager".to_string()),
         privileges: vec!["ALL".to_string()],
         with_grant_option: true,
@@ -146,10 +148,10 @@ fn test_shared_grant_rendering_with_grant_option() -> Result<()> {
 #[test]
 fn test_shared_grant_rendering_public_grantee() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::View {
+        target: AttrTarget::object(DbObjectId::View {
             schema: "public".to_string(),
             name: "public_stats".to_string(),
-        },
+        }),
         grantee: GranteeType::Public,
         privileges: vec!["SELECT".to_string()],
         with_grant_option: false,
@@ -183,9 +185,9 @@ fn test_shared_grant_rendering_public_grantee() -> Result<()> {
 #[test]
 fn test_shared_grant_rendering_schema_with_keyword() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::Schema {
+        target: AttrTarget::object(DbObjectId::Schema {
             name: "analytics".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("data_analyst".to_string()),
         privileges: vec!["USAGE".to_string(), "CREATE".to_string()],
         with_grant_option: false,
@@ -219,11 +221,11 @@ fn test_shared_grant_rendering_schema_with_keyword() -> Result<()> {
 #[test]
 fn test_shared_grant_rendering_function_with_keyword() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::Function {
+        target: AttrTarget::object(DbObjectId::Function {
             schema: "public".to_string(),
             name: "calculate_total".to_string(),
             arguments: "integer".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("app_user".to_string()),
         privileges: vec!["EXECUTE".to_string()],
         with_grant_option: false,
@@ -257,10 +259,10 @@ fn test_shared_grant_rendering_function_with_keyword() -> Result<()> {
 #[test]
 fn test_shared_revoke_rendering_consistency() -> Result<()> {
     let grant = Grant {
-        object: ObjectType::Table {
+        target: AttrTarget::object(DbObjectId::Table {
             schema: "public".to_string(),
             name: "sensitive_data".to_string(),
-        },
+        }),
         grantee: GranteeType::Role("temp_user".to_string()),
         privileges: vec!["SELECT".to_string(), "INSERT".to_string()],
         with_grant_option: false,

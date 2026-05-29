@@ -32,7 +32,7 @@ async fn test_grant_table_privilege_migration() -> Result<()> {
             let grant = final_catalog.grants.iter()
                 .find(|g| {
                     matches!(g.grantee, pgmt::catalog::grant::GranteeType::Role(ref name) if name == "test_app_user") &&
-                    matches!(g.object, pgmt::catalog::grant::ObjectType::Table { ref schema, ref name } if schema == "public" && name == "users")
+                    matches!(g.target.object, pgmt::catalog::id::DbObjectId::Table { ref schema, ref name } if schema == "public" && name == "users")
                 })
                 .expect("Grant should be created");
 
@@ -63,11 +63,11 @@ async fn test_grant_column_privilege_migration() -> Result<()> {
                 "GRANT SELECT (ssn) ON users TO test_read_only",
             ],
             |steps, final_catalog| {
-                use pgmt::catalog::grant::{GranteeType, ObjectType};
+                use pgmt::catalog::grant::GranteeType;
 
                 let has_column_grant_step = steps.iter().any(|s| {
                     matches!(s, MigrationStep::Grant(GrantOperation::Grant { grant })
-                        if matches!(&grant.object, ObjectType::Column { column, .. } if column == "email"))
+                        if grant.target.column_name() == Some("email"))
                 });
                 assert!(has_column_grant_step, "Should have a column GRANT step");
 
@@ -78,8 +78,9 @@ async fn test_grant_column_privilege_migration() -> Result<()> {
                     .iter()
                     .find(|g| {
                         matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
-                            && matches!(&g.object, ObjectType::Column { schema, table, column }
-                                if schema == "public" && table == "users" && column == "email")
+                            && g.target.column_name() == Some("email")
+                            && g.target.schema_and_name()
+                                == ("public".to_string(), "users".to_string())
                     })
                     .expect("email column grant should exist after migration");
                 assert!(email_grant.privileges.contains(&"SELECT".to_string()));
@@ -87,7 +88,7 @@ async fn test_grant_column_privilege_migration() -> Result<()> {
 
                 let ssn_grant_exists = final_catalog.grants.iter().any(|g| {
                     matches!(&g.grantee, GranteeType::Role(n) if n == "test_read_only")
-                        && matches!(&g.object, ObjectType::Column { column, .. } if column == "ssn")
+                        && g.target.column_name() == Some("ssn")
                 });
                 assert!(ssn_grant_exists, "ssn column grant should exist after migration");
 
@@ -112,17 +113,17 @@ async fn test_revoke_column_privilege_migration() -> Result<()> {
             // Target DB only: nothing (grant removed)
             &[],
             |steps, final_catalog| {
-                use pgmt::catalog::grant::{GranteeType, ObjectType};
+                use pgmt::catalog::grant::GranteeType;
 
                 let has_revoke_step = steps.iter().any(|s| {
                     matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
-                        if matches!(&grant.object, ObjectType::Column { column, .. } if column == "email"))
+                        if grant.target.column_name() == Some("email"))
                 });
                 assert!(has_revoke_step, "Should have a column REVOKE step");
 
                 let grant_exists = final_catalog.grants.iter().any(|g| {
                     matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
-                        && matches!(&g.object, ObjectType::Column { column, .. } if column == "email")
+                        && g.target.column_name() == Some("email")
                 });
                 assert!(!grant_exists, "column grant should be revoked after migration");
 
@@ -158,7 +159,7 @@ async fn test_revoke_table_privilege_migration() -> Result<()> {
             let grant_exists = final_catalog.grants.iter()
                 .any(|g| {
                     matches!(g.grantee, pgmt::catalog::grant::GranteeType::Role(ref name) if name == "test_app_user") &&
-                    matches!(g.object, pgmt::catalog::grant::ObjectType::Table { ref schema, ref name } if schema == "public" && name == "users")
+                    matches!(g.target.object, pgmt::catalog::id::DbObjectId::Table { ref schema, ref name } if schema == "public" && name == "users")
                 });
 
             assert!(!grant_exists, "Grant should be revoked");
@@ -203,7 +204,7 @@ async fn test_grant_with_grant_option_migration() -> Result<()> {
             let grant = final_catalog.grants.iter()
                 .find(|g| {
                     matches!(g.grantee, pgmt::catalog::grant::GranteeType::Role(ref name) if name == "test_admin_user") &&
-                    matches!(g.object, pgmt::catalog::grant::ObjectType::Table { ref schema, ref name } if schema == "public" && name == "users")
+                    matches!(g.target.object, pgmt::catalog::id::DbObjectId::Table { ref schema, ref name } if schema == "public" && name == "users")
                 })
                 .expect("Grant should be created");
 
@@ -250,7 +251,7 @@ async fn test_public_grant_migration() -> Result<()> {
             let grant = final_catalog.grants.iter()
                 .find(|g| {
                     matches!(g.grantee, pgmt::catalog::grant::GranteeType::Public) &&
-                    matches!(g.object, pgmt::catalog::grant::ObjectType::Schema { ref name } if name == "test_schema")
+                    matches!(g.target.object, pgmt::catalog::id::DbObjectId::Schema { ref name } if name == "test_schema")
                 })
                 .expect("Public grant should be created");
 
@@ -301,7 +302,7 @@ async fn test_grant_view_privilege_migration() -> Result<()> {
             let grant = final_catalog.grants.iter()
                 .find(|g| {
                     matches!(g.grantee, pgmt::catalog::grant::GranteeType::Role(ref name) if name == "test_app_user") &&
-                    matches!(g.object, pgmt::catalog::grant::ObjectType::View { ref schema, ref name } if schema == "public" && name == "active_users")
+                    matches!(g.target.object, pgmt::catalog::id::DbObjectId::View { ref schema, ref name } if schema == "public" && name == "active_users")
                 })
                 .expect("Grant should be created");
 
@@ -337,7 +338,7 @@ async fn test_revoke_default_public_execute_on_function() -> Result<()> {
                 let revoke_step = steps.iter().find(|s| {
                     matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
                     if matches!(&grant.grantee, pgmt::catalog::grant::GranteeType::Public)
-                        && matches!(&grant.object, pgmt::catalog::grant::ObjectType::Function { name, .. } if name == "test_func"))
+                        && matches!(&grant.target.object, pgmt::catalog::id::DbObjectId::Function { name, .. } if name == "test_func"))
                 });
 
                 assert!(
@@ -362,7 +363,7 @@ async fn test_revoke_default_public_execute_on_function() -> Result<()> {
                 // Verify final state: no PUBLIC grant on the function
                 let public_grant_exists = final_catalog.grants.iter().any(|g| {
                     matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Public)
-                        && matches!(&g.object, pgmt::catalog::grant::ObjectType::Function { name, .. } if name == "test_func")
+                        && matches!(&g.target.object, pgmt::catalog::id::DbObjectId::Function { name, .. } if name == "test_func")
                 });
 
                 assert!(
@@ -404,8 +405,8 @@ async fn test_grants_filtered_by_excluded_schema() {
             .iter()
             .filter(|g| {
                 matches!(
-                    &g.object,
-                    pgmt::catalog::grant::ObjectType::Function { schema, .. }
+                    &g.target.object,
+                    pgmt::catalog::id::DbObjectId::Function { schema, .. }
                     if schema == "excluded_schema"
                 )
             })
@@ -420,8 +421,8 @@ async fn test_grants_filtered_by_excluded_schema() {
             .iter()
             .filter(|g| {
                 matches!(
-                    &g.object,
-                    pgmt::catalog::grant::ObjectType::Function { schema, name, .. }
+                    &g.target.object,
+                    pgmt::catalog::id::DbObjectId::Function { schema, name, .. }
                     if schema == "public" && name == "my_func"
                 )
             })
@@ -458,8 +459,8 @@ async fn test_grants_filtered_by_excluded_schema() {
             .iter()
             .filter(|g| {
                 matches!(
-                    &g.object,
-                    pgmt::catalog::grant::ObjectType::Function { schema, .. }
+                    &g.target.object,
+                    pgmt::catalog::id::DbObjectId::Function { schema, .. }
                     if schema == "excluded_schema"
                 )
             })
@@ -475,8 +476,8 @@ async fn test_grants_filtered_by_excluded_schema() {
             .iter()
             .filter(|g| {
                 matches!(
-                    &g.object,
-                    pgmt::catalog::grant::ObjectType::Function { schema, name, .. }
+                    &g.target.object,
+                    pgmt::catalog::id::DbObjectId::Function { schema, name, .. }
                     if schema == "public" && name == "my_func"
                 )
             })
