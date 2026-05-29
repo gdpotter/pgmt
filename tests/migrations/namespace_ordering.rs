@@ -80,6 +80,43 @@ async fn test_drop_table_create_view_same_name() -> Result<()> {
     Ok(())
 }
 
+/// Replacing a function with a procedure of the same signature. Both live in
+/// pg_proc and collide, so the function must be dropped before the procedure is
+/// created.
+#[tokio::test]
+async fn test_drop_function_create_procedure_same_signature() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &["CREATE FUNCTION foo(integer) RETURNS void LANGUAGE sql AS $$ $$"],
+            &["CREATE PROCEDURE foo(integer) LANGUAGE sql AS $$ $$"],
+            |steps, _catalog| {
+                let drop_idx = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(_))
+                        && s.operation_kind() == OperationKind::Drop
+                });
+                let create_idx = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Function(_))
+                        && s.operation_kind() == OperationKind::Create
+                });
+
+                let drop_idx = drop_idx.expect("function drop step should exist");
+                let create_idx = create_idx.expect("procedure create step should exist");
+
+                assert!(
+                    drop_idx < create_idx,
+                    "function foo(integer) must be dropped before procedure foo(integer) is created (drop at {drop_idx}, create at {create_idx})"
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Dropping a standalone type and creating a domain with the same name. Both
 /// live in the pg_type namespace.
 #[tokio::test]

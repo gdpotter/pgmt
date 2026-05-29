@@ -341,6 +341,11 @@ impl Catalog {
                 schema,
                 name,
                 arguments,
+            }
+            | DbObjectId::Procedure {
+                schema,
+                name,
+                arguments,
             } => {
                 let old_func = self.find_function(schema, name, arguments)?;
                 // Use signature matching for new catalog lookup - parameter names may have
@@ -456,6 +461,11 @@ impl Catalog {
             DbObjectId::Type { schema, name } => self.find_custom_type(schema, name).is_some(),
             DbObjectId::Domain { schema, name } => self.find_domain(schema, name).is_some(),
             DbObjectId::Function {
+                schema,
+                name,
+                arguments,
+            }
+            | DbObjectId::Procedure {
                 schema,
                 name,
                 arguments,

@@ -30,6 +30,11 @@ pub enum DbObjectId {
         name: String,
         arguments: String,
     },
+    Procedure {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
     Sequence {
         schema: String,
         name: String,
@@ -88,6 +93,7 @@ impl DbObjectId {
             | DbObjectId::Type { schema, .. }
             | DbObjectId::Domain { schema, .. }
             | DbObjectId::Function { schema, .. }
+            | DbObjectId::Procedure { schema, .. }
             | DbObjectId::Sequence { schema, .. }
             | DbObjectId::Index { schema, .. }
             | DbObjectId::Constraint { schema, .. }
@@ -114,6 +120,11 @@ impl fmt::Display for DbObjectId {
                 name,
                 arguments,
             } => write!(f, "function {schema}.{name}({arguments})"),
+            Self::Procedure {
+                schema,
+                name,
+                arguments,
+            } => write!(f, "procedure {schema}.{name}({arguments})"),
             Self::Sequence { schema, name } => write!(f, "sequence {schema}.{name}"),
             Self::Index { schema, name } => write!(f, "index {schema}.{name}"),
             Self::Constraint {

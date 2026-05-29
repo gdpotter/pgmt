@@ -50,29 +50,51 @@ impl SqlRenderer for FunctionOperation {
     }
 
     fn db_object_id(&self) -> DbObjectId {
+        // Procedures are a distinct DbObjectId variant; the `kind` field carries
+        // the "FUNCTION"/"PROCEDURE" keyword.
+        fn routine_db_object_id(
+            schema: &str,
+            name: &str,
+            arguments: &str,
+            kind: &str,
+        ) -> DbObjectId {
+            if kind.eq_ignore_ascii_case("PROCEDURE") {
+                DbObjectId::Procedure {
+                    schema: schema.to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                }
+            } else {
+                DbObjectId::Function {
+                    schema: schema.to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                }
+            }
+        }
+
         match self {
             FunctionOperation::Create {
                 schema,
                 name,
                 arguments,
+                kind,
                 ..
             }
             | FunctionOperation::Replace {
                 schema,
                 name,
                 arguments,
+                kind,
                 ..
             }
             | FunctionOperation::Drop {
                 schema,
                 name,
                 arguments,
+                kind,
                 ..
-            } => DbObjectId::Function {
-                schema: schema.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-            },
+            } => routine_db_object_id(schema, name, arguments, kind),
             FunctionOperation::Comment(op) => op.db_object_id(),
         }
     }

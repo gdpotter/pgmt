@@ -85,7 +85,7 @@ impl ObjectType {
                 schema,
                 name,
                 arguments,
-            } => DbObjectId::Function {
+            } => DbObjectId::Procedure {
                 schema: schema.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),

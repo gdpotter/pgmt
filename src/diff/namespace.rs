@@ -28,6 +28,15 @@ pub enum NamespaceSlot {
     },
     /// `pg_type` namespace (per schema): standalone types and domains.
     Type { schema: String, name: String },
+    /// `pg_proc` namespace, keyed by (schema, name, argtypes): functions and
+    /// procedures share it, so a function and a procedure with the same
+    /// signature collide. Aggregates also live in `pg_proc` but are keyed and
+    /// ordered separately by the function-overload rule and their own variant.
+    Routine {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
 }
 
 /// The namespace slots a step occupies. May return more than one: an index-
@@ -68,11 +77,28 @@ pub fn namespace_slots(id: &DbObjectId) -> Vec<NamespaceSlot> {
                 name: name.clone(),
             }]
         }
-        // Functions, procedures, and aggregates share the `pg_proc` namespace
-        // keyed by (schema, name, argtypes); their same-name drop-before-create
-        // ordering is already handled by the function-overload rule in
-        // `order_steps_by_dependencies`.
-        DbObjectId::Function { .. } | DbObjectId::Aggregate { .. } => vec![],
+        // Functions and procedures share the `pg_proc` namespace keyed by
+        // (schema, name, argtypes); a function and a procedure with the same
+        // signature collide, so they occupy a shared Routine slot. (Broader
+        // same-name overload ambiguity is handled by the function-overload rule
+        // in `order_steps_by_dependencies`.)
+        DbObjectId::Function {
+            schema,
+            name,
+            arguments,
+        }
+        | DbObjectId::Procedure {
+            schema,
+            name,
+            arguments,
+        } => vec![NamespaceSlot::Routine {
+            schema: schema.clone(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+        }],
+        // Aggregates also live in pg_proc but are ordered via their own variant
+        // and the overload rule.
+        DbObjectId::Aggregate { .. } => vec![],
         // No relevant shared name-space, or not a creatable relation. Triggers
         // and policies are per-table and their names do not collide with any
         // other object type, so same-name conflicts are already covered by the
@@ -189,18 +215,45 @@ mod tests {
             .is_empty()
         );
         assert!(
-            namespace_slots(&DbObjectId::Function {
-                schema: "public".into(),
-                name: "f".into(),
-                arguments: "integer".into()
-            })
-            .is_empty()
-        );
-        assert!(
             namespace_slots(&DbObjectId::Extension {
                 name: "citext".into()
             })
             .is_empty()
+        );
+        // Aggregates are ordered via their own variant + the overload rule.
+        assert!(
+            namespace_slots(&DbObjectId::Aggregate {
+                schema: "public".into(),
+                name: "a".into(),
+                arguments: "integer".into()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn function_and_procedure_share_routine_slot() {
+        let func = namespace_slots(&DbObjectId::Function {
+            schema: "public".into(),
+            name: "foo".into(),
+            arguments: "integer".into(),
+        });
+        let proc = namespace_slots(&DbObjectId::Procedure {
+            schema: "public".into(),
+            name: "foo".into(),
+            arguments: "integer".into(),
+        });
+        assert_eq!(
+            func,
+            vec![NamespaceSlot::Routine {
+                schema: "public".into(),
+                name: "foo".into(),
+                arguments: "integer".into()
+            }]
+        );
+        assert_eq!(
+            func, proc,
+            "a function and procedure with the same signature must collide"
         );
     }
 }

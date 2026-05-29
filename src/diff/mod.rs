@@ -435,8 +435,14 @@ fn order_steps_by_dependencies(
         let mut func_creates: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
 
         for (i, step) in steps.iter().enumerate() {
-            if let DbObjectId::Function { schema, name, .. } = &step.id() {
-                let key = (schema.clone(), name.clone());
+            // Procedures share pg_proc with functions, so overload ambiguity
+            // spans both — group them together by schema+name.
+            let routine_name = match &step.id() {
+                DbObjectId::Function { schema, name, .. }
+                | DbObjectId::Procedure { schema, name, .. } => Some((schema.clone(), name.clone())),
+                _ => None,
+            };
+            if let Some(key) = routine_name {
                 match step.operation_kind() {
                     OperationKind::Drop => func_drops.entry(key).or_default().push(i),
                     OperationKind::Create => func_creates.entry(key).or_default().push(i),

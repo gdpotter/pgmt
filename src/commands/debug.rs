@@ -52,6 +52,11 @@ pub enum ObjectIdJson {
         name: String,
         arguments: String,
     },
+    Procedure {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
     Sequence {
         schema: String,
         name: String,
@@ -121,6 +126,15 @@ impl From<&DbObjectId> for ObjectIdJson {
                 name,
                 arguments,
             } => ObjectIdJson::Function {
+                schema: schema.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            DbObjectId::Procedure {
+                schema,
+                name,
+                arguments,
+            } => ObjectIdJson::Procedure {
                 schema: schema.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),
@@ -414,6 +428,13 @@ fn format_object_id(obj: &ObjectIdJson) -> String {
             arguments,
         } => {
             format!("Function: {}.{}({})", schema, name, arguments)
+        }
+        ObjectIdJson::Procedure {
+            schema,
+            name,
+            arguments,
+        } => {
+            format!("Procedure: {}.{}({})", schema, name, arguments)
         }
         ObjectIdJson::Sequence { schema, name } => format!("Sequence: {}.{}", schema, name),
         ObjectIdJson::Index { schema, name } => format!("Index: {}.{}", schema, name),

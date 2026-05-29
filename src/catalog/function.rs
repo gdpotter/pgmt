@@ -41,21 +41,26 @@ pub struct Function {
 
 impl Function {
     pub fn id(&self) -> DbObjectId {
-        DbObjectId::Function {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
-            arguments: self.arguments.clone(),
+        // Procedures are a distinct DbObjectId variant (like aggregates); this
+        // catalog fetches both functions (prokind 'f') and procedures ('p').
+        match self.kind {
+            FunctionKind::Procedure => DbObjectId::Procedure {
+                schema: self.schema.clone(),
+                name: self.name.clone(),
+                arguments: self.arguments.clone(),
+            },
+            _ => DbObjectId::Function {
+                schema: self.schema.clone(),
+                name: self.name.clone(),
+                arguments: self.arguments.clone(),
+            },
         }
     }
 }
 
 impl DependsOn for Function {
     fn id(&self) -> DbObjectId {
-        DbObjectId::Function {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
-            arguments: self.arguments.clone(),
-        }
+        self.id()
     }
 
     fn depends_on(&self) -> &[DbObjectId] {
