@@ -2,7 +2,8 @@
 
 use crate::catalog::domain::Domain;
 use crate::diff::comment_utils;
-use crate::diff::operations::{DomainIdentifier, DomainOperation, MigrationStep};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::{DomainOperation, MigrationStep};
 
 /// Build the CREATE DOMAIN definition string
 fn build_domain_definition(domain: &Domain) -> String {
@@ -45,10 +46,7 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
             // Add domain comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &n.comment,
-                DomainIdentifier {
-                    schema: n.schema.clone(),
-                    name: n.name.clone(),
-                },
+                AttrTarget::object(n.id()),
             ) {
                 steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
             }
@@ -84,10 +82,7 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
                 // Add domain comment if present
                 if let Some(comment_op) = comment_utils::handle_comment_creation(
                     &n.comment,
-                    DomainIdentifier {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                    },
+                    AttrTarget::object(n.id()),
                 ) {
                     steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
                 }
@@ -199,10 +194,7 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
 
             // Handle comment changes
             let comment_ops =
-                comment_utils::handle_comment_diff(Some(o), Some(n), || DomainIdentifier {
-                    schema: n.schema.clone(),
-                    name: n.name.clone(),
-                });
+                comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
             for comment_op in comment_ops {
                 steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
             }

@@ -1,9 +1,7 @@
 //! View operations for schema migrations
 
 use super::OperationKind;
-use super::comments::{CommentOperation, CommentTarget};
-use crate::catalog::id::DbObjectId;
-use crate::render::quote_ident;
+use super::comments::CommentOperation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewOption {
@@ -46,8 +44,8 @@ pub enum ViewOperation {
         option: ViewOption,
         enabled: bool,
     },
-    Comment(CommentOperation<ViewIdentifier>),
-    ColumnComment(CommentOperation<ViewColumnIdentifier>),
+    Comment(CommentOperation),
+    ColumnComment(CommentOperation),
 }
 
 impl ViewOperation {
@@ -59,54 +57,6 @@ impl ViewOperation {
             Self::SetOption { .. } => OperationKind::Alter,
             Self::Comment(_) => OperationKind::Alter,
             Self::ColumnComment(_) => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewIdentifier {
-    pub schema: String,
-    pub name: String,
-}
-
-impl CommentTarget for ViewIdentifier {
-    const OBJECT_TYPE: &'static str = "VIEW";
-
-    fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.name))
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::View {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewColumnIdentifier {
-    pub schema: String,
-    pub view: String,
-    pub name: String,
-}
-
-impl CommentTarget for ViewColumnIdentifier {
-    const OBJECT_TYPE: &'static str = "COLUMN";
-
-    fn identifier(&self) -> String {
-        format!(
-            "{}.{}.{}",
-            quote_ident(&self.schema),
-            quote_ident(&self.view),
-            quote_ident(&self.name)
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::View {
-            schema: self.schema.clone(),
-            name: self.view.clone(),
         }
     }
 }

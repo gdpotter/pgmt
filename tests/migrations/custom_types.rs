@@ -485,13 +485,13 @@ async fn test_type_comment_migration() -> Result<()> {
 
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Type(TypeOperation::Comment(CommentOperation::Set { target, comment }))
-                    if target.schema == "test_schema" && target.name == "priority" && comment == "Priority levels for tasks")
+                    if target.schema() == "test_schema" && target.name() == "priority" && comment == "Priority levels for tasks")
             }).expect("Should have SetTypeComment step");
 
             match comment_step {
                 MigrationStep::Type(TypeOperation::Comment(CommentOperation::Set { target, comment })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "priority");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "priority");
                     assert_eq!(comment, "Priority levels for tasks");
                 }
                 _ => panic!("Expected SetTypeComment step"),
@@ -533,13 +533,13 @@ async fn test_drop_type_comment_migration() -> Result<()> {
 
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Type(TypeOperation::Comment(CommentOperation::Drop { target }))
-                    if target.schema == "test_schema" && target.name == "priority")
+                    if target.schema() == "test_schema" && target.name() == "priority")
             }).expect("Should have DropTypeComment step");
 
             match comment_step {
                 MigrationStep::Type(TypeOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "priority");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "priority");
                 }
                 _ => panic!("Expected DropTypeComment step"),
             }

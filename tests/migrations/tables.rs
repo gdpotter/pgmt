@@ -421,13 +421,13 @@ async fn test_table_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Table(TableOperation::Comment(CommentOperation::Set { target, comment }))
-                    if target.schema == "test_schema" && target.table == "users" && comment == "User information table")
+                    if target.schema() == "test_schema" && target.name() == "users" && comment == "User information table")
             }).expect("Should have SetTableComment step");
 
             match comment_step {
                 MigrationStep::Table(TableOperation::Comment(CommentOperation::Set { target, comment })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.table, "users");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "users");
                     assert_eq!(comment, "User information table");
                 }
                 _ => panic!("Expected SetTableComment step"),
@@ -482,7 +482,7 @@ async fn test_column_comment_migration() -> Result<()> {
                         assert_eq!(actions.len(), 1);
                         match &actions[0] {
                             ColumnAction::Comment(CommentOperation::Set { target, comment }) => {
-                                assert_eq!(target.name, "name");
+                                assert_eq!(target.column_name(), Some("name"));
                                 assert_eq!(comment, "Full name of the user");
                             }
                             _ => panic!("Expected SetColumnComment action"),
@@ -531,14 +531,14 @@ async fn test_drop_comment_migration() -> Result<()> {
 
             let table_comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Table(TableOperation::Comment(CommentOperation::Drop { target }))
-                    if target.schema == "test_schema" && target.table == "users")
+                    if target.schema() == "test_schema" && target.name() == "users")
             }).expect("Should have DropTableComment step");
 
             // Verify the table comment step details
             match table_comment_step {
                 MigrationStep::Table(TableOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.table, "users");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "users");
                 }
                 _ => panic!("Expected DropTableComment step"),
             }
@@ -553,7 +553,7 @@ async fn test_drop_comment_migration() -> Result<()> {
                     assert_eq!(actions.len(), 1);
                     match &actions[0] {
                         ColumnAction::Comment(CommentOperation::Drop { target }) => {
-                            assert_eq!(target.name, "name");
+                            assert_eq!(target.column_name(), Some("name"));
                         }
                         _ => panic!("Expected DropColumnComment action"),
                     }

@@ -1,7 +1,5 @@
-use crate::catalog::id::DbObjectId;
 use crate::catalog::index::Index;
-use crate::diff::operations::{CommentOperation, CommentTarget, OperationKind};
-use crate::render::quote_ident;
+use crate::diff::operations::{CommentOperation, OperationKind};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -11,7 +9,7 @@ pub enum IndexOperation {
         schema: String,
         name: String,
     },
-    Comment(CommentOperation<IndexTarget>),
+    Comment(CommentOperation),
     /// Set a table to use an index for clustering (CLUSTER table USING index)
     Cluster {
         table_schema: String,
@@ -41,27 +39,6 @@ impl IndexOperation {
             | Self::Cluster { .. }
             | Self::SetWithoutCluster { .. }
             | Self::Reindex { .. } => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexTarget {
-    pub schema: String,
-    pub name: String,
-}
-
-impl CommentTarget for IndexTarget {
-    const OBJECT_TYPE: &'static str = "INDEX";
-
-    fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.name))
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Index {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
         }
     }
 }

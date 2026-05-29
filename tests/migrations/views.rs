@@ -596,13 +596,13 @@ async fn test_view_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::View(ViewOperation::Comment(CommentOperation::Set { target, comment }))
-                    if target.schema == "test_schema" && target.name == "user_summary" && comment == "Summary view of user information")
+                    if target.schema() == "test_schema" && target.name() == "user_summary" && comment == "Summary view of user information")
             }).expect("Should have SetViewComment step");
 
             match comment_step {
                 MigrationStep::View(ViewOperation::Comment(CommentOperation::Set { target, comment })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "user_summary");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "user_summary");
                     assert_eq!(comment, "Summary view of user information");
                 }
                 _ => panic!("Expected SetViewComment step"),
@@ -671,13 +671,13 @@ async fn test_drop_view_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::View(ViewOperation::Comment(CommentOperation::Drop { target }))
-                    if target.schema == "test_schema" && target.name == "user_summary")
+                    if target.schema() == "test_schema" && target.name() == "user_summary")
             }).expect("Should have DropViewComment step");
 
             match comment_step {
                 MigrationStep::View(ViewOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "user_summary");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "user_summary");
                 }
                 _ => panic!("Expected DropViewComment step"),
             }

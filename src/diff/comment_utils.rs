@@ -2,14 +2,15 @@
 //! Eliminates code duplication across different database object types
 
 use crate::catalog::comments::{CommentAction, Commentable, diff_comments};
-use crate::diff::operations::{CommentOperation, CommentTarget};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::CommentOperation;
 
-/// Handle comment creation for new objects
-/// Returns a CommentOperation if the object has a comment
-pub fn handle_comment_creation<T: CommentTarget>(
+/// Handle comment creation for new objects.
+/// Returns a CommentOperation if the object has a comment.
+pub fn handle_comment_creation(
     object_comment: &Option<String>,
-    target: T,
-) -> Option<CommentOperation<T>> {
+    target: AttrTarget,
+) -> Option<CommentOperation> {
     object_comment
         .as_ref()
         .map(|comment| CommentOperation::Set {
@@ -18,13 +19,12 @@ pub fn handle_comment_creation<T: CommentTarget>(
         })
 }
 
-/// Process comment diff actions and convert them to comment operations
-/// Returns a vector of comment operations for comment changes
-pub fn handle_comment_diff<T: CommentTarget, C: Commentable + Clone>(
+/// Process comment diff actions and convert them to comment operations.
+pub fn handle_comment_diff<C: Commentable + Clone>(
     old: Option<&C>,
     new: Option<&C>,
-    target_factory: impl Fn() -> T,
-) -> Vec<CommentOperation<T>> {
+    target_factory: impl Fn() -> AttrTarget,
+) -> Vec<CommentOperation> {
     let comment_actions = diff_comments(old, new);
     comment_actions
         .into_iter()

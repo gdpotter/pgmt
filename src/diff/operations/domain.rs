@@ -1,9 +1,7 @@
 //! Domain operations for schema migrations
 
 use super::OperationKind;
-use super::comments::{CommentOperation, CommentTarget};
-use crate::catalog::id::DbObjectId;
-use crate::render::quote_ident;
+use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum DomainOperation {
@@ -44,7 +42,7 @@ pub enum DomainOperation {
         name: String,
         constraint_name: String,
     },
-    Comment(CommentOperation<DomainIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl DomainOperation {
@@ -59,27 +57,6 @@ impl DomainOperation {
             | Self::AddConstraint { .. }
             | Self::DropConstraint { .. }
             | Self::Comment(_) => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DomainIdentifier {
-    pub schema: String,
-    pub name: String,
-}
-
-impl CommentTarget for DomainIdentifier {
-    const OBJECT_TYPE: &'static str = "DOMAIN";
-
-    fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.name))
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Domain {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
         }
     }
 }

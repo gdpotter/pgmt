@@ -59,11 +59,7 @@ impl SqlRenderer for PolicyOperation {
             },
             PolicyOperation::Comment(comment_op) => match comment_op {
                 CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    DbObjectId::Policy {
-                        schema: target.schema.clone(),
-                        table: target.table.clone(),
-                        name: target.name.clone(),
-                    }
+                    target.db_object_id()
                 }
             },
         }

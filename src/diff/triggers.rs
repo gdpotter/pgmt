@@ -1,3 +1,5 @@
+use crate::catalog::id::DependsOn;
+use crate::catalog::target::AttrTarget;
 use crate::catalog::triggers::Trigger;
 use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, TriggerIdentifier, TriggerOperation};
@@ -39,7 +41,7 @@ pub fn diff(old: Option<&Trigger>, new: Option<&Trigger>) -> Vec<MigrationStep> 
                 let comment_ops = comment_utils::handle_comment_diff(
                     Some(old_trigger),
                     Some(new_trigger),
-                    || TriggerIdentifier::from_trigger(new_trigger),
+                    || AttrTarget::object(new_trigger.id()),
                 );
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Trigger(TriggerOperation::Comment(

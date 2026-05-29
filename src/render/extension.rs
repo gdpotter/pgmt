@@ -28,9 +28,7 @@ impl SqlRenderer for ExtensionOperation {
             },
             ExtensionOperation::Comment(comment_op) => match comment_op {
                 CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    DbObjectId::Extension {
-                        name: target.name.clone(),
-                    }
+                    target.db_object_id()
                 }
             },
         }

@@ -1,7 +1,8 @@
 use crate::catalog::table::Table;
+use crate::catalog::id::DbObjectId;
+use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{
-    ColumnAction, ColumnIdentifier, CommentOperation, ConstraintIdentifier, ConstraintOperation,
-    MigrationStep, TableOperation, TableTarget,
+    ColumnAction, CommentOperation, ConstraintOperation, MigrationStep, TableOperation,
 };
 use crate::diff::{columns, diff_list};
 
@@ -18,10 +19,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
             if let Some(comment) = &n.comment {
                 steps.push(MigrationStep::Table(TableOperation::Comment(
                     CommentOperation::Set {
-                        target: TableTarget {
-                            schema: n.schema.clone(),
-                            table: n.name.clone(),
-                        },
+                        target: AttrTarget::object(n.id()),
                         comment: comment.clone(),
                     },
                 )));
@@ -33,11 +31,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                         schema: n.schema.clone(),
                         name: n.name.clone(),
                         actions: vec![ColumnAction::Comment(CommentOperation::Set {
-                            target: ColumnIdentifier {
-                                schema: n.schema.clone(),
-                                table: n.name.clone(),
-                                name: col.name.clone(),
-                            },
+                            target: AttrTarget::column(n.id(), col.name.clone()),
                             comment: comment.clone(),
                         })],
                     }));
@@ -50,11 +44,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
             {
                 steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
                     CommentOperation::Set {
-                        target: ConstraintIdentifier {
-                            schema: n.schema.clone(),
-                            table_name: n.name.clone(),
-                            name: pk.name.clone(),
-                        },
+                        target: AttrTarget::object(DbObjectId::Constraint { schema: n.schema.clone(), table: n.name.clone(), name: pk.name.clone() }),
                         comment: comment.clone(),
                     },
                 )));
@@ -156,10 +146,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                 (None, Some(comment)) => {
                     steps.push(MigrationStep::Table(TableOperation::Comment(
                         CommentOperation::Set {
-                            target: TableTarget {
-                                schema: n.schema.clone(),
-                                table: n.name.clone(),
-                            },
+                            target: AttrTarget::object(n.id()),
                             comment: comment.clone(),
                         },
                     )));
@@ -167,20 +154,14 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                 (Some(_), None) => {
                     steps.push(MigrationStep::Table(TableOperation::Comment(
                         CommentOperation::Drop {
-                            target: TableTarget {
-                                schema: n.schema.clone(),
-                                table: n.name.clone(),
-                            },
+                            target: AttrTarget::object(n.id()),
                         },
                     )));
                 }
                 (Some(old_comment), Some(new_comment)) if old_comment != new_comment => {
                     steps.push(MigrationStep::Table(TableOperation::Comment(
                         CommentOperation::Set {
-                            target: TableTarget {
-                                schema: n.schema.clone(),
-                                table: n.name.clone(),
-                            },
+                            target: AttrTarget::object(n.id()),
                             comment: new_comment.clone(),
                         },
                     )));
@@ -196,11 +177,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                         && o_pk.comment != n_pk.comment =>
                 {
                     // Primary key structure is the same but comment changed
-                    let identifier = ConstraintIdentifier {
-                        schema: n.schema.clone(),
-                        table_name: n.name.clone(),
-                        name: n_pk.name.clone(),
-                    };
+                    let identifier = AttrTarget::object(DbObjectId::Constraint { schema: n.schema.clone(), table: n.name.clone(), name: n_pk.name.clone() });
 
                     match (&o_pk.comment, &n_pk.comment) {
                         (None, Some(comment)) => {
@@ -238,11 +215,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                                 schema: n.schema.clone(),
                                 name: n.name.clone(),
                                 actions: vec![ColumnAction::Comment(CommentOperation::Set {
-                                    target: ColumnIdentifier {
-                                        schema: n.schema.clone(),
-                                        table: n.name.clone(),
-                                        name: new_col.name.clone(),
-                                    },
+                                    target: AttrTarget::column(n.id(), new_col.name.clone()),
                                     comment: comment.clone(),
                                 })],
                             }));
@@ -252,11 +225,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                                 schema: n.schema.clone(),
                                 name: n.name.clone(),
                                 actions: vec![ColumnAction::Comment(CommentOperation::Drop {
-                                    target: ColumnIdentifier {
-                                        schema: n.schema.clone(),
-                                        table: n.name.clone(),
-                                        name: new_col.name.clone(),
-                                    },
+                                    target: AttrTarget::column(n.id(), new_col.name.clone()),
                                 })],
                             }));
                         }
@@ -265,11 +234,7 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                                 schema: n.schema.clone(),
                                 name: n.name.clone(),
                                 actions: vec![ColumnAction::Comment(CommentOperation::Set {
-                                    target: ColumnIdentifier {
-                                        schema: n.schema.clone(),
-                                        table: n.name.clone(),
-                                        name: new_col.name.clone(),
-                                    },
+                                    target: AttrTarget::column(n.id(), new_col.name.clone()),
                                     comment: new_comment.clone(),
                                 })],
                             }));

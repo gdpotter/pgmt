@@ -1,6 +1,7 @@
 use crate::catalog::sequence::Sequence;
 use crate::diff::comment_utils;
-use crate::diff::operations::{MigrationStep, SequenceIdentifier, SequenceOperation};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::{MigrationStep, SequenceOperation};
 
 /// Generate migration steps for sequence differences
 pub fn diff(old: Option<&Sequence>, new: Option<&Sequence>) -> Vec<MigrationStep> {
@@ -31,10 +32,7 @@ pub fn diff(old: Option<&Sequence>, new: Option<&Sequence>) -> Vec<MigrationStep
             // Add sequence comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &new_seq.comment,
-                SequenceIdentifier {
-                    schema: new_seq.schema.clone(),
-                    name: new_seq.name.clone(),
-                },
+                AttrTarget::object(new_seq.id()),
             ) {
                 steps.push(MigrationStep::Sequence(SequenceOperation::Comment(
                     comment_op,
@@ -71,10 +69,7 @@ pub fn diff(old: Option<&Sequence>, new: Option<&Sequence>) -> Vec<MigrationStep
             // Handle comment changes
             let comment_ops =
                 comment_utils::handle_comment_diff(Some(old_seq), Some(new_seq), || {
-                    SequenceIdentifier {
-                        schema: new_seq.schema.clone(),
-                        name: new_seq.name.clone(),
-                    }
+                    AttrTarget::object(new_seq.id())
                 });
             for comment_op in comment_ops {
                 steps.push(MigrationStep::Sequence(SequenceOperation::Comment(

@@ -44,11 +44,7 @@ impl SqlRenderer for AggregateOperation {
             },
             AggregateOperation::Comment(comment_op) => match comment_op {
                 CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    DbObjectId::Aggregate {
-                        schema: target.schema.clone(),
-                        name: target.name.clone(),
-                        arguments: target.arguments.clone(),
-                    }
+                    target.db_object_id()
                 }
             },
         }

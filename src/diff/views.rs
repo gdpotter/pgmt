@@ -1,9 +1,7 @@
 use crate::catalog::view::{View, ViewColumn};
 use crate::diff::comment_utils;
-use crate::diff::operations::{
-    CommentOperation, MigrationStep, ViewColumnIdentifier, ViewIdentifier, ViewOperation,
-    ViewOption,
-};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::{CommentOperation, MigrationStep, ViewOperation, ViewOption};
 
 /// Emit SET steps for all non-empty column comments on a (newly created or recreated) view.
 fn emit_initial_column_comments(view: &View) -> Vec<MigrationStep> {
@@ -12,11 +10,7 @@ fn emit_initial_column_comments(view: &View) -> Vec<MigrationStep> {
         .filter_map(|col| {
             col.comment.as_ref().map(|c| {
                 MigrationStep::View(ViewOperation::ColumnComment(CommentOperation::Set {
-                    target: ViewColumnIdentifier {
-                        schema: view.schema.clone(),
-                        view: view.name.clone(),
-                        name: col.name.clone(),
-                    },
+                    target: AttrTarget::column(view.id(), col.name.clone()),
                     comment: c.clone(),
                 }))
             })
@@ -34,11 +28,7 @@ fn diff_column_comments(old: &View, new: &View) -> Vec<MigrationStep> {
         let Some(old_col) = by_name_old.get(new_col.name.as_str()) else {
             continue;
         };
-        let target = || ViewColumnIdentifier {
-            schema: new.schema.clone(),
-            view: new.name.clone(),
-            name: new_col.name.clone(),
-        };
+        let target = || AttrTarget::column(new.id(), new_col.name.clone());
         match (&old_col.comment, &new_col.comment) {
             (None, Some(c)) => {
                 steps.push(MigrationStep::View(ViewOperation::ColumnComment(
@@ -84,10 +74,7 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
             // Add view comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &n.comment,
-                ViewIdentifier {
-                    schema: n.schema.clone(),
-                    name: n.name.clone(),
-                },
+                AttrTarget::object(n.id()),
             ) {
                 steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
             }
@@ -132,10 +119,7 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 // Add view comment if present after recreating
                 if let Some(comment_op) = comment_utils::handle_comment_creation(
                     &n.comment,
-                    ViewIdentifier {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                    },
+                    AttrTarget::object(n.id()),
                 ) {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
@@ -153,10 +137,7 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
 
                 // Handle comment changes for replaced views
                 let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || ViewIdentifier {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                    });
+                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
@@ -183,10 +164,7 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
 
                 // Handle comment changes
                 let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || ViewIdentifier {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                    });
+                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }

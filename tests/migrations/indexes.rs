@@ -221,7 +221,7 @@ async fn test_index_comment_migration() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Index(IndexOperation::Comment(
                     CommentOperation::Set { target, comment }
-                )) if target.name == "idx_users_email" && comment == "Email lookup index")
+                )) if target.name() == "idx_users_email" && comment == "Email lookup index")
                     })
                     .expect("Should have SetComment step");
 

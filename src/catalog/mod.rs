@@ -27,6 +27,7 @@ pub mod policy;
 pub mod schema;
 pub mod sequence;
 pub mod table;
+pub mod target;
 pub mod triggers;
 pub mod utils;
 pub mod view;

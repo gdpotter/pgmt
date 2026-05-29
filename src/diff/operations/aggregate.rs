@@ -1,6 +1,5 @@
-use super::{CommentOperation, CommentTarget, OperationKind};
+use super::{CommentOperation, OperationKind};
 use crate::catalog::aggregate::Aggregate;
-use crate::catalog::id::DbObjectId;
 
 /// Identifier for an aggregate function
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,22 +27,6 @@ impl AggregateIdentifier {
     }
 }
 
-impl CommentTarget for AggregateIdentifier {
-    const OBJECT_TYPE: &'static str = "AGGREGATE";
-
-    fn identifier(&self) -> String {
-        format!("\"{}\".\"{}\"({})", self.schema, self.name, self.arguments)
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Aggregate {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
-            arguments: self.arguments.clone(),
-        }
-    }
-}
-
 /// Operations that can be performed on aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AggregateOperation {
@@ -57,7 +40,7 @@ pub enum AggregateOperation {
         old_aggregate: Box<Aggregate>,
         new_aggregate: Box<Aggregate>,
     },
-    Comment(CommentOperation<AggregateIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl AggregateOperation {

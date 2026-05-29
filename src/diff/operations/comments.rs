@@ -1,17 +1,11 @@
 //! Generic comment operations for all object types
 
-use crate::catalog::id::DbObjectId;
+use crate::catalog::target::AttrTarget;
 
-/// Generic comment operation that works for any object type
+/// A comment operation against any object or sub-object, identified by its
+/// [`AttrTarget`]. Rendering (keyword + SQL reference) lives in `render::comment`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommentOperation<T> {
-    Set { target: T, comment: String },
-    Drop { target: T },
-}
-
-/// Trait for objects that can have comments
-pub trait CommentTarget {
-    const OBJECT_TYPE: &'static str;
-    fn identifier(&self) -> String;
-    fn db_object_id(&self) -> DbObjectId;
+pub enum CommentOperation {
+    Set { target: AttrTarget, comment: String },
+    Drop { target: AttrTarget },
 }

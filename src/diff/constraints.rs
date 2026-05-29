@@ -2,6 +2,7 @@
 
 use crate::catalog::constraint::{Constraint, ConstraintType};
 use crate::diff::comment_utils;
+use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{ConstraintIdentifier, ConstraintOperation, MigrationStep};
 
 /// Diff a single constraint
@@ -16,7 +17,7 @@ pub fn diff(old: Option<&Constraint>, new: Option<&Constraint>) -> Vec<Migration
             // Add constraint comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &n.comment,
-                ConstraintIdentifier::from_constraint(n),
+                AttrTarget::object(n.id()),
             ) {
                 steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
                     comment_op,
@@ -46,7 +47,7 @@ pub fn diff(old: Option<&Constraint>, new: Option<&Constraint>) -> Vec<Migration
             } else {
                 // Check for comment changes only
                 let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                    ConstraintIdentifier::from_constraint(n)
+                    AttrTarget::object(n.id())
                 });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(

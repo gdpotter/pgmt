@@ -430,8 +430,8 @@ async fn test_domain_comment_migration() -> Result<()> {
                         target,
                         comment,
                     })) => {
-                        assert_eq!(target.schema, "test_schema");
-                        assert_eq!(target.name, "email");
+                        assert_eq!(target.schema(), "test_schema");
+                        assert_eq!(target.name(), "email");
                         assert_eq!(comment, "Email address format");
                     }
                     _ => panic!("Expected SetComment step"),
@@ -485,8 +485,8 @@ async fn test_domain_drop_comment_migration() -> Result<()> {
                     MigrationStep::Domain(DomainOperation::Comment(CommentOperation::Drop {
                         target,
                     })) => {
-                        assert_eq!(target.schema, "test_schema");
-                        assert_eq!(target.name, "email");
+                        assert_eq!(target.schema(), "test_schema");
+                        assert_eq!(target.name(), "email");
                     }
                     _ => panic!("Expected DropComment step"),
                 }

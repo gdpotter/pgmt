@@ -401,10 +401,10 @@ impl SchemaGenerator {
             TableOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
             TableOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -422,18 +422,18 @@ impl SchemaGenerator {
             ViewOperation::SetOption { schema, name, .. } => (schema.clone(), name.clone()),
             ViewOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
             ViewOperation::ColumnComment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.view.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.view.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -450,10 +450,10 @@ impl SchemaGenerator {
             FunctionOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
             FunctionOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -476,10 +476,10 @@ impl SchemaGenerator {
             }
             AggregateOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -498,10 +498,10 @@ impl SchemaGenerator {
             }
             SequenceOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -518,18 +518,18 @@ impl SchemaGenerator {
             TypeOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
             TypeOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
             TypeOperation::AttributeComment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.type_name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.type_name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -553,10 +553,10 @@ impl SchemaGenerator {
             }
             DomainOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -577,25 +577,21 @@ impl SchemaGenerator {
                 }
                 (schema.clone(), "unknown".to_string())
             }
-            IndexOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    // Look up the index to find its table
-                    for index in &self.catalog.indexes {
-                        if index.schema == target.schema && index.name == target.name {
-                            return (index.table_schema.clone(), index.table_name.clone());
-                        }
+            IndexOperation::Comment(comment_op) => {
+                let (schema, name) = match comment_op {
+                    crate::diff::operations::CommentOperation::Set { target, .. }
+                    | crate::diff::operations::CommentOperation::Drop { target } => {
+                        target.schema_and_name()
                     }
-                    (target.schema.clone(), "unknown".to_string())
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    for index in &self.catalog.indexes {
-                        if index.schema == target.schema && index.name == target.name {
-                            return (index.table_schema.clone(), index.table_name.clone());
-                        }
+                };
+                // Look up the index to find its table
+                for index in &self.catalog.indexes {
+                    if index.schema == schema && index.name == name {
+                        return (index.table_schema.clone(), index.table_name.clone());
                     }
-                    (target.schema.clone(), "unknown".to_string())
                 }
-            },
+                (schema, "unknown".to_string())
+            }
             IndexOperation::Cluster {
                 table_schema,
                 table_name,
@@ -635,10 +631,10 @@ impl SchemaGenerator {
             ),
             ConstraintOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.table_name.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.table_name.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -662,10 +658,10 @@ impl SchemaGenerator {
             }
             TriggerOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
             },
         }
@@ -691,10 +687,10 @@ impl SchemaGenerator {
             }
             PolicyOperation::Comment(comment_op) => match comment_op {
                 crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
                 crate::diff::operations::CommentOperation::Drop { target } => {
-                    (target.schema.clone(), target.table.clone())
+                    target.schema_and_name()
                 }
             },
         }

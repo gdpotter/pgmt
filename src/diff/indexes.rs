@@ -1,6 +1,7 @@
 use crate::catalog::index::Index;
 use crate::diff::comment_utils;
-use crate::diff::operations::{IndexOperation, IndexTarget, MigrationStep};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::{IndexOperation, MigrationStep};
 
 /// Compare two index states and generate migration steps
 pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
@@ -13,10 +14,7 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
             // Add comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &new_index.comment,
-                IndexTarget {
-                    schema: new_index.schema.clone(),
-                    name: new_index.name.clone(),
-                },
+                AttrTarget::object(new_index.id()),
             ) {
                 steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));
             }
@@ -79,10 +77,7 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
                 // Add comment if present on new index
                 if let Some(comment_op) = comment_utils::handle_comment_creation(
                     &new_index.comment,
-                    IndexTarget {
-                        schema: new_index.schema.clone(),
-                        name: new_index.name.clone(),
-                    },
+                    AttrTarget::object(new_index.id()),
                 ) {
                     steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));
                 }
@@ -128,10 +123,7 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
                 // Handle comment changes
                 let comment_ops =
                     comment_utils::handle_comment_diff(Some(old_index), Some(new_index), || {
-                        IndexTarget {
-                            schema: new_index.schema.clone(),
-                            name: new_index.name.clone(),
-                        }
+                        AttrTarget::object(new_index.id())
                     });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));

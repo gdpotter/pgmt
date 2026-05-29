@@ -150,7 +150,7 @@ async fn test_sequence_comment_migration() -> Result<()> {
             let _comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Sequence(SequenceOperation::Comment(
                     CommentOperation::Set { target, comment }
-                )) if target.schema == "test_schema" && target.name == "user_id_seq" && comment == "User ID sequence")
+                )) if target.schema() == "test_schema" && target.name() == "user_id_seq" && comment == "User ID sequence")
             }).expect("Should have SetComment step");
 
             // Verify final state

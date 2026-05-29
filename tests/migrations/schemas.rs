@@ -106,7 +106,7 @@ async fn test_schema_comment_migration() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
                     CommentOperation::Set { target, .. }
-                )) if target.name == "test_schema")
+                )) if target.name() == "test_schema")
                     })
                     .expect("Should have SetComment step");
 
@@ -151,7 +151,7 @@ async fn test_drop_schema_comment_migration() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
                     CommentOperation::Drop { target }
-                )) if target.name == "test_schema")
+                )) if target.name() == "test_schema")
                     })
                     .expect("Should have DropComment step");
 
@@ -274,7 +274,7 @@ async fn test_public_schema_custom_comment_detected() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
                     CommentOperation::Set { target, comment }
-                )) if target.name == "public" && comment == "My custom public schema")
+                )) if target.name() == "public" && comment == "My custom public schema")
                     })
                     .expect("Should detect custom comment on public schema");
 
@@ -318,7 +318,7 @@ async fn test_public_schema_removing_custom_comment() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
                     CommentOperation::Drop { target }
-                )) if target.name == "public")
+                )) if target.name() == "public")
                     })
                     .expect("Should detect removal of custom comment (back to default)");
 
@@ -360,7 +360,7 @@ async fn test_non_public_schema_comment_not_normalized() -> Result<()> {
                     .find(|s| {
                         matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
                     CommentOperation::Set { target, comment }
-                )) if target.name == "other_schema" && comment == "standard public schema")
+                )) if target.name() == "other_schema" && comment == "standard public schema")
                     })
                     .expect("Non-public schemas should not have comment normalization");
 

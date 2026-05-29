@@ -1,8 +1,7 @@
 //! Constraint operations for migrations
 use crate::catalog::constraint::Constraint;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{CommentOperation, CommentTarget, OperationKind};
-use crate::render::quote_ident;
+use crate::diff::operations::{CommentOperation, OperationKind};
 
 #[derive(Debug, Clone)]
 pub struct ConstraintIdentifier {
@@ -29,28 +28,11 @@ impl ConstraintIdentifier {
     }
 }
 
-impl CommentTarget for ConstraintIdentifier {
-    const OBJECT_TYPE: &'static str = "CONSTRAINT";
-
-    fn identifier(&self) -> String {
-        format!(
-            "{} ON {}.{}",
-            quote_ident(&self.name),
-            quote_ident(&self.schema),
-            quote_ident(&self.table_name)
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        self.to_db_object_id()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum ConstraintOperation {
     Create(Constraint),
     Drop(ConstraintIdentifier),
-    Comment(CommentOperation<ConstraintIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl ConstraintOperation {

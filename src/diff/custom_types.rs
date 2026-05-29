@@ -1,8 +1,7 @@
 use crate::catalog::custom_type::{CustomType, TypeKind};
 use crate::diff::comment_utils;
-use crate::diff::operations::{
-    CommentOperation, CompositeAttributeIdentifier, MigrationStep, TypeIdentifier, TypeOperation,
-};
+use crate::catalog::target::AttrTarget;
+use crate::diff::operations::{CommentOperation, MigrationStep, TypeOperation};
 
 /// Emit SET steps for all non-empty attribute comments on a (newly created or recreated) composite type.
 fn emit_initial_attribute_comments(ty: &CustomType) -> Vec<MigrationStep> {
@@ -11,11 +10,7 @@ fn emit_initial_attribute_comments(ty: &CustomType) -> Vec<MigrationStep> {
         .filter_map(|attr| {
             attr.comment.as_ref().map(|c| {
                 MigrationStep::Type(TypeOperation::AttributeComment(CommentOperation::Set {
-                    target: CompositeAttributeIdentifier {
-                        schema: ty.schema.clone(),
-                        type_name: ty.name.clone(),
-                        attribute: attr.name.clone(),
-                    },
+                    target: AttrTarget::column(ty.id(), attr.name.clone()),
                     comment: c.clone(),
                 }))
             })
@@ -39,11 +34,7 @@ fn diff_attribute_comments(old: &CustomType, new: &CustomType) -> Vec<MigrationS
         let Some(old_attr) = by_name_old.get(new_attr.name.as_str()) else {
             continue;
         };
-        let target = || CompositeAttributeIdentifier {
-            schema: new.schema.clone(),
-            type_name: new.name.clone(),
-            attribute: new_attr.name.clone(),
-        };
+        let target = || AttrTarget::column(new.id(), new_attr.name.clone());
         match (&old_attr.comment, &new_attr.comment) {
             (None, Some(c)) => {
                 steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
@@ -95,10 +86,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     // Add type comment if present
                     if let Some(comment_op) = comment_utils::handle_comment_creation(
                         &n.comment,
-                        TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        },
+                        AttrTarget::object(n.id()),
                     ) {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
@@ -122,10 +110,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     // Add type comment if present
                     if let Some(comment_op) = comment_utils::handle_comment_creation(
                         &n.comment,
-                        TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        },
+                        AttrTarget::object(n.id()),
                     ) {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
@@ -146,10 +131,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     // Add type comment if present
                     if let Some(comment_op) = comment_utils::handle_comment_creation(
                         &n.comment,
-                        TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        },
+                        AttrTarget::object(n.id()),
                     ) {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
@@ -167,10 +149,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     // Add type comment if present
                     if let Some(comment_op) = comment_utils::handle_comment_creation(
                         &n.comment,
-                        TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        },
+                        AttrTarget::object(n.id()),
                     ) {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
                     }
@@ -210,10 +189,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                         // No enum value changes, check for comment changes
                         let comment_ops =
                             comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                                TypeIdentifier {
-                                    schema: n.schema.clone(),
-                                    name: n.name.clone(),
-                                }
+                                AttrTarget::object(n.id())
                             });
                         let mut steps = Vec::new();
                         for comment_op in comment_ops {
@@ -283,10 +259,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                         // Handle comment changes after adding enum values
                         let comment_ops =
                             comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                                TypeIdentifier {
-                                    schema: n.schema.clone(),
-                                    name: n.name.clone(),
-                                }
+                                AttrTarget::object(n.id())
                             });
                         for comment_op in comment_ops {
                             steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
@@ -330,10 +303,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
 
                     // No composite attribute structure changes — diff type and attribute comments
                     let comment_ops =
-                        comment_utils::handle_comment_diff(Some(o), Some(n), || TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        });
+                        comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
                     let mut steps = Vec::new();
                     for comment_op in comment_ops {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
@@ -345,10 +315,7 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     // For other types, generally require a drop and recreate if changed
                     // Check for comment changes only
                     let comment_ops =
-                        comment_utils::handle_comment_diff(Some(o), Some(n), || TypeIdentifier {
-                            schema: n.schema.clone(),
-                            name: n.name.clone(),
-                        });
+                        comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
                     let mut steps = Vec::new();
                     for comment_op in comment_ops {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));

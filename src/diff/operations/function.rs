@@ -1,7 +1,5 @@
 use super::OperationKind;
-use super::comments::{CommentOperation, CommentTarget};
-use crate::catalog::id::DbObjectId;
-use crate::render::quote_ident;
+use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum FunctionOperation {
@@ -40,7 +38,7 @@ pub enum FunctionOperation {
         kind: String,
         parameter_types: String,
     },
-    Comment(CommentOperation<FunctionIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl FunctionOperation {
@@ -49,34 +47,6 @@ impl FunctionOperation {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
             Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionIdentifier {
-    pub schema: String,
-    pub name: String,
-    pub arguments: String,
-}
-
-impl CommentTarget for FunctionIdentifier {
-    const OBJECT_TYPE: &'static str = "FUNCTION";
-
-    fn identifier(&self) -> String {
-        format!(
-            "{}.{}({})",
-            quote_ident(&self.schema),
-            quote_ident(&self.name),
-            self.arguments
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Function {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
-            arguments: self.arguments.clone(),
         }
     }
 }

@@ -1,9 +1,7 @@
 //! Sequence operations for schema migrations
 
 use super::OperationKind;
-use super::comments::{CommentOperation, CommentTarget};
-use crate::catalog::id::DbObjectId;
-use crate::render::quote_ident;
+use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum SequenceOperation {
@@ -26,7 +24,7 @@ pub enum SequenceOperation {
         name: String,
         owned_by: String,
     },
-    Comment(CommentOperation<SequenceIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl SequenceOperation {
@@ -35,27 +33,6 @@ impl SequenceOperation {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
             Self::AlterOwnership { .. } | Self::Comment(_) => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SequenceIdentifier {
-    pub schema: String,
-    pub name: String,
-}
-
-impl CommentTarget for SequenceIdentifier {
-    const OBJECT_TYPE: &'static str = "SEQUENCE";
-
-    fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.name))
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Sequence {
-            schema: self.schema.clone(),
-            name: self.name.clone(),
         }
     }
 }

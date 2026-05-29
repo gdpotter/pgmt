@@ -1,5 +1,6 @@
 use crate::catalog::aggregate::Aggregate;
 use crate::diff::comment_utils;
+use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{AggregateIdentifier, AggregateOperation, MigrationStep};
 
 /// Diff a single aggregate function
@@ -39,7 +40,7 @@ pub fn diff(old: Option<&Aggregate>, new: Option<&Aggregate>) -> Vec<MigrationSt
                 let comment_ops = comment_utils::handle_comment_diff(
                     Some(old_aggregate),
                     Some(new_aggregate),
-                    || AggregateIdentifier::from_aggregate(new_aggregate),
+                    || AttrTarget::object(new_aggregate.id()),
                 );
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Aggregate(AggregateOperation::Comment(

@@ -1,5 +1,4 @@
-use super::{CommentOperation, CommentTarget, OperationKind};
-use crate::catalog::id::DbObjectId;
+use super::{CommentOperation, OperationKind};
 use crate::catalog::triggers::Trigger;
 
 /// Identifier for a trigger
@@ -28,25 +27,6 @@ impl TriggerIdentifier {
     }
 }
 
-impl CommentTarget for TriggerIdentifier {
-    const OBJECT_TYPE: &'static str = "TRIGGER";
-
-    fn identifier(&self) -> String {
-        format!(
-            "\"{}\" ON \"{}\".\"{}\"",
-            self.name, self.schema, self.table
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Trigger {
-            schema: self.schema.clone(),
-            table: self.table.clone(),
-            name: self.name.clone(),
-        }
-    }
-}
-
 /// Operations that can be performed on triggers
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerOperation {
@@ -60,7 +40,7 @@ pub enum TriggerOperation {
         old_trigger: Box<Trigger>,
         new_trigger: Box<Trigger>,
     },
-    Comment(CommentOperation<TriggerIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl TriggerOperation {

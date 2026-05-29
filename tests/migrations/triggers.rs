@@ -224,9 +224,9 @@ async fn test_trigger_comment_migration() -> Result<()> {
 
             match comment_step {
                 MigrationStep::Trigger(TriggerOperation::Comment(CommentOperation::Set { target, comment })) => {
-                    assert_eq!(target.name, "audit_users");
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.table, "users");
+                    assert_eq!(target.name(), "audit_users");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.table(), Some("users"));
                     assert_eq!(comment, "Audits all changes to users table");
                 }
                 _ => panic!("Expected SetComment step"),

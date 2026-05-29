@@ -441,7 +441,7 @@ async fn test_policy_comment_migration() -> Result<()> {
                 // Should have a Comment step
                 let comment_step = steps.iter().find(|s| {
                     matches!(s, MigrationStep::Policy(PolicyOperation::Comment(CommentOperation::Set { target, .. }))
-                        if target.name == "task_policy")
+                        if target.name() == "task_policy")
                 });
 
                 assert!(comment_step.is_some(), "Should have policy comment step");
@@ -480,7 +480,7 @@ async fn test_drop_policy_comment_migration() -> Result<()> {
                 // Should have a Comment drop step
                 let comment_step = steps.iter().find(|s| {
                     matches!(s, MigrationStep::Policy(PolicyOperation::Comment(CommentOperation::Drop { target }))
-                        if target.name == "item_policy")
+                        if target.name() == "item_policy")
                 });
 
                 assert!(

@@ -1,4 +1,6 @@
 use crate::catalog::extension::Extension;
+use crate::catalog::id::DependsOn;
+use crate::catalog::target::AttrTarget;
 use crate::diff::comment_utils;
 use crate::diff::operations::{ExtensionIdentifier, ExtensionOperation, MigrationStep};
 
@@ -30,7 +32,7 @@ pub fn diff(old: Option<&Extension>, new: Option<&Extension>) -> Vec<MigrationSt
             let comment_ops = comment_utils::handle_comment_diff(
                 Some(old_extension),
                 Some(new_extension),
-                || ExtensionIdentifier::from_extension(new_extension),
+                || AttrTarget::object(new_extension.id()),
             );
             for comment_op in comment_ops {
                 steps.push(MigrationStep::Extension(ExtensionOperation::Comment(

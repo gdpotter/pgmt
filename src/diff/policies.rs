@@ -1,4 +1,6 @@
+use crate::catalog::id::DependsOn;
 use crate::catalog::policy::Policy;
+use crate::catalog::target::AttrTarget;
 use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, PolicyIdentifier, PolicyOperation};
 
@@ -67,7 +69,7 @@ pub fn diff(old: Option<&Policy>, new: Option<&Policy>) -> Vec<MigrationStep> {
                 // Only comments might have changed
                 let comment_ops =
                     comment_utils::handle_comment_diff(Some(old_policy), Some(new_policy), || {
-                        PolicyIdentifier::from_policy(new_policy)
+                        AttrTarget::object(new_policy.id())
                     });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Policy(PolicyOperation::Comment(comment_op)));

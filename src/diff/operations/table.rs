@@ -1,9 +1,7 @@
 //! Table operations
 
-use super::{CommentOperation, CommentTarget, OperationKind};
-use crate::catalog::id::DbObjectId;
+use super::{CommentOperation, OperationKind};
 use crate::catalog::table::{Column, PrimaryKey};
-use crate::render::quote_ident;
 
 #[derive(Debug, Clone)]
 pub enum TableOperation {
@@ -22,7 +20,7 @@ pub enum TableOperation {
         name: String,
         actions: Vec<ColumnAction>,
     },
-    Comment(CommentOperation<TableTarget>),
+    Comment(CommentOperation),
 }
 
 impl TableOperation {
@@ -32,27 +30,6 @@ impl TableOperation {
             Self::Drop { .. } => OperationKind::Drop,
             Self::Alter { .. } => OperationKind::Alter,
             Self::Comment(_) => OperationKind::Alter,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TableTarget {
-    pub schema: String,
-    pub table: String,
-}
-
-impl CommentTarget for TableTarget {
-    const OBJECT_TYPE: &'static str = "TABLE";
-
-    fn identifier(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.table))
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Table {
-            schema: self.schema.clone(),
-            name: self.table.clone(),
         }
     }
 }
@@ -74,32 +51,5 @@ pub enum ColumnAction {
     DisableRls,
     ForceRls,
     NoForceRls,
-    Comment(CommentOperation<ColumnIdentifier>),
-}
-
-#[derive(Debug, Clone)]
-pub struct ColumnIdentifier {
-    pub schema: String,
-    pub table: String,
-    pub name: String,
-}
-
-impl CommentTarget for ColumnIdentifier {
-    const OBJECT_TYPE: &'static str = "COLUMN";
-
-    fn identifier(&self) -> String {
-        format!(
-            "{}.{}.{}",
-            quote_ident(&self.schema),
-            quote_ident(&self.table),
-            quote_ident(&self.name)
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Table {
-            schema: self.schema.clone(),
-            name: self.table.clone(),
-        }
-    }
+    Comment(CommentOperation),
 }

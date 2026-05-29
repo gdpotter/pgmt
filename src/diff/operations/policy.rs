@@ -1,5 +1,4 @@
-use super::{CommentOperation, CommentTarget, OperationKind};
-use crate::catalog::id::DbObjectId;
+use super::{CommentOperation, OperationKind};
 use crate::catalog::policy::Policy;
 
 /// Identifier for a policy
@@ -28,25 +27,6 @@ impl PolicyIdentifier {
     }
 }
 
-impl CommentTarget for PolicyIdentifier {
-    const OBJECT_TYPE: &'static str = "POLICY";
-
-    fn identifier(&self) -> String {
-        format!(
-            "\"{}\" ON \"{}\".\"{}\"",
-            self.name, self.schema, self.table
-        )
-    }
-
-    fn db_object_id(&self) -> DbObjectId {
-        DbObjectId::Policy {
-            schema: self.schema.clone(),
-            table: self.table.clone(),
-            name: self.name.clone(),
-        }
-    }
-}
-
 /// Operations that can be performed on policies
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyOperation {
@@ -67,7 +47,7 @@ pub enum PolicyOperation {
         old_policy: Box<Policy>,
         new_policy: Box<Policy>,
     },
-    Comment(CommentOperation<PolicyIdentifier>),
+    Comment(CommentOperation),
 }
 
 impl PolicyOperation {

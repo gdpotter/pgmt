@@ -1,8 +1,8 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::diff::operations::{
-    CommentOperation, FunctionOperation, MigrationStep, SchemaOperation, TableOperation,
-    TypeOperation, ViewOperation,
+    CommentOperation, FunctionOperation, MigrationStep, SchemaOperation, SqlRenderer,
+    TableOperation, TypeOperation, ViewOperation,
 };
 
 #[tokio::test]
@@ -507,13 +507,13 @@ async fn test_function_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Set { target, comment }))
-                    if target.schema == "test_schema" && target.name == "calculate_total" && comment == "Calculates total price including tax")
+                    if target.schema() == "test_schema" && target.name() == "calculate_total" && comment == "Calculates total price including tax")
             }).expect("Should have SetFunctionComment step");
 
             match comment_step {
                 MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Set { target, comment })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "calculate_total");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "calculate_total");
                     assert_eq!(comment, "Calculates total price including tax");
                 }
                 _ => panic!("Expected SetFunctionComment step"),
@@ -530,6 +530,61 @@ async fn test_function_comment_migration() -> Result<()> {
             Ok(())
         }
     ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_procedure_comment_migration() -> Result<()> {
+    // Regression: procedures must be commented with `COMMENT ON PROCEDURE`, not
+    // `COMMENT ON FUNCTION` (PostgreSQL rejects the latter as "not a function").
+    // Because the migration is applied to a fresh database, the wrong keyword
+    // would fail at apply time.
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE SCHEMA test_schema",
+                "CREATE PROCEDURE test_schema.do_thing(x integer) LANGUAGE plpgsql AS $$ BEGIN END $$",
+            ],
+            // Initial DB only: no comment
+            &[],
+            // Target DB only: comment on the procedure
+            &["COMMENT ON PROCEDURE test_schema.do_thing(integer) IS 'does a thing'"],
+            |steps, final_catalog| {
+                // The emitted comment step must render the PROCEDURE keyword.
+                let comment_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(
+                            s,
+                            MigrationStep::Function(FunctionOperation::Comment(
+                                CommentOperation::Set { target, .. }
+                            )) if target.name() == "do_thing"
+                        )
+                    })
+                    .expect("Should have a procedure comment step");
+
+                let sql = comment_step.to_sql();
+                assert!(
+                    sql.iter().any(|r| r.sql.contains("COMMENT ON PROCEDURE")),
+                    "expected COMMENT ON PROCEDURE, got: {:?}",
+                    sql.iter().map(|r| &r.sql).collect::<Vec<_>>()
+                );
+
+                // Round-trip: comment present after applying to a fresh DB.
+                let proc = final_catalog
+                    .functions
+                    .iter()
+                    .find(|f| f.name == "do_thing")
+                    .expect("procedure should exist after migration");
+                assert_eq!(proc.comment, Some("does a thing".to_string()));
+
+                Ok(())
+            },
+        )
+        .await?;
 
     Ok(())
 }
@@ -554,13 +609,13 @@ async fn test_drop_function_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
                 matches!(s, MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Drop { target }))
-                    if target.schema == "test_schema" && target.name == "calculate_total")
+                    if target.schema() == "test_schema" && target.name() == "calculate_total")
             }).expect("Should have DropFunctionComment step");
 
             match comment_step {
                 MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema, "test_schema");
-                    assert_eq!(target.name, "calculate_total");
+                    assert_eq!(target.schema(), "test_schema");
+                    assert_eq!(target.name(), "calculate_total");
                 }
                 _ => panic!("Expected DropFunctionComment step"),
             }
