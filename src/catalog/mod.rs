@@ -3,7 +3,7 @@ use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::diff::grants::is_owner_grant;
 use crate::diff::operations::{GrantOperation, MigrationStep};
 use crate::diff::{
-    aggregates as aggregates_diff, constraints as constraints_diff,
+    aggregates as aggregates_diff, casts as casts_diff, constraints as constraints_diff,
     custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
     indexes as indexes_diff, operators as operators_diff, policies as policies_diff,
     sequences as sequences_diff, tables as tables_diff, triggers as triggers_diff,
@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use std::collections::BTreeMap;
 
 pub mod aggregate;
+pub mod cast;
 pub mod comments;
 pub mod constraint;
 pub mod custom_type;
@@ -44,6 +45,7 @@ pub struct Catalog {
     pub functions: Vec<function::Function>,
     pub aggregates: Vec<aggregate::Aggregate>,
     pub operators: Vec<operator::Operator>,
+    pub casts: Vec<cast::Cast>,
     pub sequences: Vec<sequence::Sequence>,
     pub indexes: Vec<index::Index>,
     pub constraints: Vec<constraint::Constraint>,
@@ -85,6 +87,7 @@ impl Catalog {
         let functions = function::fetch(&mut *conn).await?;
         let aggregates = aggregate::fetch(&mut *conn).await?;
         let operators = operator::fetch(&mut *conn).await?;
+        let casts = cast::fetch(&mut *conn).await?;
         let sequences = sequence::fetch(&mut *conn).await?;
         let indexes = index::fetch(&mut *conn).await?;
         let constraints = constraint::fetch(&mut *conn).await?;
@@ -119,6 +122,7 @@ impl Catalog {
         insert_deps(&functions, &mut forward, &mut reverse);
         insert_deps(&aggregates, &mut forward, &mut reverse);
         insert_deps(&operators, &mut forward, &mut reverse);
+        insert_deps(&casts, &mut forward, &mut reverse);
         insert_deps(&sequences, &mut forward, &mut reverse);
         insert_deps(&indexes, &mut forward, &mut reverse);
         insert_deps(&constraints, &mut forward, &mut reverse);
@@ -136,6 +140,7 @@ impl Catalog {
             functions,
             aggregates,
             operators,
+            casts,
             sequences,
             indexes,
             constraints,
@@ -302,6 +307,12 @@ impl Catalog {
             .find(|o| o.schema == schema && o.name == name && o.arguments == arguments)
     }
 
+    pub fn find_cast(&self, source: &str, target: &str) -> Option<&cast::Cast> {
+        self.casts
+            .iter()
+            .find(|c| c.source == source && c.target == target)
+    }
+
     /// Synthesize DROP + CREATE steps for cascading a dependent object.
     ///
     /// Returns `None` if the object type doesn't support cascading or doesn't
@@ -438,6 +449,13 @@ impl Catalog {
                 steps.extend(operators_diff::diff(None, Some(new)));
             }
 
+            DbObjectId::Cast { source, target } => {
+                let old = self.find_cast(source, target)?;
+                let new = new_catalog.find_cast(source, target)?;
+                steps.extend(casts_diff::diff(Some(old), None));
+                steps.extend(casts_diff::diff(None, Some(new)));
+            }
+
             DbObjectId::Schema { .. }
             | DbObjectId::Extension { .. }
             | DbObjectId::Grant { .. }
@@ -470,6 +488,7 @@ impl Catalog {
             functions: Vec::new(),
             aggregates: Vec::new(),
             operators: Vec::new(),
+            casts: Vec::new(),
             sequences: Vec::new(),
             indexes: Vec::new(),
             constraints: Vec::new(),
@@ -510,6 +529,7 @@ impl Catalog {
                 name,
                 arguments,
             } => self.find_operator(schema, name, arguments).is_some(),
+            DbObjectId::Cast { source, target } => self.find_cast(source, target).is_some(),
             DbObjectId::Sequence { schema, name } => self.find_sequence(schema, name).is_some(),
             DbObjectId::Index { schema, name } => self.find_index(schema, name).is_some(),
             DbObjectId::Constraint {

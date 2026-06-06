@@ -23,6 +23,7 @@ pub enum OperationKind {
 }
 
 pub use aggregate::*;
+pub use cast::*;
 pub use comments::*;
 pub use constraint::*;
 pub use domain::*;
@@ -40,6 +41,7 @@ pub use types::*;
 pub use view::*;
 
 pub mod aggregate;
+pub mod cast;
 pub mod comments;
 pub mod constraint;
 pub mod domain;
@@ -68,6 +70,7 @@ pub enum MigrationStep {
     Function(FunctionOperation),
     Aggregate(AggregateOperation),
     Operator(OperatorOperation),
+    Cast(CastOperation),
     Index(IndexOperation),
     Constraint(ConstraintOperation),
     Trigger(TriggerOperation),
@@ -95,6 +98,7 @@ impl MigrationStep {
             Self::Function(op) => op.operation_kind(),
             Self::Aggregate(op) => op.operation_kind(),
             Self::Operator(op) => op.operation_kind(),
+            Self::Cast(op) => op.operation_kind(),
             Self::Index(op) => op.operation_kind(),
             Self::Constraint(op) => op.operation_kind(),
             Self::Trigger(op) => op.operation_kind(),

@@ -209,6 +209,12 @@ impl SchemaGenerator {
                 format!("{}operators.sql", prefix)
             }
 
+            MigrationStep::Cast(_) => {
+                // Casts are not schema-scoped (they span source/target types in
+                // possibly different schemas), so they all share one top-level file.
+                "casts.sql".to_string()
+            }
+
             MigrationStep::Sequence(op) => {
                 let (schema, name) = self.extract_sequence_info_from_operation(op);
 
@@ -758,6 +764,7 @@ impl SchemaGenerator {
             | DbObjectId::Policy { .. }
             | DbObjectId::Extension { .. }
             | DbObjectId::Operator { .. }
+            | DbObjectId::Cast { .. }
             | DbObjectId::Grant { .. }
             | DbObjectId::Comment { .. }
             | DbObjectId::Column { .. } => {

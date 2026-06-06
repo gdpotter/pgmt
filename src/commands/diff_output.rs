@@ -108,6 +108,7 @@ fn output_summary_format(steps: &[MigrationStep]) {
             MigrationStep::Function(_) => "Functions",
             MigrationStep::Aggregate(_) => "Aggregates",
             MigrationStep::Operator(_) => "Operators",
+            MigrationStep::Cast(_) => "Casts",
             MigrationStep::Index(_) => "Indexes",
             MigrationStep::Sequence(_) => "Sequences",
             MigrationStep::Schema(_) => "Schemas",

@@ -102,6 +102,10 @@ impl AttrTarget {
             | DbObjectId::Trigger { schema, name, .. }
             | DbObjectId::Policy { schema, name, .. } => (schema.clone(), name.clone()),
             DbObjectId::Extension { name } => (String::new(), name.clone()),
+            // Casts have no schema; report the source→target pair as the name.
+            DbObjectId::Cast { source, target } => {
+                (String::new(), format!("{source} AS {target}"))
+            }
             DbObjectId::Grant { .. } | DbObjectId::Comment { .. } | DbObjectId::Column { .. } => {
                 (String::new(), String::new())
             }

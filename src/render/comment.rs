@@ -52,6 +52,7 @@ fn comment_keyword(target: &AttrTarget) -> &'static str {
         DbObjectId::Procedure { .. } => "PROCEDURE",
         DbObjectId::Aggregate { .. } => "AGGREGATE",
         DbObjectId::Operator { .. } => "OPERATOR",
+        DbObjectId::Cast { .. } => "CAST",
         DbObjectId::Sequence { .. } => "SEQUENCE",
         DbObjectId::Index { .. } => "INDEX",
         DbObjectId::Constraint { .. } => "CONSTRAINT",
@@ -115,6 +116,9 @@ fn comment_reference(target: &AttrTarget) -> String {
             name,
             arguments,
         } => format!("{}.{} ({})", quote_ident(schema), name, arguments),
+        // Casts: `(source AS target)`. The type names come from format_type and are
+        // not quotable identifiers (e.g. `character varying`), so they're emitted bare.
+        DbObjectId::Cast { source, target } => format!("({source} AS {target})"),
         DbObjectId::Constraint {
             schema,
             table,

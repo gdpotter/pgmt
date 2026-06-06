@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            format_type(c.castsource, NULL) AS \"source!\",\n            format_type(c.casttarget, NULL) AS \"target!\",\n            c.castcontext::text AS \"context!\",\n            c.castmethod::text AS \"method!\",\n\n            -- Implementing function (only for method = 'f').\n            fn_ns.nspname AS \"function_schema?\",\n            fn.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(fn.oid) AS \"function_args?\",\n\n            -- Source type dependency metadata (resolve array element type).\n            CASE WHEN st.typelem != 0 THEN st_elem.typname ELSE st.typname END AS \"source_dep_name?\",\n            CASE WHEN st.typelem != 0 THEN st_elem_n.nspname ELSE st_n.nspname END AS \"source_dep_schema?\",\n            CASE WHEN st.typelem != 0 THEN st_elem.typtype::text ELSE st.typtype::text END AS \"source_dep_typtype?\",\n            CASE WHEN st.typelem != 0 THEN st_elem_rel.relkind::text ELSE st_rel.relkind::text END AS \"source_dep_relkind?\",\n            ext_source.extname AS \"source_dep_extension?\",\n\n            -- Target type dependency metadata (resolve array element type).\n            CASE WHEN tt.typelem != 0 THEN tt_elem.typname ELSE tt.typname END AS \"target_dep_name?\",\n            CASE WHEN tt.typelem != 0 THEN tt_elem_n.nspname ELSE tt_n.nspname END AS \"target_dep_schema?\",\n            CASE WHEN tt.typelem != 0 THEN tt_elem.typtype::text ELSE tt.typtype::text END AS \"target_dep_typtype?\",\n            CASE WHEN tt.typelem != 0 THEN tt_elem_rel.relkind::text ELSE tt_rel.relkind::text END AS \"target_dep_relkind?\",\n            ext_target.extname AS \"target_dep_extension?\",\n\n            d.description AS \"comment?\"\n\n        FROM pg_cast c\n\n        -- Implementing function\n        LEFT JOIN pg_proc fn ON c.castfunc = fn.oid AND c.castfunc != 0\n        LEFT JOIN pg_namespace fn_ns ON fn.pronamespace = fn_ns.oid\n\n        -- Source type (+ array element resolution)\n        JOIN pg_type st ON c.castsource = st.oid\n        JOIN pg_namespace st_n ON st.typnamespace = st_n.oid\n        LEFT JOIN pg_type st_elem ON st.typelem = st_elem.oid AND st.typelem != 0\n        LEFT JOIN pg_namespace st_elem_n ON st_elem.typnamespace = st_elem_n.oid\n        LEFT JOIN pg_class st_rel ON st.typrelid = st_rel.oid AND st.typrelid != 0\n        LEFT JOIN pg_class st_elem_rel ON st_elem.typrelid = st_elem_rel.oid AND st_elem.typrelid != 0\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_source ON ext_source.type_oid = COALESCE(NULLIF(st.typelem, 0::oid), st.oid)\n\n        -- Target type (+ array element resolution)\n        JOIN pg_type tt ON c.casttarget = tt.oid\n        JOIN pg_namespace tt_n ON tt.typnamespace = tt_n.oid\n        LEFT JOIN pg_type tt_elem ON tt.typelem = tt_elem.oid AND tt.typelem != 0\n        LEFT JOIN pg_namespace tt_elem_n ON tt_elem.typnamespace = tt_elem_n.oid\n        LEFT JOIN pg_class tt_rel ON tt.typrelid = tt_rel.oid AND tt.typrelid != 0\n        LEFT JOIN pg_class tt_elem_rel ON tt_elem.typrelid = tt_elem_rel.oid AND tt_elem.typrelid != 0\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_target ON ext_target.type_oid = COALESCE(NULLIF(tt.typelem, 0::oid), tt.oid)\n\n        -- Comment\n        LEFT JOIN pg_description d\n          ON d.objoid = c.oid\n         AND d.classoid = 'pg_cast'::regclass\n         AND d.objsubid = 0\n\n        -- Keep only user casts. PostgreSQL requires ownership of the source or\n        -- target type to create a cast, so every user cast has a non-system\n        -- source or target type; built-in casts have both in pg_catalog. (Modern\n        -- PostgreSQL identifies system objects by OID, not pg_depend pins, so a\n        -- pin check is unreliable here.)\n        WHERE (\n            st_n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n            OR tt_n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        )\n        -- Exclude extension-owned casts.\n        AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.classid = 'pg_cast'::regclass\n              AND dep.objid = c.oid\n              AND dep.deptype = 'e'\n        )\n\n        ORDER BY format_type(c.castsource, NULL), format_type(c.casttarget, NULL)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "context!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "method!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "function_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "function_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "function_args?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_dep_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 8,
+        "name": "source_dep_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 9,
+        "name": "source_dep_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "source_dep_relkind?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "source_dep_extension?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 12,
+        "name": "target_dep_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 13,
+        "name": "target_dep_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 14,
+        "name": "target_dep_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "target_dep_relkind?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "target_dep_extension?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 17,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "383a8dca69a85d8e25139d6d7435ee0f01f496a921388b4f3e1803d37136d3b7"
+}

@@ -109,6 +109,7 @@ pub async fn cmd_migrate_baseline(
                     crate::diff::operations::MigrationStep::Function(_) => "Function",
                     crate::diff::operations::MigrationStep::Aggregate(_) => "Aggregate",
                     crate::diff::operations::MigrationStep::Operator(_) => "Operator",
+                    crate::diff::operations::MigrationStep::Cast(_) => "Cast",
                     crate::diff::operations::MigrationStep::Index(_) => "Index",
                     crate::diff::operations::MigrationStep::Constraint(_) => "Constraint",
                     crate::diff::operations::MigrationStep::Trigger(_) => "Trigger",

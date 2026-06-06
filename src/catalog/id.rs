@@ -81,6 +81,12 @@ pub enum DbObjectId {
         name: String,
         arguments: String,
     },
+    /// A user-defined cast. Casts are not schema-scoped; their identity is the
+    /// pair of (source type, target type), each a canonical `format_type` name.
+    Cast {
+        source: String,
+        target: String,
+    },
     /// Column-level dependency for BEGIN ATOMIC functions (PostgreSQL 14+)
     /// and other objects that have pg_depend entries with refobjsubid > 0
     Column {
@@ -111,7 +117,9 @@ impl DbObjectId {
             | DbObjectId::Aggregate { schema, .. }
             | DbObjectId::Operator { schema, .. }
             | DbObjectId::Column { schema, .. } => Some(schema.as_str()),
-            DbObjectId::Grant { .. } | DbObjectId::Extension { .. } => None,
+            DbObjectId::Grant { .. }
+            | DbObjectId::Extension { .. }
+            | DbObjectId::Cast { .. } => None,
             DbObjectId::Comment { object_id } => object_id.schema(),
         }
     }
@@ -165,6 +173,7 @@ impl fmt::Display for DbObjectId {
                 name,
                 arguments,
             } => write!(f, "operator {schema}.{name}({arguments})"),
+            Self::Cast { source, target } => write!(f, "cast ({source} AS {target})"),
             Self::Column {
                 schema,
                 table,

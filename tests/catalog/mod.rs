@@ -2,6 +2,7 @@
 // Tests for fetching database objects from PostgreSQL and converting to catalog structs
 
 pub mod aggregates;
+pub mod casts;
 pub mod constraints;
 pub mod custom_types;
 pub mod domains;

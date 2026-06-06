@@ -113,6 +113,9 @@ pub fn namespace_slots(id: &DbObjectId) -> Vec<NamespaceSlot> {
         // (schema, name, argtypes); they do not collide with any other object
         // kind, so same-name conflicts are covered by the exact-identity rule.
         | DbObjectId::Operator { .. }
+        // Casts are keyed by (source, target) and share no name-space with any
+        // other object kind.
+        | DbObjectId::Cast { .. }
         | DbObjectId::Column { .. } => vec![],
     }
 }
