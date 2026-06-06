@@ -3,7 +3,7 @@
 use crate::catalog::grant::{Grant, GranteeType, target_key};
 use crate::catalog::id::DbObjectId;
 use crate::diff::operations::{GrantOperation, MigrationStep};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Check if a grant is to the owner of the object (owner grants are implicit in PostgreSQL)
 pub fn is_owner_grant(grant: &Grant) -> bool {
@@ -40,26 +40,69 @@ pub fn diff(old_grant: Option<&Grant>, new_grant: Option<&Grant>) -> Vec<Migrati
             if is_owner_grant(old) || is_owner_grant(new) {
                 vec![] // Skip owner grants
             } else {
-                let mut steps = Vec::new();
-
-                // If they're different (privileges or grant options changed),
-                // we need to revoke old and grant new
-                if old.privileges != new.privileges
-                    || old.with_grant_option != new.with_grant_option
-                {
-                    steps.push(MigrationStep::Grant(GrantOperation::Revoke {
-                        grant: old.clone(),
-                    }));
-                    steps.push(MigrationStep::Grant(GrantOperation::Grant {
-                        grant: new.clone(),
-                    }));
-                }
-
-                steps
+                diff_privilege_change(old, new)
             }
         }
         (None, None) => vec![], // Should not happen in practice
     }
+}
+
+/// Diff a grant that exists in both states for the same grantee/target.
+///
+/// When the grant option is unchanged we emit only the delta: a single REVOKE
+/// for privileges that were dropped and a single GRANT for privileges that were
+/// added (either may be empty). This avoids the churn of revoking and
+/// re-granting privileges present in both states — going from `SELECT, INSERT`
+/// to `SELECT, INSERT, UPDATE` emits just `GRANT UPDATE`, with no REVOKE.
+///
+/// When the grant option differs we fall back to a full revoke + re-grant. A
+/// granular downgrade (dropping the grant option while keeping the privilege)
+/// would require `REVOKE GRANT OPTION FOR ...`, which pgmt does not model, and
+/// grant-option changes are rare; a full revoke + re-grant is always correct.
+fn diff_privilege_change(old: &Grant, new: &Grant) -> Vec<MigrationStep> {
+    if old.with_grant_option != new.with_grant_option {
+        return vec![
+            MigrationStep::Grant(GrantOperation::Revoke { grant: old.clone() }),
+            MigrationStep::Grant(GrantOperation::Grant { grant: new.clone() }),
+        ];
+    }
+
+    // Grant option unchanged: emit only the privilege delta. BTreeSet keeps the
+    // resulting privilege lists in deterministic (alphabetical) order, matching
+    // the order produced when fetching grants from the catalog.
+    let old_privs: BTreeSet<&str> = old.privileges.iter().map(String::as_str).collect();
+    let new_privs: BTreeSet<&str> = new.privileges.iter().map(String::as_str).collect();
+
+    let to_revoke: Vec<String> = old_privs
+        .difference(&new_privs)
+        .map(|p| p.to_string())
+        .collect();
+    let to_grant: Vec<String> = new_privs
+        .difference(&old_privs)
+        .map(|p| p.to_string())
+        .collect();
+
+    let mut steps = Vec::new();
+
+    if !to_revoke.is_empty() {
+        steps.push(MigrationStep::Grant(GrantOperation::Revoke {
+            grant: Grant {
+                privileges: to_revoke,
+                ..old.clone()
+            },
+        }));
+    }
+
+    if !to_grant.is_empty() {
+        steps.push(MigrationStep::Grant(GrantOperation::Grant {
+            grant: Grant {
+                privileges: to_grant,
+                ..new.clone()
+            },
+        }));
+    }
+
+    steps
 }
 
 /// Compare grants by building maps by grant ID for efficient comparison.
@@ -76,8 +119,7 @@ pub fn diff_grants(old_grants: &[Grant], new_grants: &[Grant]) -> Vec<MigrationS
         new_map.insert(grant.id(), grant);
     }
 
-    let all_ids: std::collections::BTreeSet<_> =
-        old_map.keys().chain(new_map.keys()).cloned().collect();
+    let all_ids: BTreeSet<_> = old_map.keys().chain(new_map.keys()).cloned().collect();
 
     let mut steps: Vec<MigrationStep> = all_ids
         .into_iter()

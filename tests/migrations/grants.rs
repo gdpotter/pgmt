@@ -230,6 +230,147 @@ async fn test_revoke_table_privilege_migration() -> Result<()> {
     Ok(())
 }
 
+/// Adding privileges to an existing grant should emit only the added privileges
+/// as a single GRANT — no REVOKE of the privileges that already existed.
+/// Going from `SELECT, INSERT` to `SELECT, INSERT, UPDATE` emits just
+/// `GRANT UPDATE` rather than revoking and re-granting everything.
+#[tokio::test]
+async fn test_grant_privilege_superset_migration() -> Result<()> {
+    use pgmt::catalog::grant::GranteeType;
+
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: table
+            &["CREATE TABLE users (id SERIAL, name VARCHAR)"],
+            // Initial DB only: a subset of the privileges
+            &["GRANT SELECT, INSERT ON TABLE users TO test_app_user"],
+            // Target DB only: the same privileges plus UPDATE
+            &["GRANT SELECT, INSERT, UPDATE ON TABLE users TO test_app_user"],
+            |steps, final_catalog| {
+                let is_app_user = |g: &pgmt::catalog::grant::Grant| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                };
+
+                // No REVOKE should be generated — the existing privileges are untouched.
+                let revoke_steps: Vec<_> = steps
+                    .iter()
+                    .filter(|s| matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant }) if is_app_user(grant)))
+                    .collect();
+                assert!(
+                    revoke_steps.is_empty(),
+                    "Adding a privilege must not revoke existing ones, got: {revoke_steps:?}"
+                );
+
+                // Exactly one GRANT, carrying only the newly added UPDATE privilege.
+                let grant_steps: Vec<_> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Grant(GrantOperation::Grant { grant }) if is_app_user(grant) => Some(grant),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(grant_steps.len(), 1, "Expected a single GRANT step");
+                assert_eq!(
+                    grant_steps[0].privileges,
+                    vec!["UPDATE".to_string()],
+                    "GRANT should carry only the added privilege"
+                );
+
+                // Round-trip: final state has all three privileges.
+                let grant = final_catalog
+                    .grants
+                    .iter()
+                    .find(|g| is_app_user(g)
+                        && matches!(&g.target.object, pgmt::catalog::id::DbObjectId::Table { name, .. } if name == "users"))
+                    .expect("grant should exist after migration");
+                for priv_name in ["SELECT", "INSERT", "UPDATE"] {
+                    assert!(
+                        grant.privileges.contains(&priv_name.to_string()),
+                        "expected {priv_name} after migration, got {:?}",
+                        grant.privileges
+                    );
+                }
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// When privileges both gain and lose members, emit only the delta: one REVOKE
+/// for the dropped privilege and one GRANT for the added one, leaving the
+/// overlapping privilege untouched. `SELECT, INSERT` -> `SELECT, UPDATE` emits
+/// `REVOKE INSERT` + `GRANT UPDATE` and never touches SELECT.
+#[tokio::test]
+async fn test_grant_privilege_delta_migration() -> Result<()> {
+    use pgmt::catalog::grant::GranteeType;
+
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE users (id SERIAL, name VARCHAR)"],
+            &["GRANT SELECT, INSERT ON TABLE users TO test_app_user"],
+            &["GRANT SELECT, UPDATE ON TABLE users TO test_app_user"],
+            |steps, final_catalog| {
+                let is_app_user = |g: &pgmt::catalog::grant::Grant| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                };
+
+                let revoke_steps: Vec<_> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Grant(GrantOperation::Revoke { grant }) if is_app_user(grant) => Some(grant),
+                        _ => None,
+                    })
+                    .collect();
+                let grant_steps: Vec<_> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Grant(GrantOperation::Grant { grant }) if is_app_user(grant) => Some(grant),
+                        _ => None,
+                    })
+                    .collect();
+
+                assert_eq!(revoke_steps.len(), 1, "Expected a single REVOKE step");
+                assert_eq!(revoke_steps[0].privileges, vec!["INSERT".to_string()]);
+
+                assert_eq!(grant_steps.len(), 1, "Expected a single GRANT step");
+                assert_eq!(grant_steps[0].privileges, vec!["UPDATE".to_string()]);
+
+                // SELECT (present in both states) must not appear in any step.
+                assert!(
+                    !revoke_steps[0].privileges.contains(&"SELECT".to_string())
+                        && !grant_steps[0].privileges.contains(&"SELECT".to_string()),
+                    "the overlapping SELECT privilege must be left untouched"
+                );
+
+                // Round-trip: final state is exactly {SELECT, UPDATE}.
+                let grant = final_catalog
+                    .grants
+                    .iter()
+                    .find(|g| is_app_user(g)
+                        && matches!(&g.target.object, pgmt::catalog::id::DbObjectId::Table { name, .. } if name == "users"))
+                    .expect("grant should exist after migration");
+                assert!(grant.privileges.contains(&"SELECT".to_string()));
+                assert!(grant.privileges.contains(&"UPDATE".to_string()));
+                assert!(
+                    !grant.privileges.contains(&"INSERT".to_string()),
+                    "INSERT should have been revoked"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_grant_with_grant_option_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
