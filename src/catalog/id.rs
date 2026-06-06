@@ -72,6 +72,15 @@ pub enum DbObjectId {
         name: String,
         arguments: String,
     },
+    /// A user-defined operator. `name` is the operator symbol (e.g. `===`);
+    /// `arguments` is the canonical `"left, right"` operand-type string (with
+    /// `NONE` for an absent operand on prefix operators), which is exactly the
+    /// `(left, right)` form `DROP OPERATOR` / `COMMENT ON OPERATOR` require.
+    Operator {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
     /// Column-level dependency for BEGIN ATOMIC functions (PostgreSQL 14+)
     /// and other objects that have pg_depend entries with refobjsubid > 0
     Column {
@@ -100,6 +109,7 @@ impl DbObjectId {
             | DbObjectId::Trigger { schema, .. }
             | DbObjectId::Policy { schema, .. }
             | DbObjectId::Aggregate { schema, .. }
+            | DbObjectId::Operator { schema, .. }
             | DbObjectId::Column { schema, .. } => Some(schema.as_str()),
             DbObjectId::Grant { .. } | DbObjectId::Extension { .. } => None,
             DbObjectId::Comment { object_id } => object_id.schema(),
@@ -150,6 +160,11 @@ impl fmt::Display for DbObjectId {
                 name,
                 arguments,
             } => write!(f, "aggregate {schema}.{name}({arguments})"),
+            Self::Operator {
+                schema,
+                name,
+                arguments,
+            } => write!(f, "operator {schema}.{name}({arguments})"),
             Self::Column {
                 schema,
                 table,

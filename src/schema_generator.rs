@@ -201,6 +201,14 @@ impl SchemaGenerator {
                 format!("{}aggregates/{}.sql", prefix, name)
             }
 
+            MigrationStep::Operator(op) => {
+                // Operators are keyed by a symbol (e.g. `===`), which is not a
+                // safe file name, so all operators in a schema share one file.
+                let schema = op.db_object_id().schema().unwrap_or("public").to_string();
+                let prefix = self.schema_path_prefix(&schema);
+                format!("{}operators.sql", prefix)
+            }
+
             MigrationStep::Sequence(op) => {
                 let (schema, name) = self.extract_sequence_info_from_operation(op);
 
@@ -749,6 +757,7 @@ impl SchemaGenerator {
             | DbObjectId::Trigger { .. }
             | DbObjectId::Policy { .. }
             | DbObjectId::Extension { .. }
+            | DbObjectId::Operator { .. }
             | DbObjectId::Grant { .. }
             | DbObjectId::Comment { .. }
             | DbObjectId::Column { .. } => {

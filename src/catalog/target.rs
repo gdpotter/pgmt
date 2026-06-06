@@ -96,7 +96,8 @@ impl AttrTarget {
             | DbObjectId::Index { schema, name } => (schema.clone(), name.clone()),
             DbObjectId::Function { schema, name, .. }
             | DbObjectId::Procedure { schema, name, .. }
-            | DbObjectId::Aggregate { schema, name, .. } => (schema.clone(), name.clone()),
+            | DbObjectId::Aggregate { schema, name, .. }
+            | DbObjectId::Operator { schema, name, .. } => (schema.clone(), name.clone()),
             DbObjectId::Constraint { schema, name, .. }
             | DbObjectId::Trigger { schema, name, .. }
             | DbObjectId::Policy { schema, name, .. } => (schema.clone(), name.clone()),

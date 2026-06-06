@@ -5,8 +5,9 @@ use crate::diff::operations::{GrantOperation, MigrationStep};
 use crate::diff::{
     aggregates as aggregates_diff, constraints as constraints_diff,
     custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
-    indexes as indexes_diff, policies as policies_diff, sequences as sequences_diff,
-    tables as tables_diff, triggers as triggers_diff, views as views_diff,
+    indexes as indexes_diff, operators as operators_diff, policies as policies_diff,
+    sequences as sequences_diff, tables as tables_diff, triggers as triggers_diff,
+    views as views_diff,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -23,6 +24,7 @@ pub mod grant;
 pub mod id;
 pub mod identity;
 pub mod index;
+pub mod operator;
 pub mod policy;
 pub mod schema;
 pub mod sequence;
@@ -41,6 +43,7 @@ pub struct Catalog {
     pub domains: Vec<domain::Domain>,
     pub functions: Vec<function::Function>,
     pub aggregates: Vec<aggregate::Aggregate>,
+    pub operators: Vec<operator::Operator>,
     pub sequences: Vec<sequence::Sequence>,
     pub indexes: Vec<index::Index>,
     pub constraints: Vec<constraint::Constraint>,
@@ -81,6 +84,7 @@ impl Catalog {
         let domains = domain::fetch(&mut *conn).await?;
         let functions = function::fetch(&mut *conn).await?;
         let aggregates = aggregate::fetch(&mut *conn).await?;
+        let operators = operator::fetch(&mut *conn).await?;
         let sequences = sequence::fetch(&mut *conn).await?;
         let indexes = index::fetch(&mut *conn).await?;
         let constraints = constraint::fetch(&mut *conn).await?;
@@ -114,6 +118,7 @@ impl Catalog {
         insert_deps(&domains, &mut forward, &mut reverse);
         insert_deps(&functions, &mut forward, &mut reverse);
         insert_deps(&aggregates, &mut forward, &mut reverse);
+        insert_deps(&operators, &mut forward, &mut reverse);
         insert_deps(&sequences, &mut forward, &mut reverse);
         insert_deps(&indexes, &mut forward, &mut reverse);
         insert_deps(&constraints, &mut forward, &mut reverse);
@@ -130,6 +135,7 @@ impl Catalog {
             domains,
             functions,
             aggregates,
+            operators,
             sequences,
             indexes,
             constraints,
@@ -285,6 +291,17 @@ impl Catalog {
             .find(|a| a.schema == schema && a.name == name && a.arguments == arguments)
     }
 
+    pub fn find_operator(
+        &self,
+        schema: &str,
+        name: &str,
+        arguments: &str,
+    ) -> Option<&operator::Operator> {
+        self.operators
+            .iter()
+            .find(|o| o.schema == schema && o.name == name && o.arguments == arguments)
+    }
+
     /// Synthesize DROP + CREATE steps for cascading a dependent object.
     ///
     /// Returns `None` if the object type doesn't support cascading or doesn't
@@ -410,6 +427,17 @@ impl Catalog {
                 steps.extend(aggregates_diff::diff(None, Some(new)));
             }
 
+            DbObjectId::Operator {
+                schema,
+                name,
+                arguments,
+            } => {
+                let old = self.find_operator(schema, name, arguments)?;
+                let new = new_catalog.find_operator(schema, name, arguments)?;
+                steps.extend(operators_diff::diff(Some(old), None));
+                steps.extend(operators_diff::diff(None, Some(new)));
+            }
+
             DbObjectId::Schema { .. }
             | DbObjectId::Extension { .. }
             | DbObjectId::Grant { .. }
@@ -441,6 +469,7 @@ impl Catalog {
             domains: Vec::new(),
             functions: Vec::new(),
             aggregates: Vec::new(),
+            operators: Vec::new(),
             sequences: Vec::new(),
             indexes: Vec::new(),
             constraints: Vec::new(),
@@ -476,6 +505,11 @@ impl Catalog {
                 name,
                 arguments,
             } => self.find_aggregate(schema, name, arguments).is_some(),
+            DbObjectId::Operator {
+                schema,
+                name,
+                arguments,
+            } => self.find_operator(schema, name, arguments).is_some(),
             DbObjectId::Sequence { schema, name } => self.find_sequence(schema, name).is_some(),
             DbObjectId::Index { schema, name } => self.find_index(schema, name).is_some(),
             DbObjectId::Constraint {

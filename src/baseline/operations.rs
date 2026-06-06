@@ -105,6 +105,7 @@ pub fn display_baseline_summary(result: &BaselineCreationResult) {
                 MigrationStep::Sequence(_) => "Sequence",
                 MigrationStep::Function(_) => "Function",
                 MigrationStep::Aggregate(_) => "Aggregate",
+                MigrationStep::Operator(_) => "Operator",
                 MigrationStep::Index(_) => "Index",
                 MigrationStep::Constraint(_) => "Constraint",
                 MigrationStep::Trigger(_) => "Trigger",

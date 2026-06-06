@@ -132,6 +132,7 @@ pub fn render_grant_object_clause(object: &DbObjectId) -> String {
         | DbObjectId::Trigger { .. }
         | DbObjectId::Policy { .. }
         | DbObjectId::Extension { .. }
+        | DbObjectId::Operator { .. }
         | DbObjectId::Grant { .. }
         | DbObjectId::Comment { .. }
         | DbObjectId::Column { .. } => {

@@ -30,6 +30,7 @@ pub use extension::*;
 pub use function::*;
 pub use grant::*;
 pub use index::*;
+pub use operator::*;
 pub use policy::*;
 pub use schema::*;
 pub use sequence::*;
@@ -46,6 +47,7 @@ pub mod extension;
 pub mod function;
 pub mod grant;
 pub mod index;
+pub mod operator;
 pub mod policy;
 pub mod schema;
 pub mod sequence;
@@ -65,6 +67,7 @@ pub enum MigrationStep {
     Sequence(SequenceOperation),
     Function(FunctionOperation),
     Aggregate(AggregateOperation),
+    Operator(OperatorOperation),
     Index(IndexOperation),
     Constraint(ConstraintOperation),
     Trigger(TriggerOperation),
@@ -91,6 +94,7 @@ impl MigrationStep {
             Self::Sequence(op) => op.operation_kind(),
             Self::Function(op) => op.operation_kind(),
             Self::Aggregate(op) => op.operation_kind(),
+            Self::Operator(op) => op.operation_kind(),
             Self::Index(op) => op.operation_kind(),
             Self::Constraint(op) => op.operation_kind(),
             Self::Trigger(op) => op.operation_kind(),

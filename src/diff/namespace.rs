@@ -109,6 +109,10 @@ pub fn namespace_slots(id: &DbObjectId) -> Vec<NamespaceSlot> {
         | DbObjectId::Grant { .. }
         | DbObjectId::Comment { .. }
         | DbObjectId::Extension { .. }
+        // Operators live in the `pg_operator` namespace, keyed by
+        // (schema, name, argtypes); they do not collide with any other object
+        // kind, so same-name conflicts are covered by the exact-identity rule.
+        | DbObjectId::Operator { .. }
         | DbObjectId::Column { .. } => vec![],
     }
 }

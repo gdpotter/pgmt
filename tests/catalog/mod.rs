@@ -11,6 +11,7 @@ pub mod file_dependencies;
 pub mod functions;
 pub mod grants;
 pub mod indexes;
+pub mod operators;
 pub mod policies;
 pub mod schemas;
 pub mod sequences;

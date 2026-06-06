@@ -11,6 +11,7 @@ pub mod grants;
 pub mod indexes;
 pub mod namespace;
 pub mod operations;
+pub mod operators;
 pub mod policies;
 pub mod schemas;
 pub mod sequences;
@@ -22,8 +23,8 @@ use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::catalog::utils::is_system_schema;
 use crate::catalog::{
     Catalog, aggregate::Aggregate, constraint::Constraint, custom_type::CustomType, domain::Domain,
-    extension::Extension, function::Function, index::Index, sequence::Sequence, table::Table,
-    view::View,
+    extension::Extension, function::Function, index::Index, operator::Operator, sequence::Sequence,
+    table::Table, view::View,
 };
 use crate::diff::operations::{MigrationStep, OperationKind};
 use petgraph::algo::toposort;
@@ -120,6 +121,13 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
         &new.aggregates,
         Aggregate::id,
         aggregates::diff,
+    ));
+
+    out.extend(diff_list(
+        &old.operators,
+        &new.operators,
+        Operator::id,
+        operators::diff,
     ));
 
     out.extend(grants::diff_grants(&old.grants, &new.grants));
@@ -526,6 +534,7 @@ fn order_steps_by_dependencies(
                     MigrationStep::Sequence(_) => "Sequence",
                     MigrationStep::Function(_) => "Function",
                     MigrationStep::Aggregate(_) => "Aggregate",
+                    MigrationStep::Operator(_) => "Operator",
                     MigrationStep::Index(_) => "Index",
                     MigrationStep::Constraint(_) => "Constraint",
                     MigrationStep::Trigger(_) => "Trigger",

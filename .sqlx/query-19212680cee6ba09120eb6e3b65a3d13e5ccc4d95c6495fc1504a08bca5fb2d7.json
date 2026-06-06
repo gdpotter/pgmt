@@ -1,0 +1,194 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            o.oprname AS \"name!\",\n\n            -- Formatted operand types (NULL for an absent operand). These drive both\n            -- the `(left, right)` identity string and the LEFTARG/RIGHTARG clauses.\n            CASE WHEN o.oprleft = 0 THEN NULL ELSE format_type(o.oprleft, NULL) END AS \"left_type?\",\n            CASE WHEN o.oprright = 0 THEN NULL ELSE format_type(o.oprright, NULL) END AS \"right_type?\",\n\n            -- Implementing function (oprcode) - always present.\n            fn_ns.nspname AS \"function_schema!\",\n            fn.proname AS \"function_name!\",\n            pg_catalog.pg_get_function_identity_arguments(fn.oid) AS \"function_args!\",\n\n            -- Left operand type dependency metadata (resolve array element type).\n            CASE WHEN lt.typelem != 0 THEN lt_elem.typname ELSE lt.typname END AS \"left_dep_name?\",\n            CASE WHEN lt.typelem != 0 THEN lt_elem_n.nspname ELSE lt_n.nspname END AS \"left_dep_schema?\",\n            CASE WHEN lt.typelem != 0 THEN lt_elem.typtype::text ELSE lt.typtype::text END AS \"left_dep_typtype?\",\n            CASE WHEN lt.typelem != 0 THEN lt_elem_rel.relkind::text ELSE lt_rel.relkind::text END AS \"left_dep_relkind?\",\n            ext_left.extname AS \"left_dep_extension?\",\n\n            -- Right operand type dependency metadata (resolve array element type).\n            CASE WHEN rt.typelem != 0 THEN rt_elem.typname ELSE rt.typname END AS \"right_dep_name?\",\n            CASE WHEN rt.typelem != 0 THEN rt_elem_n.nspname ELSE rt_n.nspname END AS \"right_dep_schema?\",\n            CASE WHEN rt.typelem != 0 THEN rt_elem.typtype::text ELSE rt.typtype::text END AS \"right_dep_typtype?\",\n            CASE WHEN rt.typelem != 0 THEN rt_elem_rel.relkind::text ELSE rt_rel.relkind::text END AS \"right_dep_relkind?\",\n            ext_right.extname AS \"right_dep_extension?\",\n\n            -- Commutator / negator operator identities (for rendering only).\n            com_ns.nspname AS \"commutator_schema?\",\n            com.oprname AS \"commutator_name?\",\n            neg_ns.nspname AS \"negator_schema?\",\n            neg.oprname AS \"negator_name?\",\n\n            -- Restriction / join selectivity functions.\n            rf_ns.nspname AS \"restrict_schema?\",\n            rf.proname AS \"restrict_name?\",\n            pg_catalog.pg_get_function_identity_arguments(rf.oid) AS \"restrict_args?\",\n            jf_ns.nspname AS \"join_schema?\",\n            jf.proname AS \"join_name?\",\n            pg_catalog.pg_get_function_identity_arguments(jf.oid) AS \"join_args?\",\n\n            o.oprcanhash AS \"hashes!\",\n            o.oprcanmerge AS \"merges!\",\n\n            d.description AS \"comment?\"\n\n        FROM pg_operator o\n        JOIN pg_namespace n ON o.oprnamespace = n.oid\n\n        -- Implementing function\n        JOIN pg_proc fn ON o.oprcode = fn.oid\n        JOIN pg_namespace fn_ns ON fn.pronamespace = fn_ns.oid\n\n        -- Left operand type (+ array element resolution)\n        LEFT JOIN pg_type lt ON o.oprleft = lt.oid AND o.oprleft != 0\n        LEFT JOIN pg_namespace lt_n ON lt.typnamespace = lt_n.oid\n        LEFT JOIN pg_type lt_elem ON lt.typelem = lt_elem.oid AND lt.typelem != 0\n        LEFT JOIN pg_namespace lt_elem_n ON lt_elem.typnamespace = lt_elem_n.oid\n        LEFT JOIN pg_class lt_rel ON lt.typrelid = lt_rel.oid AND lt.typrelid != 0\n        LEFT JOIN pg_class lt_elem_rel ON lt_elem.typrelid = lt_elem_rel.oid AND lt_elem.typrelid != 0\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_left ON ext_left.type_oid = COALESCE(NULLIF(lt.typelem, 0::oid), lt.oid)\n\n        -- Right operand type (+ array element resolution)\n        LEFT JOIN pg_type rt ON o.oprright = rt.oid AND o.oprright != 0\n        LEFT JOIN pg_namespace rt_n ON rt.typnamespace = rt_n.oid\n        LEFT JOIN pg_type rt_elem ON rt.typelem = rt_elem.oid AND rt.typelem != 0\n        LEFT JOIN pg_namespace rt_elem_n ON rt_elem.typnamespace = rt_elem_n.oid\n        LEFT JOIN pg_class rt_rel ON rt.typrelid = rt_rel.oid AND rt.typrelid != 0\n        LEFT JOIN pg_class rt_elem_rel ON rt_elem.typrelid = rt_elem_rel.oid AND rt_elem.typrelid != 0\n        LEFT JOIN (\n            SELECT DISTINCT dep.objid AS type_oid, e.extname\n            FROM pg_depend dep\n            JOIN pg_extension e ON dep.refobjid = e.oid\n            WHERE dep.deptype = 'e'\n        ) ext_right ON ext_right.type_oid = COALESCE(NULLIF(rt.typelem, 0::oid), rt.oid)\n\n        -- Commutator / negator\n        LEFT JOIN pg_operator com ON o.oprcom = com.oid AND o.oprcom != 0\n        LEFT JOIN pg_namespace com_ns ON com.oprnamespace = com_ns.oid\n        LEFT JOIN pg_operator neg ON o.oprnegate = neg.oid AND o.oprnegate != 0\n        LEFT JOIN pg_namespace neg_ns ON neg.oprnamespace = neg_ns.oid\n\n        -- Selectivity functions\n        LEFT JOIN pg_proc rf ON o.oprrest = rf.oid AND o.oprrest != 0\n        LEFT JOIN pg_namespace rf_ns ON rf.pronamespace = rf_ns.oid\n        LEFT JOIN pg_proc jf ON o.oprjoin = jf.oid AND o.oprjoin != 0\n        LEFT JOIN pg_namespace jf_ns ON jf.pronamespace = jf_ns.oid\n\n        -- Comment\n        LEFT JOIN pg_description d\n          ON d.objoid = o.oid\n         AND d.classoid = 'pg_operator'::regclass\n         AND d.objsubid = 0\n\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n        -- Exclude operators that belong to an extension.\n        AND NOT EXISTS (\n            SELECT 1 FROM pg_depend dep\n            WHERE dep.objid = o.oid\n              AND dep.classid = 'pg_operator'::regclass\n              AND dep.deptype = 'e'\n        )\n\n        ORDER BY n.nspname, o.oprname, o.oprleft, o.oprright\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 2,
+        "name": "left_type?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "right_type?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "function_schema!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 5,
+        "name": "function_name!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 6,
+        "name": "function_args!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "left_dep_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 8,
+        "name": "left_dep_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 9,
+        "name": "left_dep_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "left_dep_relkind?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "left_dep_extension?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 12,
+        "name": "right_dep_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 13,
+        "name": "right_dep_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 14,
+        "name": "right_dep_typtype?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "right_dep_relkind?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "right_dep_extension?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 17,
+        "name": "commutator_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 18,
+        "name": "commutator_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 19,
+        "name": "negator_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 20,
+        "name": "negator_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 21,
+        "name": "restrict_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 22,
+        "name": "restrict_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 23,
+        "name": "restrict_args?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "join_schema?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 25,
+        "name": "join_name?",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 26,
+        "name": "join_args?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 27,
+        "name": "hashes!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 28,
+        "name": "merges!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 29,
+        "name": "comment?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "19212680cee6ba09120eb6e3b65a3d13e5ccc4d95c6495fc1504a08bca5fb2d7"
+}

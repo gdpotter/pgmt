@@ -51,6 +51,7 @@ fn comment_keyword(target: &AttrTarget) -> &'static str {
         DbObjectId::Function { .. } => "FUNCTION",
         DbObjectId::Procedure { .. } => "PROCEDURE",
         DbObjectId::Aggregate { .. } => "AGGREGATE",
+        DbObjectId::Operator { .. } => "OPERATOR",
         DbObjectId::Sequence { .. } => "SEQUENCE",
         DbObjectId::Index { .. } => "INDEX",
         DbObjectId::Constraint { .. } => "CONSTRAINT",
@@ -107,6 +108,13 @@ fn comment_reference(target: &AttrTarget) -> String {
             quote_ident(name),
             arguments
         ),
+        // Operators: the symbol (e.g. `===`) is NOT a quotable identifier, so it is
+        // emitted bare. Renders e.g. `"app".=== (app.money, app.money)`.
+        DbObjectId::Operator {
+            schema,
+            name,
+            arguments,
+        } => format!("{}.{} ({})", quote_ident(schema), name, arguments),
         DbObjectId::Constraint {
             schema,
             table,

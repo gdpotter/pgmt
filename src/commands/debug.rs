@@ -88,6 +88,11 @@ pub enum ObjectIdJson {
         name: String,
         arguments: String,
     },
+    Operator {
+        schema: String,
+        name: String,
+        arguments: String,
+    },
     Grant {
         id: String,
     },
@@ -180,6 +185,15 @@ impl From<&DbObjectId> for ObjectIdJson {
                 name,
                 arguments,
             } => ObjectIdJson::Aggregate {
+                schema: schema.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            DbObjectId::Operator {
+                schema,
+                name,
+                arguments,
+            } => ObjectIdJson::Operator {
                 schema: schema.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),
@@ -466,6 +480,13 @@ fn format_object_id(obj: &ObjectIdJson) -> String {
             arguments,
         } => {
             format!("Aggregate: {}.{}({})", schema, name, arguments)
+        }
+        ObjectIdJson::Operator {
+            schema,
+            name,
+            arguments,
+        } => {
+            format!("Operator: {}.{}({})", schema, name, arguments)
         }
         ObjectIdJson::Grant { id } => format!("Grant: {}", id),
         ObjectIdJson::Comment { object_id } => {

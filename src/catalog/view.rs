@@ -287,7 +287,15 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
           proc.proname                  AS "proc_name",
           proc_n.nspname                AS "proc_schema",
           pg_catalog.pg_get_function_identity_arguments(proc.oid) AS "proc_args?",
-          ext_procs.extname AS "proc_extension_name?"
+          ext_procs.extname AS "proc_extension_name?",
+
+          -- Operator reference (custom operators used in the view body; PostgreSQL
+          -- records these in pg_depend via the OpExpr's opno).
+          op.oprname                    AS "op_name?",
+          op_n.nspname                  AS "op_schema?",
+          CASE WHEN op.oprleft = 0 THEN NULL ELSE format_type(op.oprleft, NULL) END AS "op_left_type?",
+          CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS "op_right_type?",
+          ext_ops.extname AS "op_extension_name?"
 
         FROM pg_rewrite r
         JOIN pg_depend d
@@ -346,6 +354,22 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             JOIN pg_extension e ON dep.refobjid = e.oid
             WHERE dep.deptype = 'e'
         ) ext_procs ON ext_procs.proc_oid = proc.oid
+
+        -- Operator reference
+        LEFT JOIN pg_operator op
+          ON d.refclassid = 'pg_operator'::regclass::oid
+         AND d.refobjid   = op.oid
+
+        LEFT JOIN pg_namespace op_n
+          ON op.oprnamespace = op_n.oid
+
+        -- Extension operator lookup
+        LEFT JOIN (
+            SELECT DISTINCT dep.objid AS op_oid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext_ops ON ext_ops.op_oid = op.oid
 
         WHERE r.ev_class = ANY($1)
         "#,
@@ -408,6 +432,30 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                         schema: ns.to_string(),
                         name: name.to_string(),
                         arguments: args.to_string(),
+                    });
+                }
+                continue;
+            }
+
+            // Custom operator used in the view body? (Built-in operators live in
+            // pg_catalog and are skipped; extension operators depend on the extension.)
+            if let (Some(name), Some(ns)) = (&d.op_name, &d.op_schema)
+                && !is_system_schema(ns)
+            {
+                if let Some(ext_name) = &d.op_extension_name {
+                    v.push(DbObjectId::Extension {
+                        name: ext_name.clone(),
+                    });
+                } else {
+                    let arguments = format!(
+                        "{}, {}",
+                        d.op_left_type.as_deref().unwrap_or("NONE"),
+                        d.op_right_type.as_deref().unwrap_or("NONE")
+                    );
+                    v.push(DbObjectId::Operator {
+                        schema: ns.to_string(),
+                        name: name.to_string(),
+                        arguments,
                     });
                 }
             }
