@@ -77,7 +77,6 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 
 - ✅ **Range types** - NUMRANGE, TSRANGE, DATERANGE, etc.
 - ❌ **Array type operations** - Advanced array manipulations
-- 📋 **Custom operators** - Under consideration
 
 ### Functions and Procedures
 
@@ -110,6 +109,27 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 - ❌ **OUT/INOUT/VARIADIC parameters** - Planned for future
 - ❌ **Function parameter default values** - Planned for future
 - ❌ **ALTER FUNCTION** - Changing existing function properties
+
+### Operators
+
+- ✅ **CREATE OPERATOR** - User-defined operators with FUNCTION and LEFTARG/RIGHTARG
+- ✅ **DROP OPERATOR** - Safe removal with dependency checking
+- ✅ **Optional clauses** - COMMUTATOR, NEGATOR, RESTRICT, JOIN, HASHES, MERGES
+- ✅ **Prefix operators** - Single-operand operators (NONE left operand)
+- ✅ **Operator comments** - SET/DROP COMMENT ON OPERATOR
+- ✅ **Dependency tracking** - Depend on the implementing function and operand types
+- ✅ **View ordering** - Views using a custom operator are ordered after it
+- ❌ **ALTER OPERATOR** - Structural changes use drop/recreate
+
+### Casts
+
+- ✅ **CREATE CAST** - WITH FUNCTION, WITH INOUT, and WITHOUT FUNCTION
+- ✅ **Cast context** - AS ASSIGNMENT and AS IMPLICIT (explicit by default)
+- ✅ **DROP CAST** - Safe removal with dependency checking
+- ✅ **Cast comments** - SET/DROP COMMENT ON CAST
+- ✅ **Dependency tracking** - Depend on source/target types and the implementing function
+- 🚧 **Casts inside views** - Function-based casts auto-order; WITH INOUT / WITHOUT FUNCTION need an explicit `-- require:`
+- ❌ **ALTER CAST** - No such statement in PostgreSQL; changes use drop/recreate
 
 ### Sequences
 
@@ -402,6 +422,7 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 - **Extension schema dependencies**: Extensions created in custom schemas may not order correctly (schema before extension)
 - **Extension CASCADE drops**: Dropping extensions with dependent objects requires manual CASCADE handling
 - **Complex circular dependencies**: Some circular dependency patterns may require manual resolution
+- **I/O and binary casts in views**: Casts created `WITH INOUT` or `WITHOUT FUNCTION` that are used inside a view or function body aren't auto-ordered (PostgreSQL records no dependency on them); add an explicit `-- require:` to the cast's file
 
 ### Performance Considerations
 

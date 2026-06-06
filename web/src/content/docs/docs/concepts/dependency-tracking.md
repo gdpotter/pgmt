@@ -84,6 +84,26 @@ pgmt automatically detects:
 - **Type usage**: Columns using custom types depend on those types
 - **Array types**: `priority[]` depends on `priority` type
 - **Foreign keys**: Tables with FKs depend on referenced tables
+- **Operators in views**: A view using a custom operator (`a === b`) is ordered after it
+- **Function-based casts in views**: A view using a `WITH FUNCTION` cast (`value::target`) is ordered after the cast
+
+### Casts Inside Views and Functions
+
+When a view or function body applies a **custom cast** (e.g. `value::target_type`),
+PostgreSQL records a dependency on the cast's *implementing function*, not on the
+`pg_cast` entry itself. pgmt uses that to order things correctly: anything depending
+on a cast's function is automatically ordered after the cast, so a view using a
+function-based cast is created after the cast it needs.
+
+This covers casts created `WITH FUNCTION` — the common case. It does **not** cover
+casts created `WITH INOUT` or `WITHOUT FUNCTION`, which have no function for
+PostgreSQL to record a dependency on. If a view or function uses one of those, add an
+explicit dependency on the file that defines the cast:
+
+```sql
+-- require: casts/celsius_to_text.sql
+CREATE VIEW app.readings AS SELECT temperature::text FROM app.samples;
+```
 
 ## Common Dependency Patterns
 

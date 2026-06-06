@@ -139,9 +139,85 @@ async fn test_skip_builtin_casts() {
     .await;
 }
 
-/// Characterization test for the documented v1 limitation: PostgreSQL records no
-/// `view -> cast` edge in pg_depend. A view that applies a function-based cast
-/// records a dependency on the cast's *function*, never on the pg_cast entry.
+const MONEY_TYPE: &str = "CREATE TYPE money_amount AS (cents bigint)";
+const MONEY_FN: &str = "CREATE FUNCTION money_to_bigint(money_amount) RETURNS bigint \
+                        AS $$ SELECT ($1).cents $$ LANGUAGE sql IMMUTABLE";
+const MONEY_CAST: &str =
+    "CREATE CAST (money_amount AS bigint) WITH FUNCTION money_to_bigint(money_amount)";
+
+/// Cast-function routing closes the view->cast ordering gap: a view that applies
+/// the cast records only the function in pg_depend, but `Catalog::load` inserts
+/// the cast as an intermediate (`view -> cast -> function`) in the dependency
+/// graph, so the cast is ordered before the view.
+#[tokio::test]
+async fn test_cast_function_routing_orders_cast_before_view() {
+    with_test_db(async |db| {
+        db.execute(MONEY_TYPE).await;
+        db.execute(MONEY_FN).await;
+        db.execute(MONEY_CAST).await;
+        db.execute("CREATE TABLE accounts (balance money_amount)").await;
+        db.execute("CREATE VIEW big_balances AS SELECT balance::bigint AS cents FROM accounts")
+            .await;
+
+        let catalog = pgmt::catalog::Catalog::load(db.pool()).await.unwrap();
+        let view_id = DbObjectId::View {
+            schema: "public".to_string(),
+            name: "big_balances".to_string(),
+        };
+        let cast_id = DbObjectId::Cast {
+            source: "money_amount".to_string(),
+            target: "bigint".to_string(),
+        };
+        let view_deps = catalog
+            .forward_deps
+            .get(&view_id)
+            .expect("view should be in the dependency graph");
+        assert!(
+            view_deps.contains(&cast_id),
+            "routing should make the view depend on the cast: {view_deps:?}"
+        );
+    })
+    .await;
+}
+
+/// Documents the over-connection cost of routing: pg_depend cannot distinguish a
+/// view that *uses* the cast from one that calls the cast's function *directly*,
+/// so both gain the synthetic dependency on the cast.
+#[tokio::test]
+async fn test_cast_function_routing_over_connects_direct_caller() {
+    with_test_db(async |db| {
+        db.execute(MONEY_TYPE).await;
+        db.execute(MONEY_FN).await;
+        db.execute(MONEY_CAST).await;
+        // This view calls the function directly; it never uses the cast.
+        db.execute("CREATE VIEW direct_caller AS SELECT money_to_bigint(NULL::money_amount) AS c")
+            .await;
+
+        let catalog = pgmt::catalog::Catalog::load(db.pool()).await.unwrap();
+        let view_id = DbObjectId::View {
+            schema: "public".to_string(),
+            name: "direct_caller".to_string(),
+        };
+        let cast_id = DbObjectId::Cast {
+            source: "money_amount".to_string(),
+            target: "bigint".to_string(),
+        };
+        let view_deps = catalog
+            .forward_deps
+            .get(&view_id)
+            .expect("view should be in the dependency graph");
+        assert!(
+            view_deps.contains(&cast_id),
+            "routing over-connects: a direct function caller also depends on the cast: {view_deps:?}"
+        );
+    })
+    .await;
+}
+
+/// Characterization test for the underlying pg_depend behavior: a view that
+/// applies a function-based cast records a dependency on the cast's *function*,
+/// never on the pg_cast entry. (The graph-level `view -> cast` edge is added
+/// separately by cast-function routing; see the routing tests above.)
 #[tokio::test]
 async fn test_view_using_cast_records_function_not_cast() {
     with_test_db(async |db| {

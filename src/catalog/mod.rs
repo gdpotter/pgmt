@@ -152,6 +152,12 @@ impl Catalog {
             reverse_deps: reverse,
         };
 
+        // Insert function-based casts as intermediates between their function and
+        // anything that depends on that function (closes the view->cast ordering
+        // gap that pg_depend can't express). Run before file augmentation so
+        // user-declared `-- require:` edges layer on top.
+        catalog.apply_cast_function_routing();
+
         if let Some(augmentation) = file_augmentation {
             catalog.apply_file_augmentation(augmentation);
         }
@@ -179,6 +185,11 @@ impl Catalog {
             }
         }
 
+        self.rebuild_reverse_deps();
+    }
+
+    /// Rebuild `reverse_deps` from the current `forward_deps`.
+    fn rebuild_reverse_deps(&mut self) {
         self.reverse_deps.clear();
         for (object_id, deps) in &self.forward_deps {
             for dep in deps {
@@ -188,6 +199,57 @@ impl Catalog {
                     .push(object_id.clone());
             }
         }
+    }
+
+    /// Route function-based casts so anything that depends on a cast's
+    /// implementing function also depends on the cast itself.
+    ///
+    /// PostgreSQL records no `view -> cast` edge in `pg_depend`: a query that
+    /// applies a function-based cast records a dependency on the cast's
+    /// *function*, not on the `pg_cast` entry (see `diff::casts` and the cast
+    /// catalog docs). But the cast must exist before such a view/function is
+    /// created, or `CREATE` fails to resolve the cast. Since we *do* know the
+    /// `consumer -> function` edge, we insert the cast as an intermediate:
+    /// `consumer -> cast -> function`.
+    ///
+    /// This over-connects: a consumer that calls the function *directly* (not via
+    /// the cast) also gains the edge. That is harmless for create-ordering (the
+    /// cast is simply created a little early) and only costs an extra
+    /// drop/recreate if the cast itself changes. We never attach a cast to
+    /// another cast (or to itself), which keeps the rule cycle-free in practice;
+    /// any pathological cycle (e.g. a cast's operand type whose CHECK calls the
+    /// cast's function) is still caught by the ordering cycle detector.
+    fn apply_cast_function_routing(&mut self) {
+        // Collect (consumer -> cast) edges first; we mutate forward_deps after.
+        let mut new_edges: Vec<(DbObjectId, DbObjectId)> = Vec::new();
+        for cast in &self.casts {
+            let cast_id = cast.id();
+            for dep in &cast.depends_on {
+                if !matches!(dep, DbObjectId::Function { .. }) {
+                    continue;
+                }
+                if let Some(consumers) = self.reverse_deps.get(dep) {
+                    for consumer in consumers {
+                        if consumer != &cast_id && !matches!(consumer, DbObjectId::Cast { .. }) {
+                            new_edges.push((consumer.clone(), cast_id.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        if new_edges.is_empty() {
+            return;
+        }
+
+        for (consumer, cast_id) in new_edges {
+            let deps = self.forward_deps.entry(consumer).or_default();
+            if !deps.contains(&cast_id) {
+                deps.push(cast_id);
+            }
+        }
+
+        self.rebuild_reverse_deps();
     }
 
     pub fn find_view(&self, schema: &str, name: &str) -> Option<&view::View> {
