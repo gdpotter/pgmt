@@ -44,7 +44,8 @@ async fn test_fetch_basic_operator() {
 #[tokio::test]
 async fn test_fetch_operator_dependencies() {
     with_test_db(async |db| {
-        db.execute("CREATE TYPE money_amount AS (cents bigint)").await;
+        db.execute("CREATE TYPE money_amount AS (cents bigint)")
+            .await;
         db.execute(
             "CREATE FUNCTION money_eq(money_amount, money_amount) RETURNS boolean \
              AS $$ SELECT ($1).cents = ($2).cents $$ LANGUAGE sql IMMUTABLE",
@@ -80,7 +81,9 @@ async fn test_fetch_operator_dependencies() {
         // Commutator/negator are NOT dependencies: they reference each other and
         // PostgreSQL resolves them via shell operators, so a hard edge would cycle.
         assert!(
-            !deps.iter().any(|d| matches!(d, DbObjectId::Operator { .. })),
+            !deps
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Operator { .. })),
             "operator must not depend on its commutator/negator: {deps:?}"
         );
     })
@@ -100,10 +103,7 @@ async fn test_fetch_operator_with_comment() {
 
         let operators = fetch(&mut *db.conn().await).await.unwrap();
         assert_eq!(operators.len(), 1);
-        assert_eq!(
-            operators[0].comment,
-            Some("custom equality".to_string())
-        );
+        assert_eq!(operators[0].comment, Some("custom equality".to_string()));
     })
     .await;
 }
@@ -139,7 +139,8 @@ async fn test_fetch_prefix_operator() {
 #[tokio::test]
 async fn test_fetch_operator_with_array_operand() {
     with_test_db(async |db| {
-        db.execute("CREATE TYPE color AS ENUM ('r', 'g', 'b')").await;
+        db.execute("CREATE TYPE color AS ENUM ('r', 'g', 'b')")
+            .await;
         db.execute(
             "CREATE FUNCTION color_arr_eq(color[], color[]) RETURNS boolean \
              AS $$ SELECT $1[1] = $2[1] $$ LANGUAGE sql IMMUTABLE",

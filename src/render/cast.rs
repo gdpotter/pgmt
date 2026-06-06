@@ -66,7 +66,11 @@ mod tests {
     fn test_render_create_cast() {
         let rendered = render_create_cast(&test_cast());
         assert!(rendered.sql.contains("CREATE CAST (celsius AS fahrenheit)"));
-        assert!(rendered.sql.contains("WITH FUNCTION public.c_to_f(celsius)"));
+        assert!(
+            rendered
+                .sql
+                .contains("WITH FUNCTION public.c_to_f(celsius)")
+        );
         assert!(rendered.sql.ends_with(';'));
         assert_eq!(rendered.safety, Safety::Safe);
     }

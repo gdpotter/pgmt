@@ -20,36 +20,31 @@ fn create_pos<F: Fn(&MigrationStep) -> bool>(steps: &[MigrationStep], pred: F) -
 async fn test_create_operator_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
     helper
-        .run_migration_test(
-            &[],
-            &[],
-            &[INT_EQ_FN, INT_EQ_OP],
-            |steps, final_catalog| {
-                let create = steps
-                    .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Operator(OperatorOperation::Create { operator })
-                                if operator.name == "==="
-                        )
-                    })
-                    .expect("should have an operator Create step");
+        .run_migration_test(&[], &[], &[INT_EQ_FN, INT_EQ_OP], |steps, final_catalog| {
+            let create = steps
+                .iter()
+                .find(|s| {
+                    matches!(
+                        s,
+                        MigrationStep::Operator(OperatorOperation::Create { operator })
+                            if operator.name == "==="
+                    )
+                })
+                .expect("should have an operator Create step");
 
-                match create {
-                    MigrationStep::Operator(OperatorOperation::Create { operator }) => {
-                        assert_eq!(operator.schema, "public");
-                        assert_eq!(operator.arguments, "integer, integer");
-                    }
-                    _ => unreachable!(),
+            match create {
+                MigrationStep::Operator(OperatorOperation::Create { operator }) => {
+                    assert_eq!(operator.schema, "public");
+                    assert_eq!(operator.arguments, "integer, integer");
                 }
+                _ => unreachable!(),
+            }
 
-                // Round-trip: the operator exists after applying the migration.
-                assert_eq!(final_catalog.operators.len(), 1);
-                assert_eq!(final_catalog.operators[0].name, "===");
-                Ok(())
-            },
-        )
+            // Round-trip: the operator exists after applying the migration.
+            assert_eq!(final_catalog.operators.len(), 1);
+            assert_eq!(final_catalog.operators[0].name, "===");
+            Ok(())
+        })
         .await?;
     Ok(())
 }
@@ -58,28 +53,23 @@ async fn test_create_operator_migration() -> Result<()> {
 async fn test_drop_operator_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
     helper
-        .run_migration_test(
-            &[],
-            &[INT_EQ_FN, INT_EQ_OP],
-            &[],
-            |steps, final_catalog| {
-                let drop = steps
-                    .iter()
-                    .find(|s| matches!(s, MigrationStep::Operator(OperatorOperation::Drop { .. })))
-                    .expect("should have an operator Drop step");
+        .run_migration_test(&[], &[INT_EQ_FN, INT_EQ_OP], &[], |steps, final_catalog| {
+            let drop = steps
+                .iter()
+                .find(|s| matches!(s, MigrationStep::Operator(OperatorOperation::Drop { .. })))
+                .expect("should have an operator Drop step");
 
-                match drop {
-                    MigrationStep::Operator(OperatorOperation::Drop { identifier }) => {
-                        assert_eq!(identifier.name, "===");
-                        assert_eq!(identifier.arguments, "integer, integer");
-                    }
-                    _ => unreachable!(),
+            match drop {
+                MigrationStep::Operator(OperatorOperation::Drop { identifier }) => {
+                    assert_eq!(identifier.name, "===");
+                    assert_eq!(identifier.arguments, "integer, integer");
                 }
+                _ => unreachable!(),
+            }
 
-                assert!(final_catalog.operators.is_empty());
-                Ok(())
-            },
-        )
+            assert!(final_catalog.operators.is_empty());
+            Ok(())
+        })
         .await?;
     Ok(())
 }
@@ -150,13 +140,14 @@ async fn test_operator_ordered_after_function_and_type() -> Result<()> {
                  FUNCTION = money_eq)",
             ],
             |steps, _final_catalog| {
-                let op_pos =
-                    create_pos(steps, |s| matches!(s, MigrationStep::Operator(_)));
-                let fn_pos =
-                    create_pos(steps, |s| matches!(s, MigrationStep::Function(_)));
+                let op_pos = create_pos(steps, |s| matches!(s, MigrationStep::Operator(_)));
+                let fn_pos = create_pos(steps, |s| matches!(s, MigrationStep::Function(_)));
                 let ty_pos = create_pos(steps, |s| matches!(s, MigrationStep::Type(_)));
 
-                assert!(fn_pos < op_pos, "function must be created before the operator");
+                assert!(
+                    fn_pos < op_pos,
+                    "function must be created before the operator"
+                );
                 assert!(ty_pos < op_pos, "type must be created before the operator");
                 Ok(())
             },
@@ -182,8 +173,7 @@ async fn test_view_using_custom_operator_ordered_after_it() -> Result<()> {
                 // The pg_depend win: the view records a dependency on the custom
                 // operator, so the operator is created first. (If it weren't, the
                 // round-trip apply of CREATE VIEW would fail.)
-                let op_pos =
-                    create_pos(steps, |s| matches!(s, MigrationStep::Operator(_)));
+                let op_pos = create_pos(steps, |s| matches!(s, MigrationStep::Operator(_)));
                 let view_pos = create_pos(steps, |s| matches!(s, MigrationStep::View(_)));
                 assert!(
                     op_pos < view_pos,

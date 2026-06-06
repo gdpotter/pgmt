@@ -221,11 +221,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Operator>> {
             depends_on.push(dep);
         }
 
-        if let (Some(schema), Some(name), Some(args)) = (
-            &row.restrict_schema,
-            &row.restrict_name,
-            &row.restrict_args,
-        ) && !is_system_schema(schema)
+        if let (Some(schema), Some(name), Some(args)) =
+            (&row.restrict_schema, &row.restrict_name, &row.restrict_args)
+            && !is_system_schema(schema)
         {
             depends_on.push(DbObjectId::Function {
                 schema: schema.clone(),

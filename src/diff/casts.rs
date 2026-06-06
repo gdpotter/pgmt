@@ -40,11 +40,10 @@ pub fn diff(old: Option<&Cast>, new: Option<&Cast>) -> Vec<MigrationStep> {
                     new_cast: Box::new(new_cast.clone()),
                 }));
             } else {
-                let comment_ops = comment_utils::handle_comment_diff(
-                    Some(old_cast),
-                    Some(new_cast),
-                    || AttrTarget::object(new_cast.id()),
-                );
+                let comment_ops =
+                    comment_utils::handle_comment_diff(Some(old_cast), Some(new_cast), || {
+                        AttrTarget::object(new_cast.id())
+                    });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Cast(CastOperation::Comment(comment_op)));
                 }

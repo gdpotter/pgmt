@@ -117,9 +117,9 @@ impl DbObjectId {
             | DbObjectId::Aggregate { schema, .. }
             | DbObjectId::Operator { schema, .. }
             | DbObjectId::Column { schema, .. } => Some(schema.as_str()),
-            DbObjectId::Grant { .. }
-            | DbObjectId::Extension { .. }
-            | DbObjectId::Cast { .. } => None,
+            DbObjectId::Grant { .. } | DbObjectId::Extension { .. } | DbObjectId::Cast { .. } => {
+                None
+            }
             DbObjectId::Comment { object_id } => object_id.schema(),
         }
     }

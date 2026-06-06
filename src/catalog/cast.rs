@@ -172,11 +172,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Cast>> {
             depends_on.push(dep);
         }
 
-        let function = match (
-            &row.function_schema,
-            &row.function_name,
-            &row.function_args,
-        ) {
+        let function = match (&row.function_schema, &row.function_name, &row.function_args) {
             (Some(schema), Some(name), Some(args)) => {
                 if !is_system_schema(schema) {
                     depends_on.push(DbObjectId::Function {
@@ -190,8 +186,13 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Cast>> {
             _ => None,
         };
 
-        let definition =
-            build_cast_definition(&row.source, &row.target, &row.method, &row.context, function);
+        let definition = build_cast_definition(
+            &row.source,
+            &row.target,
+            &row.method,
+            &row.context,
+            function,
+        );
 
         // De-duplicate dependencies while preserving order.
         let mut seen = std::collections::HashSet::new();
@@ -233,8 +234,8 @@ fn build_cast_definition(
 ) -> String {
     let method_clause = match method {
         "f" => {
-            let (schema, name, args) = function
-                .expect("function-method cast must carry its implementing function");
+            let (schema, name, args) =
+                function.expect("function-method cast must carry its implementing function");
             format!("WITH FUNCTION {}({})", qualify(schema, name), args)
         }
         "i" => "WITH INOUT".to_string(),
