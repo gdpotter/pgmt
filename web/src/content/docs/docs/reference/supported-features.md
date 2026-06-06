@@ -56,8 +56,6 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 - ✅ **ALTER TYPE ADD VALUE** - Add new enum values (append only)
 - ✅ **DROP TYPE** - Safe removal with dependency checking
 - ✅ **Type comments** - SET/DROP COMMENT ON TYPE
-- ❌ **ALTER TYPE RENAME VALUE** - PostgreSQL limitation, not supported
-- ❌ **ALTER TYPE DROP VALUE** - PostgreSQL limitation, not supported
 
 #### DOMAIN Types
 
@@ -112,24 +110,16 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 
 ### Operators
 
-- ✅ **CREATE OPERATOR** - User-defined operators with FUNCTION and LEFTARG/RIGHTARG
-- ✅ **DROP OPERATOR** - Safe removal with dependency checking
-- ✅ **Optional clauses** - COMMUTATOR, NEGATOR, RESTRICT, JOIN, HASHES, MERGES
-- ✅ **Prefix operators** - Single-operand operators (NONE left operand)
-- ✅ **Operator comments** - SET/DROP COMMENT ON OPERATOR
-- ✅ **Dependency tracking** - Depend on the implementing function and operand types
-- ✅ **View ordering** - Views using a custom operator are ordered after it
-- ❌ **ALTER OPERATOR** - Structural changes use drop/recreate
+- ✅ **CREATE / DROP OPERATOR** - Full clause support (COMMUTATOR, NEGATOR, RESTRICT, JOIN, HASHES, MERGES) and prefix operators
+- ✅ **Comments** - COMMENT ON OPERATOR
+- ✅ **Dependency-aware ordering** - Operators depend on their function and operand types; a view using a custom operator is ordered after it
 
 ### Casts
 
-- ✅ **CREATE CAST** - WITH FUNCTION, WITH INOUT, and WITHOUT FUNCTION
-- ✅ **Cast context** - AS ASSIGNMENT and AS IMPLICIT (explicit by default)
-- ✅ **DROP CAST** - Safe removal with dependency checking
-- ✅ **Cast comments** - SET/DROP COMMENT ON CAST
-- ✅ **Dependency tracking** - Depend on source/target types and the implementing function
-- 🚧 **Casts inside views** - Function-based casts auto-order; WITH INOUT / WITHOUT FUNCTION need an explicit `-- require:`
-- ❌ **ALTER CAST** - No such statement in PostgreSQL; changes use drop/recreate
+- ✅ **CREATE / DROP CAST** - WITH FUNCTION, WITH INOUT, and WITHOUT FUNCTION; AS ASSIGNMENT / AS IMPLICIT
+- ✅ **Comments** - COMMENT ON CAST
+- ✅ **Dependency-aware ordering** - Casts depend on their source/target types and implementing function
+- 🚧 **Used inside views** - Function-based casts are ordered automatically; WITH INOUT / WITHOUT FUNCTION casts need an explicit `-- require:`
 
 ### Sequences
 
