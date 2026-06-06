@@ -44,7 +44,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features native-tls,postgres --locked
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features native-tls,postgres --locked
 
       - name: Regenerate sqlx metadata
         run: cargo sqlx prepare --workspace --check
