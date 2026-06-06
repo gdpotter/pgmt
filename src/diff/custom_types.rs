@@ -1,6 +1,6 @@
 use crate::catalog::custom_type::{CustomType, TypeKind};
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{CommentOperation, MigrationStep, TypeOperation};
 
 /// Emit SET steps for all non-empty attribute comments on a (newly created or recreated) composite type.
@@ -302,8 +302,9 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     }
 
                     // No composite attribute structure changes — diff type and attribute comments
-                    let comment_ops =
-                        comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                    let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                        AttrTarget::object(n.id())
+                    });
                     let mut steps = Vec::new();
                     for comment_op in comment_ops {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
@@ -314,8 +315,9 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                 _ => {
                     // For other types, generally require a drop and recreate if changed
                     // Check for comment changes only
-                    let comment_ops =
-                        comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                    let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                        AttrTarget::object(n.id())
+                    });
                     let mut steps = Vec::new();
                     for comment_op in comment_ops {
                         steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));

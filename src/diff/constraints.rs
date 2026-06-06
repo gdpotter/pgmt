@@ -1,8 +1,8 @@
 //! Diff constraints between database states
 
 use crate::catalog::constraint::{Constraint, ConstraintType};
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{ConstraintIdentifier, ConstraintOperation, MigrationStep};
 
 /// Diff a single constraint
@@ -15,10 +15,9 @@ pub fn diff(old: Option<&Constraint>, new: Option<&Constraint>) -> Vec<Migration
             ))];
 
             // Add constraint comment if present
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &n.comment,
-                AttrTarget::object(n.id()),
-            ) {
+            if let Some(comment_op) =
+                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+            {
                 steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
                     comment_op,
                 )));

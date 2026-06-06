@@ -1,6 +1,6 @@
 use crate::catalog::sequence::Sequence;
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, SequenceOperation};
 
 /// Generate migration steps for sequence differences

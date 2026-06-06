@@ -143,7 +143,10 @@ async fn test_grant_column_privilege_migration() -> Result<()> {
                     matches!(&g.grantee, GranteeType::Role(n) if n == "test_read_only")
                         && g.target.column_name() == Some("ssn")
                 });
-                assert!(ssn_grant_exists, "ssn column grant should exist after migration");
+                assert!(
+                    ssn_grant_exists,
+                    "ssn column grant should exist after migration"
+                );
 
                 Ok(())
             },
@@ -178,7 +181,10 @@ async fn test_revoke_column_privilege_migration() -> Result<()> {
                     matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
                         && g.target.column_name() == Some("email")
                 });
-                assert!(!grant_exists, "column grant should be revoked after migration");
+                assert!(
+                    !grant_exists,
+                    "column grant should be revoked after migration"
+                );
 
                 Ok(())
             },

@@ -1,9 +1,9 @@
 //! Diff schemas: CREATE any new, DROP any missing
 
-use crate::catalog::schema::Schema;
-use crate::diff::comment_utils;
 use crate::catalog::id::DbObjectId;
+use crate::catalog::schema::Schema;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, SchemaOperation};
 
 /// PostgreSQL's default comment for the public schema
@@ -41,7 +41,9 @@ pub fn diff(old: Option<&Schema>, new: Option<&Schema>) -> Vec<MigrationStep> {
             // Add schema comment if present
             if let Some(comment_op) = comment_utils::handle_comment_creation(
                 &n.comment,
-                AttrTarget::object(DbObjectId::Schema { name: n.name.clone() }),
+                AttrTarget::object(DbObjectId::Schema {
+                    name: n.name.clone(),
+                }),
             ) {
                 steps.push(MigrationStep::Schema(SchemaOperation::Comment(comment_op)));
             }
@@ -81,7 +83,11 @@ pub fn diff(old: Option<&Schema>, new: Option<&Schema>) -> Vec<MigrationStep> {
                 let comment_ops = comment_utils::handle_comment_diff(
                     Some(&old_normalized),
                     Some(&new_normalized),
-                    || AttrTarget::object(DbObjectId::Schema { name: n.name.clone() }),
+                    || {
+                        AttrTarget::object(DbObjectId::Schema {
+                            name: n.name.clone(),
+                        })
+                    },
                 );
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Schema(SchemaOperation::Comment(comment_op)));

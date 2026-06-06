@@ -101,7 +101,12 @@ fn comment_reference(target: &AttrTarget) -> String {
             schema,
             name,
             arguments,
-        } => format!("{}.{}({})", quote_ident(schema), quote_ident(name), arguments),
+        } => format!(
+            "{}.{}({})",
+            quote_ident(schema),
+            quote_ident(name),
+            arguments
+        ),
         DbObjectId::Constraint {
             schema,
             table,

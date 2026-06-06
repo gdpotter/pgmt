@@ -1,6 +1,6 @@
 use crate::catalog::index::Index;
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{IndexOperation, MigrationStep};
 
 /// Compare two index states and generate migration steps

@@ -1,8 +1,8 @@
 //! Domain diff logic for schema migrations
 
 use crate::catalog::domain::Domain;
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{DomainOperation, MigrationStep};
 
 /// Build the CREATE DOMAIN definition string
@@ -44,10 +44,9 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
             })];
 
             // Add domain comment if present
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &n.comment,
-                AttrTarget::object(n.id()),
-            ) {
+            if let Some(comment_op) =
+                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+            {
                 steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
             }
 
@@ -80,10 +79,9 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
                 }));
 
                 // Add domain comment if present
-                if let Some(comment_op) = comment_utils::handle_comment_creation(
-                    &n.comment,
-                    AttrTarget::object(n.id()),
-                ) {
+                if let Some(comment_op) =
+                    comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+                {
                     steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
                 }
 

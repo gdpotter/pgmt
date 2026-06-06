@@ -405,7 +405,13 @@ mod tests {
     #[test]
     fn test_render_grant_on_column() {
         let grant = Grant {
-            target: AttrTarget::column(DbObjectId::Table { schema: "public".to_string(), name: "users".to_string() }, "email"),
+            target: AttrTarget::column(
+                DbObjectId::Table {
+                    schema: "public".to_string(),
+                    name: "users".to_string(),
+                },
+                "email",
+            ),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["SELECT".to_string(), "UPDATE".to_string()],
             with_grant_option: false,
@@ -424,7 +430,13 @@ mod tests {
     #[test]
     fn test_render_revoke_on_column() {
         let grant = Grant {
-            target: AttrTarget::column(DbObjectId::Table { schema: "public".to_string(), name: "users".to_string() }, "ssn"),
+            target: AttrTarget::column(
+                DbObjectId::Table {
+                    schema: "public".to_string(),
+                    name: "users".to_string(),
+                },
+                "ssn",
+            ),
             grantee: GranteeType::Role("app_user".to_string()),
             privileges: vec!["SELECT".to_string()],
             with_grant_option: false,

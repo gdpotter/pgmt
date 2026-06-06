@@ -439,7 +439,9 @@ fn order_steps_by_dependencies(
             // spans both — group them together by schema+name.
             let routine_name = match &step.id() {
                 DbObjectId::Function { schema, name, .. }
-                | DbObjectId::Procedure { schema, name, .. } => Some((schema.clone(), name.clone())),
+                | DbObjectId::Procedure { schema, name, .. } => {
+                    Some((schema.clone(), name.clone()))
+                }
                 _ => None,
             };
             if let Some(key) = routine_name {

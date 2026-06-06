@@ -1,6 +1,6 @@
 use crate::catalog::function::{Function, FunctionKind, FunctionParam};
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{FunctionOperation, MigrationStep};
 
 /// Check if two functions have the same signature
@@ -108,10 +108,9 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             })];
 
             // Add function comment if present
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &n.comment,
-                AttrTarget::object(n.id()),
-            ) {
+            if let Some(comment_op) =
+                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+            {
                 steps.push(MigrationStep::Function(FunctionOperation::Comment(
                     comment_op,
                 )));
@@ -179,8 +178,9 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 })];
 
                 // Handle comment changes for replaced functions
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                    AttrTarget::object(n.id())
+                });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Function(FunctionOperation::Comment(
                         comment_op,
@@ -190,8 +190,9 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 steps
             } else {
                 // No function definition/attributes changes, check for comment changes
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                    AttrTarget::object(n.id())
+                });
                 let mut steps = Vec::new();
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::Function(FunctionOperation::Comment(

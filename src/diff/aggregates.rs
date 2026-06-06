@@ -1,6 +1,6 @@
 use crate::catalog::aggregate::Aggregate;
-use crate::diff::comment_utils;
 use crate::catalog::target::AttrTarget;
+use crate::diff::comment_utils;
 use crate::diff::operations::{AggregateIdentifier, AggregateOperation, MigrationStep};
 
 /// Diff a single aggregate function

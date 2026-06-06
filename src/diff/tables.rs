@@ -1,5 +1,5 @@
-use crate::catalog::table::Table;
 use crate::catalog::id::DbObjectId;
+use crate::catalog::table::Table;
 use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{
     ColumnAction, CommentOperation, ConstraintOperation, MigrationStep, TableOperation,
@@ -44,7 +44,11 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
             {
                 steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
                     CommentOperation::Set {
-                        target: AttrTarget::object(DbObjectId::Constraint { schema: n.schema.clone(), table: n.name.clone(), name: pk.name.clone() }),
+                        target: AttrTarget::object(DbObjectId::Constraint {
+                            schema: n.schema.clone(),
+                            table: n.name.clone(),
+                            name: pk.name.clone(),
+                        }),
                         comment: comment.clone(),
                     },
                 )));
@@ -177,7 +181,11 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
                         && o_pk.comment != n_pk.comment =>
                 {
                     // Primary key structure is the same but comment changed
-                    let identifier = AttrTarget::object(DbObjectId::Constraint { schema: n.schema.clone(), table: n.name.clone(), name: n_pk.name.clone() });
+                    let identifier = AttrTarget::object(DbObjectId::Constraint {
+                        schema: n.schema.clone(),
+                        table: n.name.clone(),
+                        name: n_pk.name.clone(),
+                    });
 
                     match (&o_pk.comment, &n_pk.comment) {
                         (None, Some(comment)) => {

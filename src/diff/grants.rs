@@ -161,8 +161,7 @@ fn generate_revoke_for_new_explicit_acls(
         // Object either didn't exist or had default ACL before, now has explicit ACL
         // Generate REVOKEs for missing PUBLIC privileges
         let sample_grant = new_object_grants[0];
-        let expected_public_privileges =
-            get_default_public_privileges(&sample_grant.target.object);
+        let expected_public_privileges = get_default_public_privileges(&sample_grant.target.object);
 
         for privilege in expected_public_privileges {
             // Check if this default PUBLIC grant exists in new state

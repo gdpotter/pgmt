@@ -1,6 +1,6 @@
+use crate::catalog::target::AttrTarget;
 use crate::catalog::view::{View, ViewColumn};
 use crate::diff::comment_utils;
-use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{CommentOperation, MigrationStep, ViewOperation, ViewOption};
 
 /// Emit SET steps for all non-empty column comments on a (newly created or recreated) view.
@@ -72,10 +72,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
             })];
 
             // Add view comment if present
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &n.comment,
-                AttrTarget::object(n.id()),
-            ) {
+            if let Some(comment_op) =
+                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+            {
                 steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
             }
 
@@ -117,10 +116,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 ]);
 
                 // Add view comment if present after recreating
-                if let Some(comment_op) = comment_utils::handle_comment_creation(
-                    &n.comment,
-                    AttrTarget::object(n.id()),
-                ) {
+                if let Some(comment_op) =
+                    comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
+                {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
 
@@ -136,8 +134,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 }));
 
                 // Handle comment changes for replaced views
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                    AttrTarget::object(n.id())
+                });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
@@ -163,8 +162,9 @@ pub fn diff(old: Option<&View>, new: Option<&View>) -> Vec<MigrationStep> {
                 }
 
                 // Handle comment changes
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
+                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
+                    AttrTarget::object(n.id())
+                });
                 for comment_op in comment_ops {
                     steps.push(MigrationStep::View(ViewOperation::Comment(comment_op)));
                 }
