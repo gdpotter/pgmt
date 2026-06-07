@@ -10,6 +10,9 @@ pub mod table;
 
 // Re-export commonly used functions
 pub use constraint::{render_create_constraint, render_drop_constraint};
-pub use grant::{render_grant_statement, render_revoke_statement};
+pub use grant::{
+    render_column_grant_statement, render_column_revoke_statement, render_grant_statement,
+    render_revoke_statement,
+};
 pub use index::render_create_index;
 pub use table::render_create_table;

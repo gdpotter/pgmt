@@ -153,6 +153,8 @@ impl MigrationStep {
         match self {
             MigrationStep::Grant(GrantOperation::Grant { grant }) => grant.depends_on.clone(),
             MigrationStep::Grant(GrantOperation::Revoke { grant }) => grant.depends_on.clone(),
+            MigrationStep::Grant(GrantOperation::GrantColumns(cg)) => cg.depends_on.clone(),
+            MigrationStep::Grant(GrantOperation::RevokeColumns(cg)) => cg.depends_on.clone(),
             // Other operations use catalog.forward_deps exclusively
             _ => vec![],
         }

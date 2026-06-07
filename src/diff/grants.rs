@@ -2,7 +2,7 @@
 
 use crate::catalog::grant::{Grant, GranteeType, target_key};
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{GrantOperation, MigrationStep};
+use crate::diff::operations::{ColumnGrants, GrantOperation, MigrationStep};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Check if a grant is to the owner of the object (owner grants are implicit in PostgreSQL)
@@ -103,6 +103,145 @@ fn diff_privilege_change(old: &Grant, new: &Grant) -> Vec<MigrationStep> {
     }
 
     steps
+}
+
+/// Fold per-column GRANT/REVOKE steps on the same relation into a single
+/// statement each: many `GRANT INSERT (col) ON t` steps become one
+/// `GRANT INSERT (a, b, c) ON t`. Every other step passes through untouched.
+///
+/// This runs after cascade expansion (so it catches both the normal diff and
+/// cascade re-grants) and before ordering. Grouping key is
+/// `(GRANT vs REVOKE, grantee, relation, with_grant_option)`; within a group the
+/// privileges are collected per column. It is safe with respect to dependency
+/// ordering because every column grant on a relation shares the single
+/// dependency on that relation, so collapsing them cannot introduce a cycle —
+/// the merged op simply inherits that one dependency (see [`ColumnGrants`]).
+pub fn coalesce_column_grants(steps: Vec<MigrationStep>) -> Vec<MigrationStep> {
+    /// A position in the output: either a pass-through step or a placeholder for
+    /// the i-th folded group (filled in once all members are accumulated).
+    enum Slot {
+        Step(Box<MigrationStep>),
+        Group(usize),
+    }
+
+    struct Acc {
+        grantee: GranteeType,
+        relation: DbObjectId,
+        with_grant_option: bool,
+        is_grant: bool,
+        privilege_columns: BTreeMap<String, BTreeSet<String>>,
+        /// Lexicographically smallest constituent grant id, for stable ordering.
+        rep_id: String,
+    }
+
+    // Group identity. Grantee is split into (is_public, role-name) so a role
+    // literally named "public" never collides with PUBLIC.
+    type Key = (bool, bool, String, DbObjectId, bool);
+
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut group_index: BTreeMap<Key, usize> = BTreeMap::new();
+    let mut accs: Vec<Acc> = Vec::new();
+
+    for step in steps {
+        // Only per-column GRANT/REVOKE steps participate; everything else
+        // (including whole-relation and non-column grants) passes through.
+        let column_grant = match &step {
+            MigrationStep::Grant(GrantOperation::Grant { grant })
+                if grant.target.column_name().is_some() =>
+            {
+                Some((true, grant))
+            }
+            MigrationStep::Grant(GrantOperation::Revoke { grant })
+                if grant.target.column_name().is_some() =>
+            {
+                Some((false, grant))
+            }
+            _ => None,
+        };
+
+        let Some((is_grant, grant)) = column_grant else {
+            slots.push(Slot::Step(Box::new(step)));
+            continue;
+        };
+
+        let (is_public, role_name) = match &grant.grantee {
+            GranteeType::Public => (true, String::new()),
+            GranteeType::Role(name) => (false, name.clone()),
+        };
+        let relation = grant.target.object.clone();
+        let column = grant
+            .target
+            .column_name()
+            .expect("filtered to column grants above")
+            .to_string();
+        let id = grant.id();
+
+        let key: Key = (
+            is_grant,
+            is_public,
+            role_name,
+            relation.clone(),
+            grant.with_grant_option,
+        );
+
+        let idx = if let Some(&i) = group_index.get(&key) {
+            i
+        } else {
+            let i = accs.len();
+            accs.push(Acc {
+                grantee: grant.grantee.clone(),
+                relation,
+                with_grant_option: grant.with_grant_option,
+                is_grant,
+                privilege_columns: BTreeMap::new(),
+                rep_id: id.clone(),
+            });
+            slots.push(Slot::Group(i));
+            group_index.insert(key, i);
+            i
+        };
+
+        let acc = &mut accs[idx];
+        for privilege in &grant.privileges {
+            acc.privilege_columns
+                .entry(privilege.clone())
+                .or_default()
+                .insert(column.clone());
+        }
+        if id < acc.rep_id {
+            acc.rep_id = id;
+        }
+    }
+
+    // Build one folded op per group.
+    let mut group_ops: Vec<Option<MigrationStep>> = accs
+        .into_iter()
+        .map(|acc| {
+            let cg = ColumnGrants {
+                grantee: acc.grantee,
+                relation: acc.relation.clone(),
+                with_grant_option: acc.with_grant_option,
+                privilege_columns: acc.privilege_columns,
+                depends_on: vec![acc.relation],
+                rep_id: acc.rep_id,
+            };
+            Some(MigrationStep::Grant(if acc.is_grant {
+                GrantOperation::GrantColumns(cg)
+            } else {
+                GrantOperation::RevokeColumns(cg)
+            }))
+        })
+        .collect();
+
+    slots
+        .into_iter()
+        .map(|slot| match slot {
+            Slot::Step(step) => *step,
+            Slot::Group(i) => group_ops[i]
+                .take()
+                .expect("each group placeholder is emitted exactly once"),
+        })
+        .collect()
 }
 
 /// Compare grants by building maps by grant ID for efficient comparison.

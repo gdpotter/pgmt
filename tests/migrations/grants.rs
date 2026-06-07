@@ -118,11 +118,15 @@ async fn test_grant_column_privilege_migration() -> Result<()> {
             |steps, final_catalog| {
                 use pgmt::catalog::grant::GranteeType;
 
+                // Column grants are folded into one GrantColumns op per relation;
+                // email's SELECT and UPDATE land in the same op.
                 let has_column_grant_step = steps.iter().any(|s| {
-                    matches!(s, MigrationStep::Grant(GrantOperation::Grant { grant })
-                        if grant.target.column_name() == Some("email"))
+                    matches!(s, MigrationStep::Grant(GrantOperation::GrantColumns(cg))
+                        if matches!(&cg.grantee, GranteeType::Role(n) if n == "test_app_user")
+                            && cg.privilege_columns.get("SELECT").is_some_and(|cols| cols.contains("email"))
+                            && cg.privilege_columns.get("UPDATE").is_some_and(|cols| cols.contains("email")))
                 });
-                assert!(has_column_grant_step, "Should have a column GRANT step");
+                assert!(has_column_grant_step, "Should have a folded column GRANT step");
 
                 // Round-trip: the migration was applied to a fresh DB, so the
                 // re-fetched catalog must reflect the column grant.
@@ -172,10 +176,10 @@ async fn test_revoke_column_privilege_migration() -> Result<()> {
                 use pgmt::catalog::grant::GranteeType;
 
                 let has_revoke_step = steps.iter().any(|s| {
-                    matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
-                        if grant.target.column_name() == Some("email"))
+                    matches!(s, MigrationStep::Grant(GrantOperation::RevokeColumns(cg))
+                        if cg.privilege_columns.get("SELECT").is_some_and(|cols| cols.contains("email")))
                 });
-                assert!(has_revoke_step, "Should have a column REVOKE step");
+                assert!(has_revoke_step, "Should have a folded column REVOKE step");
 
                 let grant_exists = final_catalog.grants.iter().any(|g| {
                     matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
@@ -720,6 +724,176 @@ async fn test_no_spurious_revoke_when_both_have_explicit_acl() -> Result<()> {
                     "Expected no grant steps when both catalogs have same explicit ACL, got {:?}",
                     grant_steps
                 );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Column grants on the same relation fold into a single statement: many
+/// `GRANT INSERT (col) ON t` become one `GRANT INSERT (a, b, c) ON t`, with
+/// per-column privilege sets preserved. This is the headline win behind phase 2.
+#[tokio::test]
+async fn test_column_grants_folded_into_single_statement() -> Result<()> {
+    use pgmt::catalog::grant::GranteeType;
+
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE t (id SERIAL, a TEXT, b TEXT, c TEXT)"],
+            &[],
+            // a, b: INSERT+UPDATE; c: INSERT only — three column grants on one table.
+            &[
+                "GRANT INSERT (a), UPDATE (a) ON t TO test_app_user",
+                "GRANT INSERT (b), UPDATE (b) ON t TO test_app_user",
+                "GRANT INSERT (c) ON t TO test_app_user",
+            ],
+            |steps, final_catalog| {
+                // Exactly one folded column-grant op for this grantee/relation.
+                let folded: Vec<_> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Grant(GrantOperation::GrantColumns(cg))
+                            if matches!(&cg.grantee, GranteeType::Role(n) if n == "test_app_user") =>
+                        {
+                            Some(cg)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    folded.len(),
+                    1,
+                    "all column grants on one relation should fold into a single op, got {}",
+                    folded.len()
+                );
+
+                let cg = folded[0];
+                // INSERT covers a, b, c; UPDATE covers a, b.
+                let insert: Vec<&String> = cg.privilege_columns["INSERT"].iter().collect();
+                let update: Vec<&String> = cg.privilege_columns["UPDATE"].iter().collect();
+                assert_eq!(insert, vec!["a", "b", "c"]);
+                assert_eq!(update, vec!["a", "b"]);
+
+                // It renders as a single GRANT statement listing the columns.
+                let sql = &MigrationStep::Grant(GrantOperation::GrantColumns(cg.clone())).to_sql()[0].sql;
+                assert!(sql.starts_with("GRANT "), "got: {sql}");
+                assert_eq!(sql.matches("GRANT").count(), 1, "should be one statement: {sql}");
+                assert!(sql.contains(r#"INSERT ("a", "b", "c")"#), "got: {sql}");
+                assert!(sql.contains(r#"UPDATE ("a", "b")"#), "got: {sql}");
+
+                // Round-trip: every column grant exists after applying.
+                for (col, has_update) in [("a", true), ("b", true), ("c", false)] {
+                    let g = final_catalog
+                        .grants
+                        .iter()
+                        .find(|g| matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                            && g.target.column_name() == Some(col))
+                        .unwrap_or_else(|| panic!("column grant on {col} should exist"));
+                    assert!(g.privileges.contains(&"INSERT".to_string()));
+                    assert_eq!(g.privileges.contains(&"UPDATE".to_string()), has_update);
+                }
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// REVOKEs of column grants fold the same way GRANTs do.
+#[tokio::test]
+async fn test_column_revokes_folded_into_single_statement() -> Result<()> {
+    use pgmt::catalog::grant::GranteeType;
+
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE t (id SERIAL, a TEXT, b TEXT)"],
+            // Initial DB has two column grants; target has none.
+            &[
+                "GRANT SELECT (a) ON t TO test_app_user",
+                "GRANT SELECT (b) ON t TO test_app_user",
+            ],
+            &[],
+            |steps, final_catalog| {
+                let folded: Vec<_> = steps
+                    .iter()
+                    .filter_map(|s| match s {
+                        MigrationStep::Grant(GrantOperation::RevokeColumns(cg))
+                            if matches!(&cg.grantee, GranteeType::Role(n) if n == "test_app_user") =>
+                        {
+                            Some(cg)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(folded.len(), 1, "column revokes should fold into one op");
+
+                let cols: Vec<&String> = folded[0].privilege_columns["SELECT"].iter().collect();
+                assert_eq!(cols, vec!["a", "b"]);
+
+                let sql = &MigrationStep::Grant(GrantOperation::RevokeColumns(folded[0].clone()))
+                    .to_sql()[0]
+                    .sql;
+                assert!(sql.starts_with("REVOKE "), "got: {sql}");
+                assert!(sql.contains(r#"SELECT ("a", "b")"#), "got: {sql}");
+
+                // Round-trip: no column grants remain for this grantee.
+                let any_left = final_catalog.grants.iter().any(|g| {
+                    matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+                        && g.target.column_name().is_some()
+                });
+                assert!(!any_left, "column grants should be revoked");
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A folded column REVOKE must be ordered before the DROP of the table it sits
+/// on. This exercises the `rep_id` ordering hook: the merged op borrows a
+/// constituent grant's identity so the dependency edge to the relation resolves
+/// in the drop direction (revoke -> relation), just like an unfolded revoke.
+#[tokio::test]
+async fn test_folded_column_revoke_ordered_before_table_drop() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Initial DB has the table with column grants; target drops the table.
+            &[],
+            &[
+                "CREATE TABLE doomed (id SERIAL, a TEXT, b TEXT)",
+                "GRANT SELECT (a) ON doomed TO test_app_user",
+                "GRANT SELECT (b) ON doomed TO test_app_user",
+            ],
+            &[],
+            |steps, _final_catalog| {
+                use pgmt::diff::operations::TableOperation;
+
+                let revoke_pos = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Grant(GrantOperation::RevokeColumns(_)))
+                });
+                let drop_pos = steps.iter().position(|s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Drop { name, .. }) if name == "doomed")
+                });
+
+                let revoke_pos = revoke_pos.expect("expected a folded column REVOKE step");
+                let drop_pos = drop_pos.expect("expected a DROP TABLE step");
+                assert!(
+                    revoke_pos < drop_pos,
+                    "REVOKE (pos {revoke_pos}) must come before DROP TABLE (pos {drop_pos})"
+                );
+
                 Ok(())
             },
         )

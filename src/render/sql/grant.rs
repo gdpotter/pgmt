@@ -5,7 +5,17 @@
 
 use crate::catalog::grant::{Grant, GranteeType};
 use crate::catalog::id::DbObjectId;
+use crate::diff::operations::ColumnGrants;
 use crate::render::quote_ident;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Render a grantee for the `TO`/`FROM` clause: a quoted role name, or `PUBLIC`.
+fn render_grantee(grantee: &GranteeType) -> String {
+    match grantee {
+        GranteeType::Role(name) => quote_ident(name),
+        GranteeType::Public => "PUBLIC".to_string(),
+    }
+}
 
 /// Render a complete GRANT statement for the given grant.
 ///
@@ -16,11 +26,6 @@ use crate::render::quote_ident;
 /// - WITH GRANT OPTION clause
 /// - Proper SQL formatting and identifier quoting
 pub fn render_grant_statement(grant: &Grant) -> String {
-    let grantee = match &grant.grantee {
-        GranteeType::Role(name) => quote_ident(name),
-        GranteeType::Public => "PUBLIC".to_string(),
-    };
-
     let grant_option = if grant.with_grant_option {
         " WITH GRANT OPTION"
     } else {
@@ -31,23 +36,69 @@ pub fn render_grant_statement(grant: &Grant) -> String {
 
     format!(
         "GRANT {} ON {} TO {}{};",
-        privileges, object_clause, grantee, grant_option
+        privileges,
+        object_clause,
+        render_grantee(&grant.grantee),
+        grant_option
     )
 }
 
 /// Render a complete REVOKE statement for the given grant.
 pub fn render_revoke_statement(grant: &Grant) -> String {
-    let grantee = match &grant.grantee {
-        GranteeType::Role(name) => quote_ident(name),
-        GranteeType::Public => "PUBLIC".to_string(),
-    };
-
     let (privileges, object_clause) = render_privileges_and_object(grant);
 
     format!(
         "REVOKE {} ON {} FROM {};",
-        privileges, object_clause, grantee
+        privileges,
+        object_clause,
+        render_grantee(&grant.grantee)
     )
+}
+
+/// Render a folded column GRANT covering many columns of one relation in a
+/// single statement: `GRANT SELECT (a, b), UPDATE (a) ON "s"."t" TO role [WITH GRANT OPTION];`
+pub fn render_column_grant_statement(cg: &ColumnGrants) -> String {
+    let grant_option = if cg.with_grant_option {
+        " WITH GRANT OPTION"
+    } else {
+        ""
+    };
+
+    format!(
+        "GRANT {} ON {} TO {}{};",
+        render_column_privilege_list(&cg.privilege_columns),
+        render_grant_object_clause(&cg.relation),
+        render_grantee(&cg.grantee),
+        grant_option
+    )
+}
+
+/// Render the REVOKE counterpart of [`render_column_grant_statement`].
+pub fn render_column_revoke_statement(cg: &ColumnGrants) -> String {
+    format!(
+        "REVOKE {} ON {} FROM {};",
+        render_column_privilege_list(&cg.privilege_columns),
+        render_grant_object_clause(&cg.relation),
+        render_grantee(&cg.grantee)
+    )
+}
+
+/// Render a `privilege (columns)` list like `SELECT (a, b), UPDATE (a)`.
+/// Privileges and columns come out sorted (driven by `BTreeMap`/`BTreeSet`),
+/// so the same grant set always renders identically.
+fn render_column_privilege_list(privilege_columns: &BTreeMap<String, BTreeSet<String>>) -> String {
+    privilege_columns
+        .iter()
+        .map(|(privilege, columns)| {
+            let cols = columns
+                .iter()
+                .map(|c| quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} ({})", privilege, cols)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render the privilege list and object clause for a grant. Column grants attach
@@ -473,6 +524,57 @@ mod tests {
         assert_eq!(
             sql,
             "GRANT USAGE ON TYPE \"public\".\"status_enum\" TO \"app_user\";"
+        );
+    }
+
+    fn column_grants_fixture(with_grant_option: bool) -> ColumnGrants {
+        let mut privilege_columns: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        privilege_columns.insert(
+            "INSERT".to_string(),
+            ["a", "b", "c"].iter().map(|s| s.to_string()).collect(),
+        );
+        privilege_columns.insert(
+            "UPDATE".to_string(),
+            ["a", "b"].iter().map(|s| s.to_string()).collect(),
+        );
+        ColumnGrants {
+            grantee: GranteeType::Role("app_user".to_string()),
+            relation: DbObjectId::Table {
+                schema: "public".to_string(),
+                name: "t".to_string(),
+            },
+            with_grant_option,
+            privilege_columns,
+            depends_on: vec![],
+            rep_id: "app_user@column:public.t.a".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_render_folded_column_grant() {
+        // Privileges and columns are sorted; one statement covers every column.
+        let sql = render_column_grant_statement(&column_grants_fixture(false));
+        assert_eq!(
+            sql,
+            "GRANT INSERT (\"a\", \"b\", \"c\"), UPDATE (\"a\", \"b\") ON \"public\".\"t\" TO \"app_user\";"
+        );
+    }
+
+    #[test]
+    fn test_render_folded_column_grant_with_grant_option() {
+        let sql = render_column_grant_statement(&column_grants_fixture(true));
+        assert!(
+            sql.ends_with("TO \"app_user\" WITH GRANT OPTION;"),
+            "got: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_render_folded_column_revoke() {
+        let sql = render_column_revoke_statement(&column_grants_fixture(false));
+        assert_eq!(
+            sql,
+            "REVOKE INSERT (\"a\", \"b\", \"c\"), UPDATE (\"a\", \"b\") ON \"public\".\"t\" FROM \"app_user\";"
         );
     }
 }

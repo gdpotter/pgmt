@@ -185,6 +185,12 @@ pub fn diff_order(
     new_catalog: &Catalog,
 ) -> anyhow::Result<Vec<MigrationStep>> {
     info!("Ordering migration steps...");
+
+    // Fold per-column grants on the same relation into single statements before
+    // ordering. Runs here (after diff + cascade expansion) so it sees every
+    // producer of column-grant steps; see `grants::coalesce_column_grants`.
+    let steps = grants::coalesce_column_grants(steps);
+
     let mut primary_steps = Vec::new();
     let mut relationship_steps = Vec::new();
 

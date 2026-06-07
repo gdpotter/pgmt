@@ -17,6 +17,16 @@ impl SqlRenderer for GrantOperation {
                     crate::render::sql::render_revoke_statement(grant),
                 )]
             }
+            GrantOperation::GrantColumns(cg) => {
+                vec![RenderedSql::new(
+                    crate::render::sql::render_column_grant_statement(cg),
+                )]
+            }
+            GrantOperation::RevokeColumns(cg) => {
+                vec![RenderedSql::new(
+                    crate::render::sql::render_column_revoke_statement(cg),
+                )]
+            }
         }
     }
 
@@ -24,6 +34,12 @@ impl SqlRenderer for GrantOperation {
         match self {
             GrantOperation::Grant { grant } => DbObjectId::Grant { id: grant.id() },
             GrantOperation::Revoke { grant } => DbObjectId::Grant { id: grant.id() },
+            GrantOperation::GrantColumns(cg) => DbObjectId::Grant {
+                id: cg.rep_id.clone(),
+            },
+            GrantOperation::RevokeColumns(cg) => DbObjectId::Grant {
+                id: cg.rep_id.clone(),
+            },
         }
     }
 }

@@ -717,6 +717,12 @@ impl SchemaGenerator {
         let target = match op {
             GrantOperation::Grant { grant } => &grant.target,
             GrantOperation::Revoke { grant } => &grant.target,
+            // Folded column grants are written alongside their parent relation,
+            // matching the per-column routing below.
+            GrantOperation::GrantColumns(cg) | GrantOperation::RevokeColumns(cg) => {
+                let (schema, name) = cg.relation_schema_and_name();
+                return GrantTarget::Table { schema, name };
+            }
         };
 
         // Column grants are written alongside their parent relation.
