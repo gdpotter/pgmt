@@ -154,6 +154,14 @@ async fn fetch_all_indexes(conn: &mut PgConnection) -> Result<Vec<IndexRow>> {
               WHERE dep.objid = i.oid
               AND dep.deptype = 'e'
           )
+          -- Exclude indexes on extension-owned tables (e.g. postgis's tiger
+          -- schema). Indexes created by an extension script get no pg_depend
+          -- 'e' entry of their own; membership is recorded on the parent table.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend dep
+              WHERE dep.objid = t.oid
+              AND dep.deptype = 'e'
+          )
         ORDER BY n.nspname, i.relname
         "#
     )

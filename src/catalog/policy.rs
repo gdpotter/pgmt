@@ -374,6 +374,13 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Policy>> {
         JOIN pg_namespace n ON c.relnamespace = n.oid
         LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          -- Exclude policies on extension-owned tables. Policies never get
+          -- their own pg_depend 'e' entry; membership is recorded on the parent.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend dep
+              WHERE dep.objid = c.oid
+              AND dep.deptype = 'e'
+          )
         ORDER BY n.nspname, c.relname, p.polname
         "#
     )

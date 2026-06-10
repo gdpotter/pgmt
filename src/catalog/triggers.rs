@@ -72,6 +72,13 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Trigger>> {
         WHERE tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND NOT t.tgisinternal  -- Exclude system-generated triggers
           AND c.relkind IN ('r', 'v', 'm')  -- Regular tables, views, materialized views
+          -- Exclude triggers on extension-owned relations. Triggers never get
+          -- their own pg_depend 'e' entry; membership is recorded on the parent.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend dep
+              WHERE dep.objid = c.oid
+              AND dep.deptype = 'e'
+          )
 
         ORDER BY tn.nspname, c.relname, t.tgname
         "#

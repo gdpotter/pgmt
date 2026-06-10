@@ -1,6 +1,6 @@
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;
-use pgmt::catalog::{custom_type, function, grant, index, sequence, table, view};
+use pgmt::catalog::{constraint, custom_type, function, grant, index, policy, sequence, table, triggers, view};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {
@@ -177,6 +177,97 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
             grants_before.len(),
             grants_after.len(),
             "Extension grants should be filtered from grant catalog"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Sub-objects of extension-owned tables (constraints, indexes, triggers,
+/// policies) never get their own pg_depend 'e' entry — extension membership is
+/// recorded only on the parent table. The fetchers must exclude them via the
+/// parent, or a PostGIS database leaks orphan steps like
+/// `ALTER TABLE spatial_ref_sys ADD CONSTRAINT ...` with no CREATE TABLE.
+///
+/// `ALTER EXTENSION ... ADD TABLE` reproduces the postgis spatial_ref_sys /
+/// tiger-schema shape without needing the postgis binaries in the test image.
+#[tokio::test]
+async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+            .await;
+
+        // A table with one of each sub-object type, then handed to the extension.
+        db.execute(
+            r#"
+            CREATE TABLE ext_owned (
+                id integer NOT NULL,
+                name text,
+                CONSTRAINT ext_owned_id_check CHECK (id > 0)
+            )
+        "#,
+        )
+        .await;
+        db.execute("CREATE INDEX ext_owned_name_idx ON ext_owned (name)")
+            .await;
+        db.execute(
+            r#"
+            CREATE FUNCTION ext_owned_noop() RETURNS trigger AS $$
+            BEGIN RETURN NEW; END;
+            $$ LANGUAGE plpgsql
+        "#,
+        )
+        .await;
+        db.execute(
+            r#"
+            CREATE TRIGGER ext_owned_trigger
+            BEFORE INSERT ON ext_owned
+            FOR EACH ROW EXECUTE FUNCTION ext_owned_noop()
+        "#,
+        )
+        .await;
+        db.execute("ALTER TABLE ext_owned ENABLE ROW LEVEL SECURITY")
+            .await;
+        db.execute("CREATE POLICY ext_owned_policy ON ext_owned USING (true)")
+            .await;
+
+        db.execute("ALTER EXTENSION \"uuid-ossp\" ADD TABLE ext_owned")
+            .await;
+
+        let tables = table::fetch(&mut *db.conn().await).await?;
+        assert!(
+            !tables.iter().any(|t| t.name == "ext_owned"),
+            "Extension-owned table should be filtered from table catalog"
+        );
+
+        let constraints = constraint::fetch(&mut *db.conn().await).await?;
+        assert!(
+            !constraints.iter().any(|c| c.table_name == "ext_owned"),
+            "Constraints on extension-owned tables should be filtered, found: {:?}",
+            constraints
+                .iter()
+                .filter(|c| c.table_name == "ext_owned")
+                .map(|c| &c.name)
+                .collect::<Vec<_>>()
+        );
+
+        let indexes = index::fetch(&mut *db.conn().await).await?;
+        assert!(
+            !indexes.iter().any(|i| i.name == "ext_owned_name_idx"),
+            "Indexes on extension-owned tables should be filtered"
+        );
+
+        let trigger_list = triggers::fetch(&mut *db.conn().await).await?;
+        assert!(
+            !trigger_list.iter().any(|t| t.name == "ext_owned_trigger"),
+            "Triggers on extension-owned tables should be filtered"
+        );
+
+        let policies = policy::fetch(&mut *db.conn().await).await?;
+        assert!(
+            !policies.iter().any(|p| p.name == "ext_owned_policy"),
+            "Policies on extension-owned tables should be filtered"
         );
 
         Ok(())

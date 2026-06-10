@@ -224,6 +224,14 @@ async fn fetch_all_constraints(conn: &mut PgConnection) -> Result<Vec<Constraint
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND cl.relkind = 'r'  -- Only regular tables
           AND c.contype IN ('u', 'f', 'c', 'x')  -- Unique, Foreign, Check, Exclusion (Primary keys handled by table catalog)
+          -- Exclude constraints on extension-owned tables (e.g. postgis's
+          -- spatial_ref_sys). Constraints never get their own pg_depend 'e'
+          -- entry; extension membership is recorded on the parent table.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend dep
+              WHERE dep.objid = cl.oid
+              AND dep.deptype = 'e'
+          )
         ORDER BY n.nspname, cl.relname, c.conname
         "#
     )
