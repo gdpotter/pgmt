@@ -436,3 +436,64 @@ async fn test_unique_index_with_fk_reference_not_excluded() {
     })
     .await;
 }
+
+/// Indexes using extension-owned operator classes (e.g. pg_trgm's
+/// gin_trgm_ops) or extension-owned functions in expressions (e.g.
+/// fuzzystrmatch's soundex) must depend on the extension itself — the
+/// owned objects are filtered from the catalog, so without the extension
+/// dependency the index is emitted before CREATE EXTENSION and fails with
+/// errors like `operator class "gin_trgm_ops" does not exist`.
+#[tokio::test]
+async fn test_index_extension_opclass_dependency() {
+    with_test_db(async |db| {
+        db.execute("CREATE EXTENSION pg_trgm").await;
+        db.execute("CREATE TABLE film (title text NOT NULL)").await;
+        db.execute("CREATE INDEX idx_film_title_trgm ON film USING gin (title gin_trgm_ops)")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_film_title_trgm")
+            .expect("trigram index should be in catalog");
+        assert!(
+            idx.depends_on().contains(&pgmt::catalog::id::DbObjectId::Extension {
+                name: "pg_trgm".to_string()
+            }),
+            "Index using gin_trgm_ops should depend on pg_trgm, got: {:?}",
+            idx.depends_on()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_index_extension_function_dependency() {
+    with_test_db(async |db| {
+        db.execute("CREATE EXTENSION fuzzystrmatch").await;
+        db.execute("CREATE TABLE people (last_name text NOT NULL)")
+            .await;
+        db.execute("CREATE INDEX idx_people_soundex ON people (soundex(last_name))")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_people_soundex")
+            .expect("soundex expression index should be in catalog");
+        assert!(
+            idx.depends_on().contains(&pgmt::catalog::id::DbObjectId::Extension {
+                name: "fuzzystrmatch".to_string()
+            }),
+            "Expression index using soundex() should depend on fuzzystrmatch, got: {:?}",
+            idx.depends_on()
+        );
+    })
+    .await;
+}

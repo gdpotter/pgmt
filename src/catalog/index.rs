@@ -305,7 +305,11 @@ async fn fetch_index_storage_parameters(
 async fn fetch_index_dependencies(
     conn: &mut PgConnection,
 ) -> Result<std::collections::BTreeMap<(String, String), Vec<DbObjectId>>> {
-    // Fetch dependencies on custom types and functions used in index expressions
+    // Fetch dependencies on custom types, functions, and operator classes used
+    // by the index. Referents owned by an extension (pg_trgm's gin_trgm_ops,
+    // fuzzystrmatch's soundex(), citext, …) are resolved to the extension
+    // itself: the object is filtered from the catalog, so the index must
+    // depend on the extension that creates it.
     let deps = sqlx::query!(
         r#"
         SELECT DISTINCT
@@ -314,15 +318,18 @@ async fn fetch_index_dependencies(
             CASE d.refclassid::regclass::text
                 WHEN 'pg_type' THEN 'type'
                 WHEN 'pg_proc' THEN 'function'
+                WHEN 'pg_opclass' THEN 'opclass'
                 ELSE 'unknown'
             END AS "dep_type!",
             dn.nspname AS "dep_schema!",
             CASE d.refclassid::regclass::text
                 WHEN 'pg_type' THEN t.typname
                 WHEN 'pg_proc' THEN p.proname
+                WHEN 'pg_opclass' THEN op.opcname
                 ELSE 'unknown'
             END AS "dep_name!",
-            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "dep_args?"
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "dep_args?",
+            ext.extname AS "extension_name?"
         FROM pg_depend d
         JOIN pg_class i ON d.objid = i.oid
         JOIN pg_namespace n ON i.relnamespace = n.oid
@@ -331,10 +338,22 @@ async fn fetch_index_dependencies(
         LEFT JOIN pg_namespace tn ON t.typnamespace = tn.oid
         LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid
         LEFT JOIN pg_namespace pn ON p.pronamespace = pn.oid
-        LEFT JOIN pg_namespace dn ON COALESCE(tn.oid, pn.oid) = dn.oid
+        LEFT JOIN pg_opclass op ON d.refclassid = 'pg_opclass'::regclass AND d.refobjid = op.oid
+        LEFT JOIN pg_namespace opn ON op.opcnamespace = opn.oid
+        LEFT JOIN pg_namespace dn ON COALESCE(tn.oid, pn.oid, opn.oid) = dn.oid
+        -- The referenced object's owning extension, if any
+        LEFT JOIN (
+            SELECT DISTINCT dep.classid, dep.objid, e.extname
+            FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.deptype = 'e'
+        ) ext ON ext.classid = d.refclassid AND ext.objid = d.refobjid
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass)
-          AND dn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_opclass'::regclass)
+          AND (
+              ext.extname IS NOT NULL
+              OR dn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          )
           AND NOT idx.indisprimary
         "#
     )
@@ -346,19 +365,29 @@ async fn fetch_index_dependencies(
 
     for row in deps {
         let key = (row.index_schema, row.index_name);
-        let dep_id = match row.dep_type.as_str() {
-            "type" => DbObjectId::Type {
-                schema: row.dep_schema,
-                name: row.dep_name,
-            },
-            "function" => DbObjectId::Function {
-                schema: row.dep_schema,
-                name: row.dep_name,
-                arguments: row.dep_args.unwrap_or_default(),
-            },
-            _ => continue,
+        let dep_id = if let Some(extension) = row.extension_name {
+            DbObjectId::Extension { name: extension }
+        } else {
+            match row.dep_type.as_str() {
+                "type" => DbObjectId::Type {
+                    schema: row.dep_schema,
+                    name: row.dep_name,
+                },
+                "function" => DbObjectId::Function {
+                    schema: row.dep_schema,
+                    name: row.dep_name,
+                    arguments: row.dep_args.unwrap_or_default(),
+                },
+                // Operator classes are not modeled as catalog objects; only
+                // extension-owned ones (handled above) yield a dependency.
+                _ => continue,
+            }
         };
-        dep_map.entry(key).or_default().push(dep_id);
+        // Multiple referents can resolve to the same extension — dedupe.
+        let entry = dep_map.entry(key).or_default();
+        if !entry.contains(&dep_id) {
+            entry.push(dep_id);
+        }
     }
 
     Ok(dep_map)
