@@ -88,7 +88,9 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Indexes (excluding constraint-backing indexes and extension-owned)
+            -- Indexes (excluding constraint-backing indexes and extension-owned).
+            -- Indexes created by extension scripts get no pg_depend 'e' entry of
+            -- their own — membership is recorded on the parent table, so check both.
             SELECT 'index', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -98,6 +100,11 @@ impl CatalogIdentity {
               AND NOT EXISTS (
                 SELECT 1 FROM pg_depend dep
                 WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_index idx
+                JOIN pg_depend dep ON dep.objid = idx.indrelid AND dep.deptype = 'e'
+                WHERE idx.indexrelid = c.oid
               )
 
             UNION ALL
@@ -159,23 +166,33 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Constraints (unique, foreign key, check, exclusion - primary keys handled by table)
+            -- Constraints (unique, foreign key, check, exclusion - primary keys
+            -- handled by table). Constraints on extension-owned tables are
+            -- excluded via the parent table — they have no 'e' entry of their own.
             SELECT 'constraint', n.nspname, co.conname, cl.relname, NULL
             FROM pg_constraint co
             JOIN pg_class cl ON co.conrelid = cl.oid
             JOIN pg_namespace n ON cl.relnamespace = n.oid
             WHERE co.contype IN ('u', 'f', 'c', 'x')
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = cl.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 
-            -- Triggers
+            -- Triggers (excluding those on extension-owned relations, via the parent)
             SELECT 'trigger', n.nspname, t.tgname, c.relname, NULL
             FROM pg_trigger t
             JOIN pg_class c ON t.tgrelid = c.oid
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE NOT t.tgisinternal
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
 
             UNION ALL
 

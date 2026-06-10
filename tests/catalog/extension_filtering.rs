@@ -270,6 +270,33 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
             "Policies on extension-owned tables should be filtered"
         );
 
+        // The lightweight identity snapshot (used for file-to-object attribution
+        // during incremental apply) must agree with the full catalog — otherwise
+        // extension sub-objects get attributed to extensions.sql and every file
+        // requiring it inherits them as augmented dependencies.
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool()).await?;
+        use pgmt::catalog::id::DbObjectId;
+        for object in &identity.objects {
+            match object {
+                DbObjectId::Table { name, .. } => {
+                    assert_ne!(name, "ext_owned", "identity must exclude extension table")
+                }
+                DbObjectId::Index { name, .. } => assert_ne!(
+                    name, "ext_owned_name_idx",
+                    "identity must exclude indexes on extension tables"
+                ),
+                DbObjectId::Constraint { table, .. } => assert_ne!(
+                    table, "ext_owned",
+                    "identity must exclude constraints on extension tables"
+                ),
+                DbObjectId::Trigger { table, .. } => assert_ne!(
+                    table, "ext_owned",
+                    "identity must exclude triggers on extension tables"
+                ),
+                _ => {}
+            }
+        }
+
         Ok(())
     })
     .await
