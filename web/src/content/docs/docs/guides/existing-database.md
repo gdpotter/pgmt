@@ -24,6 +24,32 @@ pgmt will:
 
 If validation fails (common with complex functions that have hidden dependencies), pgmt shows the errors and lets you fix them before creating the baseline.
 
+## Shadow Database for Extension-Heavy Schemas
+
+pgmt validates your generated schema (and later generates migrations) against a throwaway **shadow database**. By default that's the stock `postgres` Docker image — which does **not** include extensions like PostGIS or TimescaleDB. If your schema uses one, an auto/version-only shadow fails with errors like `type "geography" does not exist`.
+
+`pgmt init` inspects the source database and warns when it finds such an extension. Point the shadow at an image that includes it:
+
+```bash
+# PostGIS schema. The official postgis/postgis images are amd64-only, so on
+# Apple Silicon (arm64) request linux/amd64 to run under emulation.
+pgmt init --dev-url postgres://localhost/gis_db \
+    --shadow-image postgis/postgis:16-3.5 \
+    --shadow-platform linux/amd64
+```
+
+This is persisted to `pgmt.yaml` so every later command uses the same image:
+
+```yaml
+databases:
+  shadow:
+    docker:
+      image: postgis/postgis:16-3.5
+      platform: linux/amd64 # omit on amd64 hosts
+```
+
+The same image must be available wherever pgmt runs (your machine, CI, teammates), since `migrate apply` and validation all spin up a shadow. See [Configuration](/docs/reference/configuration) for all shadow options.
+
 ## Fix Dependencies
 
 Validation might fail with errors like:

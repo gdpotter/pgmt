@@ -349,7 +349,8 @@ impl DockerManager {
 
         // Ensure the PostgreSQL image is available
         let image_start = std::time::Instant::now();
-        self.ensure_image_available(&resolved_image).await?;
+        self.ensure_image_available(&resolved_image, config.platform.as_deref())
+            .await?;
         debug!("Image available after {:?}", image_start.elapsed());
 
         // Prepare environment variables
@@ -403,7 +404,8 @@ impl DockerManager {
         let create_start = std::time::Instant::now();
         let create_options = CreateContainerOptions {
             name: Some(container_name.clone()),
-            ..Default::default()
+            // Empty string = let Docker pick the host-native platform.
+            platform: config.platform.clone().unwrap_or_default(),
         };
 
         let container = self
@@ -812,16 +814,32 @@ impl DockerManager {
     }
 
     /// Ensure the PostgreSQL image is available locally
-    async fn ensure_image_available(&self, image: &str) -> Result<()> {
-        // Try to inspect the image first
+    ///
+    /// A locally cached tag may be the wrong architecture (e.g. an amd64 image
+    /// pulled before a `platform` was configured on an arm64 host), so when a
+    /// platform is requested the cached image only counts if its os/arch match.
+    async fn ensure_image_available(&self, image: &str, platform: Option<&str>) -> Result<()> {
         match self.docker.inspect_image(image).await {
-            Ok(_) => return Ok(()),
+            Ok(info)
+                if image_matches_platform(
+                    info.os.as_deref(),
+                    info.architecture.as_deref(),
+                    platform,
+                ) =>
+            {
+                return Ok(());
+            }
+            Ok(_) => debug!(
+                "Local image {} does not match platform {:?}, pulling",
+                image, platform
+            ),
             Err(_) => debug!("Pulling PostgreSQL image: {}", image),
         }
 
         // Pull the image
         let create_image_options = CreateImageOptions {
             from_image: Some(image.to_string()),
+            platform: platform.unwrap_or_default().to_string(),
             ..Default::default()
         };
 
@@ -1069,9 +1087,58 @@ pub async fn cleanup_all_containers() -> Result<()> {
     Ok(())
 }
 
+/// Whether a locally cached image satisfies a requested platform
+/// (`"os/arch[/variant]"`). With no requested platform any local image counts.
+/// The variant is ignored; an unparseable request conservatively triggers a pull.
+fn image_matches_platform(
+    local_os: Option<&str>,
+    local_arch: Option<&str>,
+    platform: Option<&str>,
+) -> bool {
+    let Some(platform) = platform else { return true };
+    let mut parts = platform.split('/');
+    let (Some(want_os), Some(want_arch)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    local_os.is_some_and(|os| os.eq_ignore_ascii_case(want_os))
+        && local_arch.is_some_and(|arch| arch.eq_ignore_ascii_case(want_arch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_image_matches_platform() {
+        // No requested platform: anything local is fine.
+        assert!(image_matches_platform(Some("linux"), Some("arm64"), None));
+        assert!(image_matches_platform(None, None, None));
+
+        // Matching os/arch.
+        assert!(image_matches_platform(
+            Some("linux"),
+            Some("amd64"),
+            Some("linux/amd64")
+        ));
+
+        // Wrong arch (the amd64-tag-cached-on-arm64 case) must trigger a pull.
+        assert!(!image_matches_platform(
+            Some("linux"),
+            Some("arm64"),
+            Some("linux/amd64")
+        ));
+
+        // Variant suffix is ignored.
+        assert!(image_matches_platform(
+            Some("linux"),
+            Some("arm"),
+            Some("linux/arm/v7")
+        ));
+
+        // Unparseable request or missing local metadata: re-pull.
+        assert!(!image_matches_platform(Some("linux"), Some("amd64"), Some("linux")));
+        assert!(!image_matches_platform(None, None, Some("linux/amd64")));
+    }
 
     #[test]
     fn test_docker_socket_candidates() {

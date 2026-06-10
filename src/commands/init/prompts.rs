@@ -60,15 +60,38 @@ pub async fn gather_init_options_with_args(
         (result.url, result.pg_version)
     };
 
-    // Shadow database configuration
-    // - If --shadow-pg-version is specified, use auto mode with that version
-    // - If --auto-shadow is specified, use auto mode
-    // - If defaults mode, use auto mode
-    // - Otherwise prompt (but we'll simplify this prompt too)
-    let shadow_config = if args.auto_shadow || args.shadow_pg_version.is_some() || args.defaults {
+    // Shadow database configuration. Precedence (clap enforces the flags are
+    // mutually consistent):
+    // - --shadow-url            -> external URL (skips Docker)
+    // - --shadow-image          -> Docker on that image (optionally --shadow-platform)
+    // - --auto-shadow / --shadow-pg-version / --defaults -> auto (stock postgres)
+    // - otherwise prompt, warning when the source DB uses extensions the stock
+    //   postgres image lacks (PostGIS, …)
+    let shadow_config = if let Some(url) = &args.shadow_url {
+        crate::prompts::ShadowDatabaseInput::Manual(url.clone())
+    } else if let Some(image) = &args.shadow_image {
+        crate::prompts::ShadowDatabaseInput::Docker {
+            image: image.clone(),
+            platform: args.shadow_platform.clone(),
+        }
+    } else if args.auto_shadow || args.shadow_pg_version.is_some() || args.defaults {
+        // Still warn in the non-interactive paths — an auto shadow on a source
+        // DB with nonstandard extensions fails at the first migration.
+        let nonstandard = detect_nonstandard_extensions(&dev_database_url).await;
+        if !nonstandard.is_empty() {
+            println!(
+                "⚠️  Extensions not in the stock postgres image: {}",
+                nonstandard.join(", ")
+            );
+            println!(
+                "   The auto shadow database will likely fail; set databases.shadow.docker.image in pgmt.yaml."
+            );
+            println!("   See https://docs.pgmt.dev/docs/reference/configuration");
+        }
         crate::prompts::ShadowDatabaseInput::Auto
     } else {
-        crate::prompts::prompt_shadow_mode_with_explanation().await?
+        let nonstandard = detect_nonstandard_extensions(&dev_database_url).await;
+        crate::prompts::prompt_shadow_mode_with_explanation(&nonstandard).await?
     };
 
     // Schema directory - CLI arg > existing > default
@@ -153,6 +176,104 @@ pub async fn gather_init_options_with_args(
         tracking_table: crate::config::types::TrackingTable::default(),
         roles_file,
     })
+}
+
+/// Extensions shipped in the official postgres Docker image (plpgsql + contrib).
+/// Generated from `postgres:18-alpine` via
+/// `ls /usr/local/share/postgresql/extension/*.control`.
+const STOCK_IMAGE_EXTENSIONS: &[&str] = &[
+    "amcheck",
+    "autoinc",
+    "bloom",
+    "bool_plperl",
+    "bool_plperlu",
+    "btree_gin",
+    "btree_gist",
+    "citext",
+    "cube",
+    "dblink",
+    "dict_int",
+    "dict_xsyn",
+    "earthdistance",
+    "file_fdw",
+    "fuzzystrmatch",
+    "hstore",
+    "hstore_plperl",
+    "hstore_plperlu",
+    "hstore_plpython3u",
+    "insert_username",
+    "intagg",
+    "intarray",
+    "isn",
+    "jsonb_plperl",
+    "jsonb_plperlu",
+    "jsonb_plpython3u",
+    "lo",
+    "ltree",
+    "ltree_plpython3u",
+    "moddatetime",
+    "pageinspect",
+    "pg_buffercache",
+    "pg_freespacemap",
+    "pg_logicalinspect",
+    "pg_prewarm",
+    "pg_stat_statements",
+    "pg_surgery",
+    "pg_trgm",
+    "pg_visibility",
+    "pg_walinspect",
+    "pgcrypto",
+    "pgrowlocks",
+    "pgstattuple",
+    "plperl",
+    "plperlu",
+    "plpgsql",
+    "plpython3u",
+    "pltcl",
+    "pltclu",
+    "postgres_fdw",
+    "refint",
+    "seg",
+    "sslinfo",
+    "tablefunc",
+    "tcn",
+    "tsm_system_rows",
+    "tsm_system_time",
+    "unaccent",
+    "uuid-ossp",
+    "xml2",
+];
+
+/// Best-effort list of installed extensions the stock postgres image does not
+/// ship, so init can warn before configuring a shadow that would fail. Returns
+/// empty on any connection or query error — the warning is a nicety, not a
+/// hard requirement.
+async fn detect_nonstandard_extensions(url: &str) -> Vec<String> {
+    let pool = match sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(url)
+        .await
+    {
+        Ok(pool) => pool,
+        Err(_) => return Vec::new(),
+    };
+    let rows: Result<Vec<(String,)>, _> =
+        sqlx::query_as("SELECT extname FROM pg_extension ORDER BY extname")
+            .fetch_all(&pool)
+            .await;
+    pool.close().await;
+    let installed = rows
+        .map(|r| r.into_iter().map(|(n,)| n).collect::<Vec<_>>())
+        .unwrap_or_default();
+    filter_nonstandard_extensions(installed)
+}
+
+/// Keep only extensions the stock postgres image does not provide.
+fn filter_nonstandard_extensions(installed: Vec<String>) -> Vec<String> {
+    installed
+        .into_iter()
+        .filter(|e| !STOCK_IMAGE_EXTENSIONS.contains(&e.as_str()))
+        .collect()
 }
 
 /// Prompt for schema import options
@@ -437,6 +558,10 @@ pub fn prompt_project_confirmation(options: &InitOptions) -> Result<bool> {
                 format!("Docker (PG {})", shadow_version)
             }
         }
+        ShadowDatabaseInput::Docker { image, platform } => match platform {
+            Some(p) => format!("Docker ({} on {})", image, p),
+            None => format!("Docker ({})", image),
+        },
         ShadowDatabaseInput::Manual(url) => format!("Manual ({})", mask_sensitive_url(url)),
     };
 
@@ -554,5 +679,33 @@ mod tests {
         );
 
         assert_eq!(mask_sensitive_url("invalid url"), "Invalid URL");
+    }
+
+    #[test]
+    fn test_filter_nonstandard_extensions_stock_only() {
+        // Contrib extensions ship with the official postgres image — no warning.
+        let installed = vec![
+            "plpgsql".to_string(),
+            "pg_trgm".to_string(),
+            "hstore".to_string(),
+            "uuid-ossp".to_string(),
+            "pgcrypto".to_string(),
+        ];
+        assert!(filter_nonstandard_extensions(installed).is_empty());
+    }
+
+    #[test]
+    fn test_filter_nonstandard_extensions_keeps_third_party() {
+        let installed = vec![
+            "plpgsql".to_string(),
+            "postgis".to_string(),
+            "pg_trgm".to_string(),
+            "timescaledb".to_string(),
+            "vector".to_string(),
+        ];
+        assert_eq!(
+            filter_nonstandard_extensions(installed),
+            vec!["postgis", "timescaledb", "vector"]
+        );
     }
 }

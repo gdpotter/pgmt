@@ -252,6 +252,7 @@ fn test_shadow_docker_version_resolution() {
     let config = ShadowDockerConfig {
         version: Some("16".to_string()),
         image: ShadowDockerConfig::default().image.clone(),
+        platform: None,
         environment: Default::default(),
         container_name: None,
         auto_cleanup: true,
@@ -264,6 +265,7 @@ fn test_shadow_docker_version_resolution() {
     let config_with_both = ShadowDockerConfig {
         version: Some("16".to_string()),
         image: "postgres:14-bullseye".to_string(),
+        platform: None,
         environment: Default::default(),
         container_name: None,
         auto_cleanup: true,
@@ -291,6 +293,7 @@ fn test_config_builder_shadow_docker_version() {
                 docker: Some(ShadowDockerInput {
                     version: Some("16".to_string()),
                     image: None,
+                    platform: None,
                     environment: None,
                     container_name: None,
                     auto_cleanup: None,
@@ -335,6 +338,7 @@ fn test_config_builder_shadow_docker_explicit_image() {
                 docker: Some(ShadowDockerInput {
                     version: Some("16".to_string()), // This should be ignored
                     image: Some("postgres:14-bullseye".to_string()),
+                    platform: None,
                     environment: None,
                     container_name: None,
                     auto_cleanup: None,
@@ -370,4 +374,50 @@ fn test_default_shadow_docker_version() {
     let default_config = ShadowDockerConfig::default();
     assert_eq!(default_config.image, "postgres:18-alpine");
     assert_eq!(default_config.resolved_image(), "postgres:18-alpine");
+    // Default requests no specific platform (host-native).
+    assert_eq!(default_config.platform, None);
+}
+
+#[test]
+fn test_config_builder_shadow_docker_platform() {
+    // Platform flows through the builder for single-arch images (e.g. PostGIS).
+    let config_input = ConfigInput {
+        databases: Some(DatabasesInput {
+            dev_url: Some("postgres://localhost/dev".to_string()),
+            shadow_url: None,
+            target_url: None,
+            shadow: Some(ShadowDatabaseInput {
+                auto: None,
+                url: None,
+                docker: Some(ShadowDockerInput {
+                    version: None,
+                    image: Some("postgis/postgis:16-3.5".to_string()),
+                    platform: Some("linux/amd64".to_string()),
+                    environment: None,
+                    container_name: None,
+                    auto_cleanup: None,
+                    volumes: None,
+                    network: None,
+                }),
+            }),
+        }),
+        directories: None,
+        objects: None,
+        migration: None,
+        schema: None,
+        docker: None,
+    };
+
+    let config = ConfigBuilder::new()
+        .with_file(config_input)
+        .resolve()
+        .unwrap();
+
+    match config.databases.shadow {
+        ShadowDatabase::Docker(docker_config) => {
+            assert_eq!(docker_config.resolved_image(), "postgis/postgis:16-3.5");
+            assert_eq!(docker_config.platform.as_deref(), Some("linux/amd64"));
+        }
+        _ => panic!("Expected Docker shadow database"),
+    }
 }

@@ -86,6 +86,7 @@ impl ConfigBuilder {
                         .as_ref()
                         .cloned()
                         .unwrap_or_else(|| defaults.image.clone()),
+                    platform: docker_input.platform.clone(),
                     environment: docker_input
                         .environment
                         .as_ref()

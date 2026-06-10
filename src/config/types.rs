@@ -44,6 +44,10 @@ pub struct ShadowDatabaseInput {
 pub struct ShadowDockerInput {
     pub version: Option<String>,
     pub image: Option<String>,
+    /// Platform to request when pulling/running the image (e.g. "linux/amd64").
+    /// Needed for images only published for one architecture (e.g. postgis/postgis
+    /// has no arm64 build) so they can run under emulation on other hosts.
+    pub platform: Option<String>,
     pub environment: Option<HashMap<String, String>>,
     pub container_name: Option<String>,
     pub auto_cleanup: Option<bool>,
@@ -94,6 +98,8 @@ impl ShadowDatabase {
 pub struct ShadowDockerConfig {
     pub version: Option<String>,
     pub image: String,
+    /// Platform to request when pulling/running the image (e.g. "linux/amd64").
+    pub platform: Option<String>,
     pub environment: HashMap<String, String>,
     pub container_name: Option<String>,
     pub auto_cleanup: bool,

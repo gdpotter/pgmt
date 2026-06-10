@@ -72,6 +72,9 @@ pgmt init [OPTIONS]
 --baselines-dir <DIR>         # Baselines directory name (default: "schema_baselines")
 --auto-shadow                 # Use auto shadow database
 --shadow-pg-version <VER>     # PostgreSQL version for auto shadow (e.g., "14", "15", "16")
+--shadow-image <IMAGE>        # Shadow Docker image (e.g. "postgis/postgis:16-3.5"); conflicts with --shadow-pg-version
+--shadow-platform <PLATFORM>  # Platform for the shadow image (e.g. "linux/amd64") for single-arch images
+--shadow-url <URL>            # Use an external shadow database at this URL (skips Docker)
 --roles-file <PATH>           # Path to roles file (default: auto-detect roles.sql)
 --fresh                       # Force fresh init (overwrite existing config)
 ```
@@ -106,6 +109,12 @@ pgmt init --dev-url postgres://localhost/myapp_dev \
 
 # Specify PostgreSQL version for shadow database
 pgmt init --dev-url postgres://localhost/myapp_dev --auto-shadow --shadow-pg-version 14
+
+# Extension-heavy schema (PostGIS) on an arm64 host: use an image that includes
+# the extension, and run it under emulation since postgis/postgis is amd64-only
+pgmt init --dev-url postgres://localhost/gis_db \
+    --shadow-image postgis/postgis:16-3.5 \
+    --shadow-platform linux/amd64
 
 # Re-initialize with fresh config
 pgmt init --dev-url postgres://localhost/newdb --fresh

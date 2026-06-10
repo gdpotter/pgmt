@@ -303,6 +303,13 @@ fn resolve_shadow_database(
                 ShadowDatabase::Auto
             }
         }
+        ShadowDatabaseInput::Docker { image, platform } => {
+            ShadowDatabase::Docker(ShadowDockerConfig {
+                image: image.clone(),
+                platform: platform.clone(),
+                ..Default::default()
+            })
+        }
         ShadowDatabaseInput::Manual(url) => ShadowDatabase::Url(url.clone()),
     }
 }

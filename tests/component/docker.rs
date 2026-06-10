@@ -28,6 +28,7 @@ async fn test_docker_postgres_container() -> Result<()> {
         let config = ShadowDockerConfig {
             version: None,
             image: "postgres:18-alpine".to_string(),
+            platform: None,
             environment,
             container_name: Some(container_name),
             auto_cleanup: true,
@@ -74,6 +75,7 @@ async fn test_shadow_database_failure_includes_logs() -> Result<()> {
         let config = ShadowDockerConfig {
             version: None,
             image: "postgres:18-alpine".to_string(),
+            platform: None,
             environment,
             container_name: Some(container_name),
             auto_cleanup: true,
@@ -110,6 +112,7 @@ async fn test_shadow_database_config_docker() -> Result<()> {
     let docker_input = ShadowDockerInput {
         version: None,
         image: Some("postgres:14-alpine".to_string()),
+        platform: None,
         environment: Some(environment),
         container_name: Some("test_container".to_string()),
         auto_cleanup: Some(false),

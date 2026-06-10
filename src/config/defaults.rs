@@ -85,6 +85,7 @@ impl Default for ShadowDockerConfig {
         Self {
             version: None, // Will use default image if not specified
             image: "postgres:18-alpine".to_string(),
+            platform: None, // Host-native platform unless explicitly requested
             environment: {
                 let mut env = HashMap::new();
                 env.insert(

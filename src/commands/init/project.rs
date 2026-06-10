@@ -44,6 +44,13 @@ pub fn generate_config_file(options: &super::InitOptions, project_dir: &Path) ->
         (crate::prompts::ShadowDatabaseInput::Auto, None) => {
             "  shadow:\n    auto: true".to_string()
         }
+        (crate::prompts::ShadowDatabaseInput::Docker { image, platform }, _) => {
+            let mut s = format!("  shadow:\n    docker:\n      image: \"{}\"", image);
+            if let Some(p) = platform {
+                s.push_str(&format!("\n      platform: \"{}\"", p));
+            }
+            s
+        }
         (crate::prompts::ShadowDatabaseInput::Manual(url), _) => {
             format!("  shadow:\n    auto: false\n    url: {}", url)
         }
@@ -273,6 +280,54 @@ mod tests {
             "Expected explicit version to take precedence, got:\n{}",
             content
         );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_generate_config_file_docker_image_and_platform() {
+        let temp_dir = env::temp_dir().join("pgmt_test_config_docker_image");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // A custom shadow image with a pinned platform (e.g. PostGIS on arm64).
+        let mut options = test_options(&temp_dir);
+        options.shadow_config = crate::prompts::ShadowDatabaseInput::Docker {
+            image: "postgis/postgis:16-3.5".to_string(),
+            platform: Some("linux/amd64".to_string()),
+        };
+
+        generate_config_file(&options, &temp_dir).unwrap();
+
+        let config_path = temp_dir.join("pgmt.yaml");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+
+        assert!(
+            content.contains("image: \"postgis/postgis:16-3.5\""),
+            "Expected docker image, got:\n{}",
+            content
+        );
+        assert!(
+            content.contains("platform: \"linux/amd64\""),
+            "Expected docker platform, got:\n{}",
+            content
+        );
+        assert!(
+            !content.contains("auto: true"),
+            "Should not emit auto mode for a custom image"
+        );
+
+        // The generated YAML must parse back into a Docker shadow config.
+        let parsed: crate::config::types::ConfigInput =
+            serde_yaml::from_str(&content).expect("generated pgmt.yaml should parse");
+        let docker = parsed
+            .databases
+            .and_then(|d| d.shadow)
+            .and_then(|s| s.docker)
+            .expect("shadow.docker should be present");
+        assert_eq!(docker.image.as_deref(), Some("postgis/postgis:16-3.5"));
+        assert_eq!(docker.platform.as_deref(), Some("linux/amd64"));
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);

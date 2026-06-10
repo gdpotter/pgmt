@@ -121,39 +121,89 @@ pub async fn prompt_database_url_simple(prompt: &str) -> Result<String> {
 /// Shadow database configuration options
 #[derive(Debug, Clone)]
 pub enum ShadowDatabaseInput {
+    /// Docker-managed shadow on the stock `postgres` image (optionally a specific
+    /// major version via `shadow_pg_version`/detected version).
     Auto,
+    /// Docker-managed shadow on a specific image (e.g. `postgis/postgis:16-3.5`),
+    /// optionally pinned to a `platform` for single-arch images.
+    Docker {
+        image: String,
+        platform: Option<String>,
+    },
+    /// An externally-managed shadow database reached by URL.
     Manual(String),
 }
 
-/// Prompt for shadow database mode with explanation
-pub async fn prompt_shadow_mode_with_explanation() -> Result<ShadowDatabaseInput> {
+/// Prompt for shadow database mode with explanation.
+///
+/// `nonstandard_extensions` lists extensions installed in the source database
+/// that the stock `postgres` image does not ship (e.g. postgis). When non-empty
+/// we warn and pre-select the custom-image option, since an auto shadow would
+/// fail at the first migration.
+pub async fn prompt_shadow_mode_with_explanation(
+    nonstandard_extensions: &[String],
+) -> Result<ShadowDatabaseInput> {
     // Check Docker availability first
     let (docker_available, debug_info) = crate::docker::DockerManager::is_available_verbose().await;
 
-    if docker_available {
-        println!("🛡️  Shadow database (for testing migrations safely)");
-        let auto = Confirm::new()
-            .with_prompt("   Use auto mode? (Docker-managed, recommended)")
-            .default(true)
-            .interact()?;
+    println!("🛡️  Shadow database (for testing migrations safely)");
 
-        if auto {
-            Ok(ShadowDatabaseInput::Auto)
-        } else {
-            let url: String = Input::new()
-                .with_prompt("   Shadow database URL")
-                .interact_text()?;
-            Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
-        }
-    } else {
-        println!("🛡️  Shadow database (for testing migrations safely)");
+    if !docker_available {
         println!("   ⚠️  Docker not available - manual mode required");
         tracing::debug!("Docker availability details: {}", debug_info);
 
         let url: String = Input::new()
             .with_prompt("   Shadow database URL")
             .interact_text()?;
-        Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
+        return Ok(ShadowDatabaseInput::Manual(url.trim().to_string()));
+    }
+
+    if !nonstandard_extensions.is_empty() {
+        println!(
+            "   💡 Extensions not in the stock postgres image: {}",
+            nonstandard_extensions.join(", ")
+        );
+        println!("      You'll likely need a shadow image that includes them.");
+        println!("      See https://docs.pgmt.dev/docs/reference/configuration");
+    }
+
+    let choices = vec![
+        "Auto (Docker-managed stock postgres, recommended)",
+        "Docker with a specific image (e.g. PostGIS)",
+        "External database URL",
+    ];
+    // Default to the custom-image option when the stock image won't work.
+    let default_choice = if nonstandard_extensions.is_empty() { 0 } else { 1 };
+    let selection = Select::new()
+        .with_prompt("   Shadow database mode")
+        .items(&choices)
+        .default(default_choice)
+        .interact()?;
+
+    match selection {
+        0 => Ok(ShadowDatabaseInput::Auto),
+        1 => {
+            let image: String = Input::new()
+                .with_prompt("   Shadow Docker image (e.g. postgis/postgis:16-3.5)")
+                .interact_text()?;
+
+            let platform: String = Input::new()
+                .with_prompt("   Platform (blank = host default, e.g. linux/amd64)")
+                .allow_empty(true)
+                .interact_text()?;
+            let platform = platform.trim();
+
+            Ok(ShadowDatabaseInput::Docker {
+                image: image.trim().to_string(),
+                platform: (!platform.is_empty()).then(|| platform.to_string()),
+            })
+        }
+        _ => {
+            let url: String = Input::new()
+                .with_prompt("   Shadow database URL")
+                .interact_text()?;
+            Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
+        }
     }
 }
 
@@ -282,6 +332,18 @@ mod tests {
                 assert_eq!(url, "postgres://localhost/shadow");
             }
             _ => panic!("Expected Manual variant"),
+        }
+
+        let docker = ShadowDatabaseInput::Docker {
+            image: "postgis/postgis:16-3.5".to_string(),
+            platform: Some("linux/amd64".to_string()),
+        };
+        match docker {
+            ShadowDatabaseInput::Docker { image, platform } => {
+                assert_eq!(image, "postgis/postgis:16-3.5");
+                assert_eq!(platform.as_deref(), Some("linux/amd64"));
+            }
+            _ => panic!("Expected Docker variant"),
         }
     }
 

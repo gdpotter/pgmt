@@ -38,7 +38,20 @@ databases:
     #   image: public.ecr.aws/supabase/postgres:17.6.1.081
     #   environment:
     #     POSTGRES_PASSWORD: your-password       # Custom env vars
+
+    # OR Docker with an extension image pinned to a platform (e.g. PostGIS).
+    # The official postgis/postgis images are published for amd64 only, so on
+    # arm64 hosts (Apple Silicon) request linux/amd64 to run under emulation:
+    # docker:
+    #   image: postgis/postgis:16-3.5
+    #   platform: linux/amd64                    # Force a platform for single-arch images
 ```
+
+> **Extension-heavy schemas (PostGIS, TimescaleDB, …):** the stock `postgres`
+> image does not contain these extensions, so `auto`/`version` mode will fail at
+> the first migration with errors like `type "geography" does not exist`. Point
+> the shadow at an image that includes the extension. `pgmt init` detects this
+> from the source database and warns you.
 
 ### directories
 

@@ -45,6 +45,19 @@ pub struct InitArgs {
     #[clap(long)]
     pub shadow_pg_version: Option<String>,
 
+    /// Docker image for the shadow database (e.g. "postgis/postgis:16-3.5")
+    #[clap(long, conflicts_with_all = ["shadow_pg_version", "auto_shadow"])]
+    pub shadow_image: Option<String>,
+
+    /// Platform for the shadow Docker image (e.g. "linux/amd64"), for images
+    /// only published for one architecture.
+    #[clap(long, requires = "shadow_image")]
+    pub shadow_platform: Option<String>,
+
+    /// Use an external shadow database at this URL (skips Docker).
+    #[clap(long, conflicts_with_all = ["shadow_image", "shadow_platform", "auto_shadow", "shadow_pg_version"])]
+    pub shadow_url: Option<String>,
+
     /// Create baseline from existing database (non-interactive)
     #[clap(long)]
     pub create_baseline: bool,
