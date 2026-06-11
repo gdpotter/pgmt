@@ -227,9 +227,7 @@ validate-schema:
     POSTGRES_PASSWORD: test
     DEV_DATABASE_URL: postgres://postgres:test@postgres/postgres
   script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source ~/.cargo/env
-    - cargo install pgmt
+    - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt config validate
     - pgmt migrate validate
 
@@ -237,9 +235,7 @@ deploy-migrations:
   stage: deploy
   environment: production
   script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source ~/.cargo/env
-    - cargo install pgmt
+    - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt migrate apply
   only:
     - main
@@ -254,9 +250,7 @@ check-drift:
     POSTGRES_PASSWORD: test
     DEV_DATABASE_URL: postgres://postgres:test@postgres/postgres
   script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source ~/.cargo/env
-    - cargo install pgmt
+    - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt migrate diff --format summary
   allow_failure: true # Don't block other pipelines
 ```

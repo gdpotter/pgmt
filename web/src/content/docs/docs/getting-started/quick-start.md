@@ -7,29 +7,13 @@ By the end of this guide, you'll change one file and watch pgmt automatically ca
 
 ## Install pgmt
 
-**Shell (macOS/Linux):**
-
 ```bash
 curl -fsSL https://pgmt.dev/install.sh | sh
 ```
 
-**npm:**
-
-```bash
-npm install -g @pgmt/pgmt
-```
-
-**Cargo (from source):**
-
-```bash
-cargo install pgmt
-```
-
-Verify installation:
-
-```bash
-pgmt --version
-```
+Other methods (npm, cargo) and prerequisites are on the
+[installation page](/docs/getting-started/installation). You'll need Docker
+running — pgmt uses it for the shadow database.
 
 ## Setup Database
 
