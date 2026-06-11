@@ -87,7 +87,22 @@ When run in a directory with an existing `pgmt.yaml`, you'll be prompted to:
 - **Fresh** - Start over with new configuration
 - **Cancel** - Keep current configuration
 
+In Update mode, anything you've configured by hand and init doesn't ask about —
+shadow `environment` and `container_name`, `objects` scoping, `migration`
+settings — is preserved in the regenerated file, and the prompts are pre-filled
+from your current values.
+
 Use `--fresh` to skip this prompt and always overwrite.
+
+**Config-first setup (advanced):**
+
+`pgmt init` only asks the essentials; `pgmt.yaml` is the full interface (see
+the [configuration reference](/docs/reference/configuration)). If your setup
+needs options the wizard doesn't cover — a custom shadow image with environment
+variables, schema scoping for a managed platform — write `pgmt.yaml` first,
+then run `pgmt init` and choose **Update**: the import and baseline workflow
+runs under your configuration. The shadow clean during import respects
+`objects.include.schemas`, so platform-managed schemas are preserved.
 
 **Examples:**
 

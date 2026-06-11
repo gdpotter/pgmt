@@ -74,6 +74,15 @@ objects:
       - api
 ```
 
+### 4. Import an Existing Project (optional)
+
+If your Supabase project already has tables, run `pgmt init` again now that
+`pgmt.yaml` is configured, and choose **Update**. Your config is used as the
+prompt defaults, and the import runs under it — `include.schemas` scopes both
+what gets imported and what the shadow database reset touches, so the Supabase
+platform schemas (`auth`, `storage`, …) are preserved and foreign keys to
+`auth.users` resolve during validation.
+
 ## Write Your Schema
 
 Create schema files as normal. You can reference Supabase objects like `auth.users`:
