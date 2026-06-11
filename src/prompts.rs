@@ -350,9 +350,7 @@ mod tests {
 
     #[test]
     fn test_shadow_mode_default() {
-        use crate::config::types::{
-            ShadowDatabaseInput as ShadowConfigInput, ShadowDockerInput,
-        };
+        use crate::config::types::{ShadowDatabaseInput as ShadowConfigInput, ShadowDockerInput};
 
         let docker = ShadowConfigInput {
             docker: Some(ShadowDockerInput {

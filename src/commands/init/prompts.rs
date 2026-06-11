@@ -27,47 +27,46 @@ pub async fn gather_init_options_with_args(
     // Database URL - use CLI arg or prompt. The validation connection also
     // fetches the installed extensions, so the shadow guidance below doesn't
     // need to reconnect.
-    let (dev_database_url, detected_pg_version, detected_extensions) = if let Some(url) =
-        &args.dev_url
-    {
-        // CLI arg provided - test connection and detect version
-        print!("🔄 Testing connection...");
-        match sqlx::PgPool::connect(url).await {
-            Ok(pool) => {
-                let version: Result<(String,), _> =
-                    sqlx::query_as("SHOW server_version").fetch_one(&pool).await;
-                let extensions = crate::prompts::fetch_installed_extensions(&pool).await;
-                pool.close().await;
-                match version {
-                    Ok((v,)) => {
-                        let pg_version = v.split_whitespace().next().unwrap_or(&v).to_string();
-                        println!(" ✅ (PostgreSQL {})", pg_version);
-                        (url.clone(), Some(pg_version), Some(extensions))
-                    }
-                    Err(_) => {
-                        println!(" ✅");
-                        (url.clone(), None, Some(extensions))
+    let (dev_database_url, detected_pg_version, detected_extensions) =
+        if let Some(url) = &args.dev_url {
+            // CLI arg provided - test connection and detect version
+            print!("🔄 Testing connection...");
+            match sqlx::PgPool::connect(url).await {
+                Ok(pool) => {
+                    let version: Result<(String,), _> =
+                        sqlx::query_as("SHOW server_version").fetch_one(&pool).await;
+                    let extensions = crate::prompts::fetch_installed_extensions(&pool).await;
+                    pool.close().await;
+                    match version {
+                        Ok((v,)) => {
+                            let pg_version = v.split_whitespace().next().unwrap_or(&v).to_string();
+                            println!(" ✅ (PostgreSQL {})", pg_version);
+                            (url.clone(), Some(pg_version), Some(extensions))
+                        }
+                        Err(_) => {
+                            println!(" ✅");
+                            (url.clone(), None, Some(extensions))
+                        }
                     }
                 }
+                Err(e) => {
+                    println!(" ❌");
+                    return Err(anyhow::anyhow!("Connection failed: {}", e));
+                }
             }
-            Err(e) => {
-                println!(" ❌");
-                return Err(anyhow::anyhow!("Connection failed: {}", e));
-            }
-        }
-    } else if args.defaults {
-        // In defaults mode, use existing value if available, otherwise use default
-        let url = existing_databases
-            .and_then(|d| d.dev_url.clone())
-            .unwrap_or_else(|| "postgres://localhost/pgmt_dev".to_string());
-        (url, None, None)
-    } else {
-        // Interactive prompt - pass existing value as default
-        let existing_url = existing_databases.and_then(|d| d.dev_url.clone());
-        let result =
-            crate::prompts::prompt_database_url_with_guidance_and_default(existing_url).await?;
-        (result.url, result.pg_version, Some(result.extensions))
-    };
+        } else if args.defaults {
+            // In defaults mode, use existing value if available, otherwise use default
+            let url = existing_databases
+                .and_then(|d| d.dev_url.clone())
+                .unwrap_or_else(|| "postgres://localhost/pgmt_dev".to_string());
+            (url, None, None)
+        } else {
+            // Interactive prompt - pass existing value as default
+            let existing_url = existing_databases.and_then(|d| d.dev_url.clone());
+            let result =
+                crate::prompts::prompt_database_url_with_guidance_and_default(existing_url).await?;
+            (result.url, result.pg_version, Some(result.extensions))
+        };
 
     // Shadow database configuration. Precedence (clap enforces the flags are
     // mutually consistent):

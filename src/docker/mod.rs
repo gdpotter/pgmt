@@ -1080,7 +1080,9 @@ fn image_matches_platform(
     local_arch: Option<&str>,
     platform: Option<&str>,
 ) -> bool {
-    let Some(platform) = platform else { return true };
+    let Some(platform) = platform else {
+        return true;
+    };
     let mut parts = platform.split('/');
     let (Some(want_os), Some(want_arch)) = (parts.next(), parts.next()) else {
         return false;
@@ -1151,7 +1153,11 @@ mod tests {
         ));
 
         // Unparseable request or missing local metadata: re-pull.
-        assert!(!image_matches_platform(Some("linux"), Some("amd64"), Some("linux")));
+        assert!(!image_matches_platform(
+            Some("linux"),
+            Some("amd64"),
+            Some("linux")
+        ));
         assert!(!image_matches_platform(None, None, Some("linux/amd64")));
     }
 

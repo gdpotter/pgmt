@@ -434,9 +434,7 @@ fn test_shadow_merge_docker_over_docker_preserves_unanswered_fields() {
             image: Some("postgis/postgis:16-3.4".to_string()),
             container_name: Some("pgmt_shadow_app".to_string()),
             auto_cleanup: Some(false),
-            environment: Some(
-                [("POSTGRES_PASSWORD".to_string(), "secret".to_string())].into(),
-            ),
+            environment: Some([("POSTGRES_PASSWORD".to_string(), "secret".to_string())].into()),
             ..Default::default()
         }),
     };
@@ -480,7 +478,10 @@ fn test_shadow_merge_mode_switch_to_auto_clears_docker() {
     let merged = base.merge_with(overlay);
     assert_eq!(merged.auto, Some(true));
     assert_eq!(merged.url, None);
-    assert!(merged.docker.is_none(), "stale docker block must be cleared");
+    assert!(
+        merged.docker.is_none(),
+        "stale docker block must be cleared"
+    );
 }
 
 #[test]
@@ -501,7 +502,10 @@ fn test_shadow_merge_mode_switch_to_url_clears_docker() {
 
     let merged = base.merge_with(overlay);
     assert_eq!(merged.url.as_deref(), Some("postgres://localhost/shadow"));
-    assert!(merged.docker.is_none(), "stale docker block must be cleared");
+    assert!(
+        merged.docker.is_none(),
+        "stale docker block must be cleared"
+    );
 }
 
 #[test]

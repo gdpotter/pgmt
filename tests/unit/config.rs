@@ -177,10 +177,7 @@ mod config_integration_tests {
             objects: Some(ObjectsInput {
                 include: None,
                 exclude: Some(ObjectExcludeInput {
-                    schemas: Some(vec![
-                        "pg_*".to_string(),
-                        "information_schema".to_string(),
-                    ]),
+                    schemas: Some(vec!["pg_*".to_string(), "information_schema".to_string()]),
                     tables: Some(vec!["temp_*".to_string(), "cache_*".to_string()]),
                 }),
             }),

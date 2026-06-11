@@ -460,9 +460,10 @@ async fn test_index_extension_opclass_dependency() {
             .find(|i| i.name == "idx_film_title_trgm")
             .expect("trigram index should be in catalog");
         assert!(
-            idx.depends_on().contains(&pgmt::catalog::id::DbObjectId::Extension {
-                name: "pg_trgm".to_string()
-            }),
+            idx.depends_on()
+                .contains(&pgmt::catalog::id::DbObjectId::Extension {
+                    name: "pg_trgm".to_string()
+                }),
             "Index using gin_trgm_ops should depend on pg_trgm, got: {:?}",
             idx.depends_on()
         );
@@ -488,9 +489,10 @@ async fn test_index_extension_function_dependency() {
             .find(|i| i.name == "idx_people_soundex")
             .expect("soundex expression index should be in catalog");
         assert!(
-            idx.depends_on().contains(&pgmt::catalog::id::DbObjectId::Extension {
-                name: "fuzzystrmatch".to_string()
-            }),
+            idx.depends_on()
+                .contains(&pgmt::catalog::id::DbObjectId::Extension {
+                    name: "fuzzystrmatch".to_string()
+                }),
             "Expression index using soundex() should depend on fuzzystrmatch, got: {:?}",
             idx.depends_on()
         );

@@ -69,9 +69,7 @@ pub fn generate_config_file(
 /// layer (the same type pgmt.yaml parses into, so output can't desync from
 /// the parser).
 fn gathered_config_input(options: &super::InitOptions) -> crate::config::types::ConfigInput {
-    use crate::config::types::{
-        ConfigInput, DatabasesInput, DirectoriesInput, ShadowDockerInput,
-    };
+    use crate::config::types::{ConfigInput, DatabasesInput, DirectoriesInput, ShadowDockerInput};
 
     // For shadow config, prefer explicit CLI version, then detected version from dev DB
     let effective_version = options

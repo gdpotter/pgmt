@@ -1,6 +1,8 @@
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;
-use pgmt::catalog::{constraint, custom_type, function, grant, index, policy, sequence, table, triggers, view};
+use pgmt::catalog::{
+    constraint, custom_type, function, grant, index, policy, sequence, table, triggers, view,
+};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {

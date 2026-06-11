@@ -313,11 +313,9 @@ objects:
 "#,
     )?;
 
-    let options = pgmt::commands::init::prompts::gather_init_options_with_args(
-        &args,
-        Some(&existing),
-    )
-    .await?;
+    let options =
+        pgmt::commands::init::prompts::gather_init_options_with_args(&args, Some(&existing))
+            .await?;
 
     assert_eq!(options.dev_database_url, "postgres://localhost:1/reinit_db");
     assert_eq!(options.schema_dir, std::path::PathBuf::from("db/schema"));
@@ -346,7 +344,9 @@ fn test_shadow_flag_constraints() {
     assert!(InitArgs::try_parse_from(["init", "--shadow-image", "x", "--auto-shadow"]).is_err());
 
     // --shadow-url conflicts with every other shadow flag
-    assert!(InitArgs::try_parse_from(["init", "--shadow-url", "u", "--shadow-image", "x"]).is_err());
+    assert!(
+        InitArgs::try_parse_from(["init", "--shadow-url", "u", "--shadow-image", "x"]).is_err()
+    );
     assert!(InitArgs::try_parse_from(["init", "--shadow-url", "u", "--auto-shadow"]).is_err());
     assert!(
         InitArgs::try_parse_from(["init", "--shadow-url", "u", "--shadow-pg-version", "16"])
@@ -365,5 +365,7 @@ fn test_shadow_flag_constraints() {
         .is_ok()
     );
     assert!(InitArgs::try_parse_from(["init", "--shadow-url", "postgres://x/y"]).is_ok());
-    assert!(InitArgs::try_parse_from(["init", "--auto-shadow", "--shadow-pg-version", "16"]).is_ok());
+    assert!(
+        InitArgs::try_parse_from(["init", "--auto-shadow", "--shadow-pg-version", "16"]).is_ok()
+    );
 }
