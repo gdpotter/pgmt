@@ -234,12 +234,12 @@ pub fn resolve_objects_input(obj_input: Option<&ObjectsInput>, defaults: &Object
         .and_then(|o| o.exclude.as_ref())
         .map(|e| ObjectExclude {
             schemas: e
-                .exclude_schemas
+                .schemas
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| defaults.exclude.schemas.clone()),
             tables: e
-                .exclude_tables
+                .tables
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| defaults.exclude.tables.clone()),

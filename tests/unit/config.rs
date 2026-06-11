@@ -30,8 +30,8 @@ mod config_integration_tests {
             objects: Some(ObjectsInput {
                 include: None,
                 exclude: Some(ObjectExcludeInput {
-                    exclude_schemas: Some(vec!["temp_*".to_string()]),
-                    exclude_tables: None,
+                    schemas: Some(vec!["temp_*".to_string()]),
+                    tables: None,
                 }),
             }),
             migration: None,
@@ -177,11 +177,11 @@ mod config_integration_tests {
             objects: Some(ObjectsInput {
                 include: None,
                 exclude: Some(ObjectExcludeInput {
-                    exclude_schemas: Some(vec![
+                    schemas: Some(vec![
                         "pg_*".to_string(),
                         "information_schema".to_string(),
                     ]),
-                    exclude_tables: Some(vec!["temp_*".to_string(), "cache_*".to_string()]),
+                    tables: Some(vec!["temp_*".to_string(), "cache_*".to_string()]),
                 }),
             }),
             migration: None,
@@ -252,8 +252,8 @@ mod config_integration_tests {
             objects: Some(ObjectsInput {
                 include: None,
                 exclude: Some(ObjectExcludeInput {
-                    exclude_schemas: Some(vec!["custom_*".to_string()]),
-                    exclude_tables: None,
+                    schemas: Some(vec!["custom_*".to_string()]),
+                    tables: None,
                 }),
             }),
             migration: None, // Use defaults
@@ -293,6 +293,7 @@ directories:
 
 objects:
   exclude:
+    # legacy key, kept to cover the serde alias for pre-rename configs
     exclude_schemas: ["temp_*", "test_*"]
 
 migration:

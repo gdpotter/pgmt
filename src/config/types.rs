@@ -197,10 +197,12 @@ pub struct ObjectIncludeInput {
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ObjectExcludeInput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclude_schemas: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclude_tables: Option<Vec<String>>,
+    /// Accepts the legacy `exclude_schemas` key for configs written before
+    /// the rename to match `include.schemas`.
+    #[serde(alias = "exclude_schemas", skip_serializing_if = "Option::is_none")]
+    pub schemas: Option<Vec<String>>,
+    #[serde(alias = "exclude_tables", skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -405,8 +407,8 @@ impl From<ObjectFilterArgs> for ObjectsInput {
 
         let exclude = if args.exclude_schemas.is_some() || args.exclude_tables.is_some() {
             Some(ObjectExcludeInput {
-                exclude_schemas: args.exclude_schemas,
-                exclude_tables: args.exclude_tables,
+                schemas: args.exclude_schemas,
+                tables: args.exclude_tables,
             })
         } else {
             None

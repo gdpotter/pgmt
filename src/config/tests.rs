@@ -43,8 +43,8 @@ fn test_config_input_merge() {
         objects: Some(ObjectsInput {
             include: None,
             exclude: Some(ObjectExcludeInput {
-                exclude_schemas: Some(vec!["temp_*".to_string()]),
-                exclude_tables: None,
+                schemas: Some(vec!["temp_*".to_string()]),
+                tables: None,
             }),
         }),
         migration: None,
@@ -92,7 +92,7 @@ fn test_config_input_merge() {
             .exclude
             .as_ref()
             .unwrap()
-            .exclude_schemas,
+            .schemas,
         Some(vec!["temp_*".to_string()])
     );
 }
@@ -110,8 +110,8 @@ fn test_config_builder_resolve() {
         objects: Some(ObjectsInput {
             include: None,
             exclude: Some(ObjectExcludeInput {
-                exclude_schemas: Some(vec!["pg_*".to_string()]),
-                exclude_tables: Some(vec!["temp_*".to_string()]),
+                schemas: Some(vec!["pg_*".to_string()]),
+                tables: Some(vec!["temp_*".to_string()]),
             }),
         }),
         migration: None, // Use defaults
@@ -526,4 +526,23 @@ fn test_shadow_merge_mode_switch_url_to_docker_clears_url() {
         merged.docker.and_then(|d| d.image).as_deref(),
         Some("postgres:18-alpine")
     );
+}
+
+#[test]
+fn test_object_exclude_accepts_both_key_spellings() {
+    // `exclude.schemas` is the documented key (mirrors include.schemas);
+    // `exclude_schemas` is the legacy spelling accepted via serde alias.
+    let new_style: ConfigInput = serde_yaml::from_str(
+        "objects:\n  exclude:\n    schemas: [\"pg_*\"]\n    tables: [\"cache_*\"]\n",
+    )
+    .unwrap();
+    let legacy: ConfigInput = serde_yaml::from_str(
+        "objects:\n  exclude:\n    exclude_schemas: [\"pg_*\"]\n    exclude_tables: [\"cache_*\"]\n",
+    )
+    .unwrap();
+
+    assert_eq!(new_style.objects, legacy.objects);
+    let exclude = new_style.objects.unwrap().exclude.unwrap();
+    assert_eq!(exclude.schemas, Some(vec!["pg_*".to_string()]));
+    assert_eq!(exclude.tables, Some(vec!["cache_*".to_string()]));
 }
