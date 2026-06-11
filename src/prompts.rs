@@ -33,6 +33,9 @@ where
 pub struct DatabaseConnectionResult {
     pub url: String,
     pub pg_version: Option<String>,
+    /// Extensions installed in the database, fetched over the same validation
+    /// connection (used for shadow-image guidance without reconnecting).
+    pub extensions: Vec<String>,
 }
 
 /// Prompt for database URL with guidance and connection testing, with optional default
@@ -61,11 +64,12 @@ pub async fn prompt_database_url_with_guidance_and_default(
         // Test connection and detect version
         print!("🔄 Testing connection...");
         match test_database_connection_with_version(url).await {
-            Ok(pg_version) => {
+            Ok((pg_version, extensions)) => {
                 println!(" ✅ (PostgreSQL {})", pg_version);
                 return Ok(DatabaseConnectionResult {
                     url: url.to_string(),
                     pg_version: Some(pg_version),
+                    extensions,
                 });
             }
             Err(e) => {
@@ -261,14 +265,16 @@ async fn test_database_connection(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Test database connection and return PostgreSQL version
-async fn test_database_connection_with_version(url: &str) -> Result<String> {
+/// Test database connection and return PostgreSQL version plus installed
+/// extensions (fetched here so callers don't need a second connection).
+async fn test_database_connection_with_version(url: &str) -> Result<(String, Vec<String>)> {
     let pool = PgPool::connect(url).await?;
 
     // Get server version
     let row: (String,) = sqlx::query_as("SHOW server_version")
         .fetch_one(&pool)
         .await?;
+    let extensions = fetch_installed_extensions(&pool).await;
 
     pool.close().await;
 
@@ -280,7 +286,18 @@ async fn test_database_connection_with_version(url: &str) -> Result<String> {
         .unwrap_or(&row.0)
         .to_string();
 
-    Ok(version)
+    Ok((version, extensions))
+}
+
+/// Best-effort list of installed extensions; empty on query error. Used for
+/// shadow-image guidance during init.
+pub async fn fetch_installed_extensions(pool: &PgPool) -> Vec<String> {
+    let rows: Result<Vec<(String,)>, _> =
+        sqlx::query_as("SELECT extname FROM pg_extension ORDER BY extname")
+            .fetch_all(pool)
+            .await;
+    rows.map(|r| r.into_iter().map(|(n,)| n).collect())
+        .unwrap_or_default()
 }
 
 /// Extract major version from full version string (e.g., "15" from "15.4")

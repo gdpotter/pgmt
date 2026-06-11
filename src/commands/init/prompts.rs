@@ -24,24 +24,29 @@ pub async fn gather_init_options_with_args(
     let existing_databases = existing_config.and_then(|c| c.databases.as_ref());
     let existing_directories = existing_config.and_then(|c| c.directories.as_ref());
 
-    // Database URL - use CLI arg or prompt
-    let (dev_database_url, detected_pg_version) = if let Some(url) = &args.dev_url {
+    // Database URL - use CLI arg or prompt. The validation connection also
+    // fetches the installed extensions, so the shadow guidance below doesn't
+    // need to reconnect.
+    let (dev_database_url, detected_pg_version, detected_extensions) = if let Some(url) =
+        &args.dev_url
+    {
         // CLI arg provided - test connection and detect version
         print!("🔄 Testing connection...");
         match sqlx::PgPool::connect(url).await {
             Ok(pool) => {
                 let version: Result<(String,), _> =
                     sqlx::query_as("SHOW server_version").fetch_one(&pool).await;
+                let extensions = crate::prompts::fetch_installed_extensions(&pool).await;
                 pool.close().await;
                 match version {
                     Ok((v,)) => {
                         let pg_version = v.split_whitespace().next().unwrap_or(&v).to_string();
                         println!(" ✅ (PostgreSQL {})", pg_version);
-                        (url.clone(), Some(pg_version))
+                        (url.clone(), Some(pg_version), Some(extensions))
                     }
                     Err(_) => {
                         println!(" ✅");
-                        (url.clone(), None)
+                        (url.clone(), None, Some(extensions))
                     }
                 }
             }
@@ -55,13 +60,13 @@ pub async fn gather_init_options_with_args(
         let url = existing_databases
             .and_then(|d| d.dev_url.clone())
             .unwrap_or_else(|| "postgres://localhost/pgmt_dev".to_string());
-        (url, None)
+        (url, None, None)
     } else {
         // Interactive prompt - pass existing value as default
         let existing_url = existing_databases.and_then(|d| d.dev_url.clone());
         let result =
             crate::prompts::prompt_database_url_with_guidance_and_default(existing_url).await?;
-        (result.url, result.pg_version)
+        (result.url, result.pg_version, Some(result.extensions))
     };
 
     // Shadow database configuration. Precedence (clap enforces the flags are
@@ -81,7 +86,8 @@ pub async fn gather_init_options_with_args(
     } else if args.auto_shadow || args.shadow_pg_version.is_some() || args.defaults {
         // Still warn in the non-interactive paths — an auto shadow on a source
         // DB with nonstandard extensions fails at the first migration.
-        let nonstandard = detect_nonstandard_extensions(&dev_database_url).await;
+        let nonstandard =
+            nonstandard_extensions(detected_extensions.as_deref(), &dev_database_url).await;
         if !nonstandard.is_empty() {
             println!(
                 "⚠️  Extensions not in the stock postgres image: {}",
@@ -94,7 +100,8 @@ pub async fn gather_init_options_with_args(
         }
         crate::prompts::ShadowDatabaseInput::Auto
     } else {
-        let nonstandard = detect_nonstandard_extensions(&dev_database_url).await;
+        let nonstandard =
+            nonstandard_extensions(detected_extensions.as_deref(), &dev_database_url).await;
         crate::prompts::prompt_shadow_mode_with_explanation(&nonstandard).await?
     };
 
@@ -257,26 +264,29 @@ const STOCK_IMAGE_EXTENSIONS: &[&str] = &[
 ];
 
 /// Best-effort list of installed extensions the stock postgres image does not
-/// ship, so init can warn before configuring a shadow that would fail. Returns
-/// empty on any connection or query error — the warning is a nicety, not a
-/// hard requirement.
-async fn detect_nonstandard_extensions(url: &str) -> Vec<String> {
-    let pool = match sqlx::postgres::PgPoolOptions::new()
-        .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect(url)
-        .await
-    {
-        Ok(pool) => pool,
-        Err(_) => return Vec::new(),
+/// ship, so init can warn before configuring a shadow that would fail.
+///
+/// Uses the extensions already fetched over the validation connection when
+/// available; only the --defaults path (which never validated the URL)
+/// connects here. Returns empty on any connection or query error — the
+/// warning is a nicety, not a hard requirement.
+async fn nonstandard_extensions(detected: Option<&[String]>, url: &str) -> Vec<String> {
+    let installed = match detected {
+        Some(extensions) => extensions.to_vec(),
+        None => {
+            let pool = match sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(_) => return Vec::new(),
+            };
+            let extensions = crate::prompts::fetch_installed_extensions(&pool).await;
+            pool.close().await;
+            extensions
+        }
     };
-    let rows: Result<Vec<(String,)>, _> =
-        sqlx::query_as("SELECT extname FROM pg_extension ORDER BY extname")
-            .fetch_all(&pool)
-            .await;
-    pool.close().await;
-    let installed = rows
-        .map(|r| r.into_iter().map(|(n,)| n).collect::<Vec<_>>())
-        .unwrap_or_default();
     filter_nonstandard_extensions(installed)
 }
 
