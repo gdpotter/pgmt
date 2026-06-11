@@ -102,7 +102,8 @@ pub async fn gather_init_options_with_args(
     } else {
         let nonstandard =
             nonstandard_extensions(detected_extensions.as_deref(), &dev_database_url).await;
-        crate::prompts::prompt_shadow_mode_with_explanation(&nonstandard).await?
+        let existing_shadow = existing_databases.and_then(|d| d.shadow.as_ref());
+        crate::prompts::prompt_shadow_mode_with_explanation(&nonstandard, existing_shadow).await?
     };
 
     // Schema directory - CLI arg > existing > default

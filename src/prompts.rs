@@ -138,27 +138,56 @@ pub enum ShadowDatabaseInput {
     Manual(String),
 }
 
+/// Which menu entry to pre-select: the existing config's mode wins, except
+/// that a config which would fail (auto/no config while the source DB uses
+/// extensions the stock image lacks) is steered to the custom-image option.
+fn shadow_mode_default(
+    existing: Option<&crate::config::types::ShadowDatabaseInput>,
+    nonstandard_extensions: &[String],
+) -> usize {
+    let existing_docker = existing.and_then(|s| s.docker.as_ref());
+    let existing_url = existing.and_then(|s| s.url.as_ref());
+    if existing_docker.is_some() {
+        1
+    } else if existing_url.is_some() {
+        2
+    } else if !nonstandard_extensions.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
 /// Prompt for shadow database mode with explanation.
 ///
 /// `nonstandard_extensions` lists extensions installed in the source database
 /// that the stock `postgres` image does not ship (e.g. postgis). When non-empty
 /// we warn and pre-select the custom-image option, since an auto shadow would
 /// fail at the first migration.
+///
+/// `existing` (re-init) pre-selects the configured mode and pre-fills the
+/// image/platform/url inputs.
 pub async fn prompt_shadow_mode_with_explanation(
     nonstandard_extensions: &[String],
+    existing: Option<&crate::config::types::ShadowDatabaseInput>,
 ) -> Result<ShadowDatabaseInput> {
     // Check Docker availability first
     let (docker_available, debug_info) = crate::docker::DockerManager::is_available_verbose().await;
 
     println!("🛡️  Shadow database (for testing migrations safely)");
 
+    let existing_docker = existing.and_then(|s| s.docker.as_ref());
+    let existing_url = existing.and_then(|s| s.url.as_ref());
+
     if !docker_available {
         println!("   ⚠️  Docker not available - manual mode required");
         tracing::debug!("Docker availability details: {}", debug_info);
 
-        let url: String = Input::new()
-            .with_prompt("   Shadow database URL")
-            .interact_text()?;
+        let mut url_input = Input::new().with_prompt("   Shadow database URL");
+        if let Some(url) = existing_url {
+            url_input = url_input.default(url.clone());
+        }
+        let url: String = url_input.interact_text()?;
         return Ok(ShadowDatabaseInput::Manual(url.trim().to_string()));
     }
 
@@ -176,25 +205,29 @@ pub async fn prompt_shadow_mode_with_explanation(
         "Docker with a specific image (e.g. PostGIS)",
         "External database URL",
     ];
-    // Default to the custom-image option when the stock image won't work.
-    let default_choice = if nonstandard_extensions.is_empty() { 0 } else { 1 };
     let selection = Select::new()
         .with_prompt("   Shadow database mode")
         .items(&choices)
-        .default(default_choice)
+        .default(shadow_mode_default(existing, nonstandard_extensions))
         .interact()?;
 
     match selection {
         0 => Ok(ShadowDatabaseInput::Auto),
         1 => {
-            let image: String = Input::new()
-                .with_prompt("   Shadow Docker image (e.g. postgis/postgis:16-3.5)")
-                .interact_text()?;
+            let mut image_input =
+                Input::new().with_prompt("   Shadow Docker image (e.g. postgis/postgis:16-3.5)");
+            if let Some(image) = existing_docker.and_then(|d| d.image.as_ref()) {
+                image_input = image_input.default(image.clone());
+            }
+            let image: String = image_input.interact_text()?;
 
-            let platform: String = Input::new()
+            let mut platform_input = Input::new()
                 .with_prompt("   Platform (blank = host default, e.g. linux/amd64)")
-                .allow_empty(true)
-                .interact_text()?;
+                .allow_empty(true);
+            if let Some(platform) = existing_docker.and_then(|d| d.platform.as_ref()) {
+                platform_input = platform_input.default(platform.clone());
+            }
+            let platform: String = platform_input.interact_text()?;
             let platform = platform.trim();
 
             Ok(ShadowDatabaseInput::Docker {
@@ -203,9 +236,11 @@ pub async fn prompt_shadow_mode_with_explanation(
             })
         }
         _ => {
-            let url: String = Input::new()
-                .with_prompt("   Shadow database URL")
-                .interact_text()?;
+            let mut url_input = Input::new().with_prompt("   Shadow database URL");
+            if let Some(url) = existing_url {
+                url_input = url_input.default(url.clone());
+            }
+            let url: String = url_input.interact_text()?;
             Ok(ShadowDatabaseInput::Manual(url.trim().to_string()))
         }
     }
@@ -312,6 +347,43 @@ pub fn extract_major_version(full_version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shadow_mode_default() {
+        use crate::config::types::{
+            ShadowDatabaseInput as ShadowConfigInput, ShadowDockerInput,
+        };
+
+        let docker = ShadowConfigInput {
+            docker: Some(ShadowDockerInput {
+                image: Some("postgis/postgis:17-3.5".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let url = ShadowConfigInput {
+            auto: Some(false),
+            url: Some("postgres://localhost/shadow".to_string()),
+            ..Default::default()
+        };
+        let auto = ShadowConfigInput {
+            auto: Some(true),
+            ..Default::default()
+        };
+        let postgis = vec!["postgis".to_string()];
+
+        // Existing config's mode wins.
+        assert_eq!(shadow_mode_default(Some(&docker), &[]), 1);
+        assert_eq!(shadow_mode_default(Some(&docker), &postgis), 1);
+        assert_eq!(shadow_mode_default(Some(&url), &[]), 2);
+
+        // An auto config that would fail on nonstandard extensions is steered
+        // to the custom-image option; otherwise auto stays the default.
+        assert_eq!(shadow_mode_default(Some(&auto), &postgis), 1);
+        assert_eq!(shadow_mode_default(Some(&auto), &[]), 0);
+        assert_eq!(shadow_mode_default(None, &postgis), 1);
+        assert_eq!(shadow_mode_default(None, &[]), 0);
+    }
 
     #[test]
     fn test_prompt_required_string_with_validation() {
