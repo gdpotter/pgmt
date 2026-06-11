@@ -10,6 +10,7 @@ pub async fn import_from_directory(
     dir: PathBuf,
     shadow_config: &crate::config::types::ShadowDatabase,
     roles_file: Option<&Path>,
+    objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     let shadow_url = shadow_config.get_connection_string().await?;
 
@@ -20,6 +21,10 @@ pub async fn import_from_directory(
 
     // Connect to shadow database with retry logic (quiet mode to avoid slow query logging)
     let pool = connect_with_retry_quiet(&shadow_url).await?;
+
+    // Reset the managed universe before importing — custom shadow images
+    // preinstall extensions/schemas via init scripts (see import_from_sql_file).
+    crate::db::cleaner::clean_shadow_db(&pool, objects).await?;
 
     // Apply roles file first if it exists (roles must exist before GRANTs)
     if let Some(roles_path) = roles_file

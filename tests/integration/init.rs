@@ -36,6 +36,7 @@ fn test_init_options(project_dir: PathBuf) -> InitOptions {
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
+        objects: Default::default(),
     }
 }
 
@@ -804,6 +805,7 @@ GRANT SELECT ON import_test_items TO import_test_role;
         ImportSource::SqlFile(schema_file),
         &ShadowDatabase::Auto,
         Some(roles_file.as_path()),
+        &pgmt::config::types::Objects::default(),
     )
     .await?;
 
@@ -1168,6 +1170,99 @@ async fn test_init_comprehensive_schema_import() -> Result<()> {
         assert!(
             extensions_content.contains("btree_gist"),
             "extensions.sql should contain btree_gist (required for exclusion constraints)"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Custom shadow images (postgis/postgis, supabase/postgres) preinstall
+/// extensions and schemas via init scripts, so the "fresh" shadow is not
+/// empty. The import must perform the same scoped clean as `pgmt apply`, or
+/// an unmodified pg_dump (plain `CREATE SCHEMA topology;`) fails with
+/// "schema already exists".
+#[tokio::test]
+async fn test_sql_file_import_cleans_preinstalled_shadow_state() -> Result<()> {
+    with_test_db(async |db| {
+        // Simulate image-preinstalled state (postgis creates topology/tiger
+        // schemas in POSTGRES_DB before pgmt ever connects).
+        db.execute("CREATE SCHEMA topology").await;
+        db.execute("CREATE TABLE topology.leftover (id int)").await;
+
+        let temp_dir = TempDir::new()?;
+        let dump = temp_dir.path().join("dump.sql");
+        fs::write(
+            &dump,
+            "CREATE SCHEMA topology;\nCREATE TABLE topology.t (id int);\n",
+        )?;
+
+        let shadow = pgmt::config::types::ShadowDatabase::Url(db.url());
+        let catalog = pgmt::commands::init::import::import_from_sql_file(
+            dump,
+            &shadow,
+            None,
+            &pgmt::config::types::Objects::default(),
+        )
+        .await
+        .expect("unmodified dump should apply after the managed schemas are cleaned");
+
+        assert!(
+            catalog
+                .tables
+                .iter()
+                .any(|t| t.schema == "topology" && t.name == "t"),
+            "imported table should be in the catalog"
+        );
+        assert!(
+            !catalog.tables.iter().any(|t| t.name == "leftover"),
+            "preinstalled state should have been cleaned before import"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// The import clean is scoped by the objects config: non-managed schemas
+/// (platform substrate like Supabase's auth/storage, provided by the shadow
+/// image) must survive so imported schemas can reference them.
+#[tokio::test]
+async fn test_sql_file_import_preserves_unmanaged_schemas() -> Result<()> {
+    with_test_db(async |db| {
+        // Platform substrate provided by the shadow image.
+        db.execute("CREATE SCHEMA platform").await;
+        db.execute("CREATE TABLE platform.users (id int PRIMARY KEY)")
+            .await;
+
+        let temp_dir = TempDir::new()?;
+        let dump = temp_dir.path().join("dump.sql");
+        fs::write(
+            &dump,
+            "CREATE TABLE public.profiles (user_id int REFERENCES platform.users (id));\n",
+        )?;
+
+        // Manage only public, as the Supabase guide prescribes.
+        let objects = pgmt::config::types::Objects {
+            include: pgmt::config::types::ObjectInclude {
+                schemas: vec!["public".to_string()],
+                tables: vec![],
+            },
+            exclude: Default::default(),
+        };
+
+        let shadow = pgmt::config::types::ShadowDatabase::Url(db.url());
+        let catalog =
+            pgmt::commands::init::import::import_from_sql_file(dump, &shadow, None, &objects)
+                .await
+                .expect("import referencing a preserved platform schema should succeed");
+
+        assert!(
+            catalog
+                .tables
+                .iter()
+                .any(|t| t.schema == "public" && t.name == "profiles"),
+            "imported table referencing the platform schema should be in the catalog"
         );
 
         Ok(())

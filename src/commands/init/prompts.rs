@@ -161,6 +161,13 @@ pub async fn gather_init_options_with_args(
         None
     };
 
+    // Managed-object scoping: honor an existing pgmt.yaml on re-init so the
+    // shadow clean during import preserves non-managed (platform) schemas.
+    let objects = crate::config::builder::resolve_objects_input(
+        existing_defaults.and_then(|d| d.objects.as_ref()),
+        &crate::config::types::Objects::default(),
+    );
+
     Ok(InitOptions {
         project_dir,
         dev_database_url,
@@ -175,6 +182,7 @@ pub async fn gather_init_options_with_args(
         baseline_config,
         tracking_table: crate::config::types::TrackingTable::default(),
         roles_file,
+        objects,
     })
 }
 

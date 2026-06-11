@@ -41,6 +41,10 @@ pub struct ExistingConfigDefaults {
     pub baselines_dir: Option<String>,
     #[allow(dead_code)] // Future: use for roles file prompting
     pub roles_file: Option<String>,
+    /// Managed-object scoping from the existing config. Used to scope the
+    /// shadow clean during schema import (preserves platform schemas like
+    /// Supabase's auth/storage when include.schemas is set).
+    pub objects: Option<crate::config::types::ObjectsInput>,
 }
 
 impl From<&crate::config::types::ConfigInput> for ExistingConfigDefaults {
@@ -78,6 +82,7 @@ impl From<&crate::config::types::ConfigInput> for ExistingConfigDefaults {
                 .directories
                 .as_ref()
                 .and_then(|d| d.roles_file.clone()),
+            objects: config.objects.clone(),
         }
     }
 }
@@ -176,6 +181,9 @@ pub struct InitOptions {
     pub tracking_table: crate::config::types::TrackingTable,
     /// Path to roles file (None means no roles file, Some("roles.sql") means auto-detected or explicit)
     pub roles_file: Option<String>,
+    /// Managed-object scoping (from an existing pgmt.yaml on re-init, defaults
+    /// otherwise). Scopes the shadow clean during schema import.
+    pub objects: crate::config::types::Objects,
 }
 
 /// Configuration options for what database objects to manage
@@ -340,6 +348,7 @@ async fn import_catalog_from_source(
         import_source.clone(),
         &shadow_database,
         roles_path.as_deref(),
+        &options.objects,
     )
     .await
     {

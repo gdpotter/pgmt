@@ -23,19 +23,25 @@ impl ImportSource {}
 
 /// Import a schema from various sources into a temporary shadow database
 /// and return the catalog representation
+///
+/// `objects` scopes the shadow clean performed before applying SQL sources:
+/// managed schemas are reset while platform schemas provided by the shadow
+/// image (e.g. Supabase's auth/storage) are preserved — the same contract
+/// `pgmt apply` operates under.
 pub async fn import_schema(
     source: ImportSource,
     shadow_config: &crate::config::types::ShadowDatabase,
     roles_file: Option<&Path>,
+    objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     match source {
         ImportSource::Directory(dir) => {
             validate_directory_source(&dir)?;
-            import_from_directory(dir, shadow_config, roles_file).await
+            import_from_directory(dir, shadow_config, roles_file, objects).await
         }
         ImportSource::SqlFile(file) => {
             validate_sql_file(&file)?;
-            import_from_sql_file(file, shadow_config, roles_file).await
+            import_from_sql_file(file, shadow_config, roles_file, objects).await
         }
         ImportSource::Database(url) => {
             validate_database_url(&url)?;

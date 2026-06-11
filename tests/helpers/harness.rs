@@ -19,6 +19,16 @@ impl TestDatabase {
         &self.pool
     }
 
+    /// Connection URL for this isolated test database (e.g. to use it as a
+    /// shadow database via `ShadowDatabase::Url`)
+    pub fn url(&self) -> String {
+        if let Some(last_slash) = self.base_url.rfind('/') {
+            format!("{}/{}", &self.base_url[..last_slash], self.db_name)
+        } else {
+            format!("{}/{}", self.base_url, self.db_name)
+        }
+    }
+
     /// Acquire a connection from the pool for direct fetch function calls
     pub async fn conn(&self) -> sqlx::pool::PoolConnection<sqlx::Postgres> {
         self.pool.acquire().await.unwrap()

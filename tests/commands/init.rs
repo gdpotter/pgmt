@@ -26,6 +26,7 @@ fn test_init_options(project_dir: PathBuf) -> InitOptions {
         baseline_config: BaselineCreationConfig::default(),
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
+        objects: Default::default(),
     }
 }
 

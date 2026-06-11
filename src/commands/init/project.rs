@@ -124,6 +124,7 @@ mod tests {
             baseline_config: BaselineCreationConfig::default(),
             tracking_table: crate::config::types::TrackingTable::default(),
             roles_file: None,
+            objects: Default::default(),
         }
     }
 

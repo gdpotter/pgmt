@@ -136,33 +136,7 @@ impl ConfigBuilder {
     }
 
     fn resolve_objects(&self, defaults: &Objects) -> Objects {
-        let obj_input = self.config_input.objects.as_ref();
-
-        let include = obj_input
-            .and_then(|o| o.include.as_ref())
-            .map(|i| ObjectInclude {
-                schemas: i.schemas.as_ref().cloned().unwrap_or_default(),
-                tables: i.tables.as_ref().cloned().unwrap_or_default(),
-            })
-            .unwrap_or_else(|| defaults.include.clone());
-
-        let exclude = obj_input
-            .and_then(|o| o.exclude.as_ref())
-            .map(|e| ObjectExclude {
-                schemas: e
-                    .exclude_schemas
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(|| defaults.exclude.schemas.clone()),
-                tables: e
-                    .exclude_tables
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(|| defaults.exclude.tables.clone()),
-            })
-            .unwrap_or_else(|| defaults.exclude.clone());
-
-        Objects { include, exclude }
+        resolve_objects_input(self.config_input.objects.as_ref(), defaults)
     }
 
     fn resolve_migration(&self, defaults: &Migration) -> Migration {
@@ -240,4 +214,37 @@ impl Default for ConfigBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolve an optional `objects` config input against defaults.
+///
+/// Used by `ConfigBuilder::resolve` and by `pgmt init`, which needs the scoping
+/// from an existing pgmt.yaml before a full config can be resolved (to scope
+/// the shadow clean during schema import).
+pub fn resolve_objects_input(obj_input: Option<&ObjectsInput>, defaults: &Objects) -> Objects {
+    let include = obj_input
+        .and_then(|o| o.include.as_ref())
+        .map(|i| ObjectInclude {
+            schemas: i.schemas.as_ref().cloned().unwrap_or_default(),
+            tables: i.tables.as_ref().cloned().unwrap_or_default(),
+        })
+        .unwrap_or_else(|| defaults.include.clone());
+
+    let exclude = obj_input
+        .and_then(|o| o.exclude.as_ref())
+        .map(|e| ObjectExclude {
+            schemas: e
+                .exclude_schemas
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| defaults.exclude.schemas.clone()),
+            tables: e
+                .exclude_tables
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| defaults.exclude.tables.clone()),
+        })
+        .unwrap_or_else(|| defaults.exclude.clone());
+
+    Objects { include, exclude }
 }
