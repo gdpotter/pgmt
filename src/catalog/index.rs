@@ -383,11 +383,13 @@ async fn fetch_index_dependencies(
                 _ => continue,
             }
         };
-        // Multiple referents can resolve to the same extension — dedupe.
-        let entry = dep_map.entry(key).or_default();
-        if !entry.contains(&dep_id) {
-            entry.push(dep_id);
-        }
+        dep_map.entry(key).or_default().push(dep_id);
+    }
+
+    // Multiple referents can resolve to the same extension — dedupe.
+    for deps in dep_map.values_mut() {
+        let mut seen = std::collections::HashSet::new();
+        deps.retain(|d| seen.insert(d.clone()));
     }
 
     Ok(dep_map)

@@ -421,3 +421,109 @@ fn test_config_builder_shadow_docker_platform() {
         _ => panic!("Expected Docker shadow database"),
     }
 }
+
+#[test]
+fn test_shadow_merge_docker_over_docker_preserves_unanswered_fields() {
+    // Both layers are docker mode: the overlay only replaces fields it sets,
+    // so hand-maintained fields (environment, container_name, auto_cleanup)
+    // survive a re-init that re-answers docker mode.
+    let base = ShadowDatabaseInput {
+        auto: None,
+        url: None,
+        docker: Some(ShadowDockerInput {
+            image: Some("postgis/postgis:16-3.4".to_string()),
+            container_name: Some("pgmt_shadow_app".to_string()),
+            auto_cleanup: Some(false),
+            environment: Some(
+                [("POSTGRES_PASSWORD".to_string(), "secret".to_string())].into(),
+            ),
+            ..Default::default()
+        }),
+    };
+    let overlay = ShadowDatabaseInput {
+        auto: None,
+        url: None,
+        docker: Some(ShadowDockerInput {
+            image: Some("postgis/postgis:17-3.5".to_string()),
+            ..Default::default()
+        }),
+    };
+
+    let merged = base.merge_with(overlay);
+    let docker = merged.docker.expect("docker mode preserved");
+    assert_eq!(docker.image.as_deref(), Some("postgis/postgis:17-3.5"));
+    assert_eq!(docker.container_name.as_deref(), Some("pgmt_shadow_app"));
+    assert_eq!(docker.auto_cleanup, Some(false));
+    assert!(docker.environment.is_some());
+    assert_eq!(merged.url, None);
+}
+
+#[test]
+fn test_shadow_merge_mode_switch_to_auto_clears_docker() {
+    // Picking Auto is a deliberate mode choice: the stale docker block must
+    // not survive, or the resolver would still pick docker mode.
+    let base = ShadowDatabaseInput {
+        auto: None,
+        url: None,
+        docker: Some(ShadowDockerInput {
+            image: Some("postgis/postgis:16-3.5".to_string()),
+            container_name: Some("pgmt_shadow_app".to_string()),
+            ..Default::default()
+        }),
+    };
+    let overlay = ShadowDatabaseInput {
+        auto: Some(true),
+        url: None,
+        docker: None,
+    };
+
+    let merged = base.merge_with(overlay);
+    assert_eq!(merged.auto, Some(true));
+    assert_eq!(merged.url, None);
+    assert!(merged.docker.is_none(), "stale docker block must be cleared");
+}
+
+#[test]
+fn test_shadow_merge_mode_switch_to_url_clears_docker() {
+    let base = ShadowDatabaseInput {
+        auto: None,
+        url: None,
+        docker: Some(ShadowDockerInput {
+            image: Some("postgis/postgis:16-3.5".to_string()),
+            ..Default::default()
+        }),
+    };
+    let overlay = ShadowDatabaseInput {
+        auto: Some(false),
+        url: Some("postgres://localhost/shadow".to_string()),
+        docker: None,
+    };
+
+    let merged = base.merge_with(overlay);
+    assert_eq!(merged.url.as_deref(), Some("postgres://localhost/shadow"));
+    assert!(merged.docker.is_none(), "stale docker block must be cleared");
+}
+
+#[test]
+fn test_shadow_merge_mode_switch_url_to_docker_clears_url() {
+    let base = ShadowDatabaseInput {
+        auto: Some(false),
+        url: Some("postgres://localhost/shadow".to_string()),
+        docker: None,
+    };
+    let overlay = ShadowDatabaseInput {
+        auto: None,
+        url: None,
+        docker: Some(ShadowDockerInput {
+            image: Some("postgres:18-alpine".to_string()),
+            ..Default::default()
+        }),
+    };
+
+    let merged = base.merge_with(overlay);
+    assert!(merged.url.is_none(), "stale url must be cleared");
+    assert_eq!(
+        merged.docker.and_then(|d| d.image).as_deref(),
+        Some("postgres:18-alpine")
+    );
+}

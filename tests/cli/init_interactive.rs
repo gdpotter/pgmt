@@ -327,3 +327,43 @@ objects:
 
     Ok(())
 }
+
+/// The shadow flags express three mutually exclusive modes; clap must reject
+/// contradictory combinations so the precedence chain in gather never sees them.
+#[test]
+fn test_shadow_flag_constraints() {
+    use clap::Parser;
+    use pgmt::commands::init::InitArgs;
+
+    // --shadow-platform is meaningless without --shadow-image
+    assert!(InitArgs::try_parse_from(["init", "--shadow-platform", "linux/amd64"]).is_err());
+
+    // --shadow-image conflicts with the auto-shadow flags
+    assert!(
+        InitArgs::try_parse_from(["init", "--shadow-image", "x", "--shadow-pg-version", "16"])
+            .is_err()
+    );
+    assert!(InitArgs::try_parse_from(["init", "--shadow-image", "x", "--auto-shadow"]).is_err());
+
+    // --shadow-url conflicts with every other shadow flag
+    assert!(InitArgs::try_parse_from(["init", "--shadow-url", "u", "--shadow-image", "x"]).is_err());
+    assert!(InitArgs::try_parse_from(["init", "--shadow-url", "u", "--auto-shadow"]).is_err());
+    assert!(
+        InitArgs::try_parse_from(["init", "--shadow-url", "u", "--shadow-pg-version", "16"])
+            .is_err()
+    );
+
+    // Valid combinations parse
+    assert!(
+        InitArgs::try_parse_from([
+            "init",
+            "--shadow-image",
+            "postgis/postgis:16-3.5",
+            "--shadow-platform",
+            "linux/amd64"
+        ])
+        .is_ok()
+    );
+    assert!(InitArgs::try_parse_from(["init", "--shadow-url", "postgres://x/y"]).is_ok());
+    assert!(InitArgs::try_parse_from(["init", "--auto-shadow", "--shadow-pg-version", "16"]).is_ok());
+}
