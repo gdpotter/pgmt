@@ -507,7 +507,7 @@ async fn test_init_catalog_loading_for_validation() -> Result<()> {
         .await;
 
         // TEST: Catalog loading works correctly for init validation
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // Verify catalog has expected objects for validation
         assert_eq!(catalog.tables.len(), 1, "Should have 1 table");
@@ -559,7 +559,7 @@ async fn test_init_schema_generation_from_catalog() -> Result<()> {
         .await;
 
         // Load catalog
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // TEST: Schema generator can create files from catalog
         let temp_dir = TempDir::new()?;
@@ -648,7 +648,7 @@ async fn test_init_object_counting_for_context_prompts() -> Result<()> {
         .await;
 
         // Load catalog
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // TEST: Verify object counts for context-aware prompts
         assert_eq!(catalog.tables.len(), 3, "Should have 3 tables");
@@ -724,7 +724,7 @@ async fn test_init_handles_complex_dependencies() -> Result<()> {
         .await;
 
         // Load catalog
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // TEST: Verify dependency tracking
         assert!(!catalog.extensions.is_empty(), "Should have extension");
@@ -752,7 +752,7 @@ async fn test_init_handles_complex_dependencies() -> Result<()> {
 async fn test_init_empty_database_has_no_objects() -> Result<()> {
     with_test_db(async |db| {
         // TEST: Empty database (only system objects)
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // Verify empty catalog (system objects are filtered out)
         assert_eq!(catalog.tables.len(), 0, "Should have no user tables");
@@ -945,7 +945,7 @@ async fn test_init_schema_generation_includes_revoke_for_revoked_defaults() -> R
         .await;
 
         // Load catalog from the database
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // Generate schema files
         let temp_dir = TempDir::new()?;
@@ -1072,7 +1072,7 @@ async fn test_init_comprehensive_schema_import() -> Result<()> {
         db.execute(&schema_sql).await;
 
         // Load catalog
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await?;
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await?;
 
         // Verify comprehensive coverage
         assert!(

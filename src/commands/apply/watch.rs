@@ -213,7 +213,7 @@ async fn perform_single_apply(
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     // Analyze differences
-    let old_catalog = Catalog::load(dev_pool).await?;
+    let old_catalog = Catalog::load_unfiltered(dev_pool).await?;
     let new_catalog = processed_schema.with_file_dependencies_applied();
 
     // Apply object filtering

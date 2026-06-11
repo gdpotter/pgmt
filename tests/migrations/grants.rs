@@ -601,7 +601,7 @@ async fn test_grants_filtered_by_excluded_schema() {
             .await;
 
         // Load the catalog
-        let catalog = Catalog::load(db.pool()).await.unwrap();
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
 
         // Verify grants exist in the unfiltered catalog for both schemas
         let excluded_grants_before = catalog

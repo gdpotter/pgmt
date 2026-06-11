@@ -45,7 +45,7 @@ pub async fn import_from_directory(
     }
 
     // Extract catalog
-    let catalog = Catalog::load(&pool).await?;
+    let catalog = Catalog::load_unfiltered(&pool).await?;
 
     // Cleanup
     pool.close().await;

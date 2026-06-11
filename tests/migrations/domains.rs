@@ -760,8 +760,8 @@ async fn test_domain_cascade_on_base_type_change() -> Result<()> {
                 .execute("CREATE DOMAIN mailing_address AS address")
                 .await;
 
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             let mut steps = diff_all(&initial_catalog, &target_catalog);
             steps = cascade::expand(steps, &initial_catalog, &target_catalog);

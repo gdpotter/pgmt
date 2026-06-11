@@ -304,7 +304,7 @@ async fn test_dependent_object_ordering() -> Result<()> {
 #[tokio::test]
 async fn test_empty_database_catalog() {
     with_test_db(async |db| {
-        let catalog = Catalog::load(db.pool()).await.unwrap();
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
 
         // Empty database should have empty collections
         assert!(catalog.tables.is_empty());

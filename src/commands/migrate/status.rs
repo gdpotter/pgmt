@@ -251,5 +251,5 @@ async fn reconstruct_expected_state_from_schema_files(
     }
 
     // Load and return the reconstructed catalog
-    Catalog::load(shadow_pool).await
+    Catalog::load_unfiltered(shadow_pool).await
 }

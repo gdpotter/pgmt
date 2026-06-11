@@ -12,7 +12,7 @@ pub async fn cmd_validate(config: &Config) -> Result<()> {
             .await?;
 
     println!("📊 Loading current database schema...");
-    let db_catalog = Catalog::load(&dev_pool).await?;
+    let db_catalog = Catalog::load_unfiltered(&dev_pool).await?;
 
     let validation_config = ValidationConfig::default();
     let root_dir = Path::new(".");

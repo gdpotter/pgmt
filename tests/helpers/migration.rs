@@ -87,8 +87,8 @@ impl MigrationTestHelper {
         }
 
         // Load catalogs
-        let initial_catalog = Catalog::load(initial_db.pool()).await?;
-        let target_catalog = Catalog::load(target_db.pool()).await?;
+        let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+        let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
         // Run migration pipeline
         let steps = self
@@ -106,7 +106,7 @@ impl MigrationTestHelper {
         self.execute_migration(&fresh_db, &steps).await?;
 
         // Verify final state
-        let final_catalog = Catalog::load(fresh_db.pool()).await?;
+        let final_catalog = Catalog::load_unfiltered(fresh_db.pool()).await?;
         verification(&steps, &final_catalog)?;
 
         // Cleanup test databases
@@ -174,8 +174,8 @@ impl MigrationTestHelper {
         }
 
         // Load catalogs
-        let initial_catalog = Catalog::load(initial_db.pool()).await?;
-        let target_catalog = Catalog::load(target_db.pool()).await?;
+        let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+        let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
         // Run verification with catalogs
         let result = verification(initial_catalog, target_catalog);

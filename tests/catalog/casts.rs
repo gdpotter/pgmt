@@ -161,7 +161,7 @@ async fn test_cast_function_routing_orders_cast_before_view() {
         db.execute("CREATE VIEW big_balances AS SELECT balance::bigint AS cents FROM accounts")
             .await;
 
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await.unwrap();
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await.unwrap();
         let view_id = DbObjectId::View {
             schema: "public".to_string(),
             name: "big_balances".to_string(),
@@ -195,7 +195,7 @@ async fn test_cast_function_routing_over_connects_direct_caller() {
         db.execute("CREATE VIEW direct_caller AS SELECT money_to_bigint(NULL::money_amount) AS c")
             .await;
 
-        let catalog = pgmt::catalog::Catalog::load(db.pool()).await.unwrap();
+        let catalog = pgmt::catalog::Catalog::load_unfiltered(db.pool()).await.unwrap();
         let view_id = DbObjectId::View {
             schema: "public".to_string(),
             name: "direct_caller".to_string(),

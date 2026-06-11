@@ -90,7 +90,7 @@ pub async fn cmd_apply(
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     info!("Analyzing database catalogs...");
-    let old_catalog = Catalog::load(&dev_pool)
+    let old_catalog = Catalog::load_unfiltered(&dev_pool)
         .await
         .context("Failed to load catalog from development database")?;
     let new_catalog = processed_schema.with_file_dependencies_applied();
@@ -144,7 +144,7 @@ pub async fn cmd_apply(
                 let reprocessed_schema = reprocessor.process_schema_directory(&schema_dir).await?;
 
                 info!("Re-analyzing database catalogs...");
-                let new_old_catalog = Catalog::load(&dev_pool).await?;
+                let new_old_catalog = Catalog::load_unfiltered(&dev_pool).await?;
                 let new_new_catalog = reprocessed_schema.with_file_dependencies_applied();
 
                 let old_filtered = filter.filter_catalog(new_old_catalog);

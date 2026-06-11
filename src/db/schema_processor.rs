@@ -165,7 +165,7 @@ impl SchemaProcessor {
 
         // Step 5: Load full catalog once at the end for diff operations
         debug!("Loading full catalog for diff operations");
-        let final_catalog = Catalog::load(&self.pool)
+        let final_catalog = Catalog::load_unfiltered(&self.pool)
             .await
             .context("Failed to load final catalog")?;
 

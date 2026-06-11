@@ -289,7 +289,7 @@ async fn test_function_grant_with_custom_type_arguments_match() {
         .await;
 
         // Load the full catalog (which sets consistent search_path)
-        let catalog = Catalog::load(db.pool()).await.unwrap();
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
 
         // Find the function
         let function = catalog
@@ -422,7 +422,7 @@ async fn test_catalog_contains_id() {
         db.execute("CREATE TABLE test_contains_schema.my_table (id SERIAL)").await;
         db.execute("CREATE FUNCTION test_contains_schema.my_func() RETURNS INT AS $$ SELECT 1; $$ LANGUAGE SQL").await;
 
-        let catalog = Catalog::load(db.pool()).await.unwrap();
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
 
         // Test contains_id for schema
         assert!(catalog.contains_id(&DbObjectId::Schema {

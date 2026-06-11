@@ -8,6 +8,8 @@ use crate::config::Config;
 use crate::config::types::Objects;
 use crate::db::cleaner;
 use crate::db::schema_executor::BaselineExecutor;
+use crate::config::filter::ObjectFilter;
+use crate::config::types::TrackingTable;
 use crate::migration::{
     discover_migrations, find_baseline_for_version, find_latest_baseline,
     generate_baseline_filename,
@@ -36,6 +38,15 @@ pub struct BaselineOperationResult {
     pub path: PathBuf,
 }
 
+/// Shadow catalogs feed baseline rendering and validation: scope them to the
+/// managed universe. Shadow branches legitimately contain image-provided
+/// substrate (excluded schemas, their extensions), which must never appear in
+/// baselines or count as a validation difference.
+async fn load_managed_catalog(shadow_pool: &PgPool, objects: &Objects) -> Result<Catalog> {
+    let filter = ObjectFilter::new(objects, &TrackingTable::default());
+    Catalog::load_managed(shadow_pool, &filter).await
+}
+
 /// Load a baseline SQL file into a shadow database and return the resulting catalog
 pub async fn load_baseline_into_shadow(
     shadow_pool: &PgPool,
@@ -62,7 +73,7 @@ pub async fn load_baseline_into_shadow(
         .await
         .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
 
-    Catalog::load(shadow_pool).await
+    load_managed_catalog(shadow_pool, objects).await
 }
 
 /// Update or create a baseline file for a migration
@@ -159,7 +170,8 @@ pub async fn get_migration_starting_state(
         }
 
         // Apply any migrations that come after the baseline
-        apply_migrations_after_version(shadow_pool, migrations_dir, baseline.version, config).await
+        apply_migrations_after_version(shadow_pool, migrations_dir, baseline.version, config, objects)
+            .await
     } else {
         if config.verbose {
             info!("No existing baseline found, reconstructing from existing migrations");
@@ -195,6 +207,7 @@ pub async fn get_migration_update_starting_state(
             baseline.version,
             target_version,
             config,
+            objects,
         )
         .await
     } else {
@@ -222,6 +235,7 @@ async fn apply_migrations_after_version(
     migrations_dir: &Path,
     after_version: u64,
     config: &BaselineConfig,
+    objects: &Objects,
 ) -> Result<Catalog> {
     let all_migrations = discover_migrations(migrations_dir)?;
     let migrations_to_apply: Vec<_> = all_migrations
@@ -267,7 +281,7 @@ async fn apply_migrations_after_version(
         }
     }
 
-    Catalog::load(shadow_pool).await
+    load_managed_catalog(shadow_pool, objects).await
 }
 
 /// Apply migrations in a version range (after_version, before_version)
@@ -278,6 +292,7 @@ async fn apply_migrations_in_range(
     after_version: u64,
     before_version: u64,
     config: &BaselineConfig,
+    objects: &Objects,
 ) -> Result<Catalog> {
     let all_migrations = discover_migrations(migrations_dir)?;
     let migrations_to_apply: Vec<_> = all_migrations
@@ -323,7 +338,7 @@ async fn apply_migrations_in_range(
         }
     }
 
-    Catalog::load(shadow_pool).await
+    load_managed_catalog(shadow_pool, objects).await
 }
 
 /// Reconstruct catalog by applying all migrations in chronological order
@@ -342,7 +357,7 @@ async fn reconstruct_from_migration_chain(
 
     if migrations.is_empty() {
         println!("No existing migrations found, starting from empty schema");
-        return Catalog::load(shadow_pool).await;
+        return load_managed_catalog(shadow_pool, objects).await;
     }
 
     println!(
@@ -377,7 +392,7 @@ async fn reconstruct_from_migration_chain(
             })?;
     }
 
-    Catalog::load(shadow_pool).await
+    load_managed_catalog(shadow_pool, objects).await
 }
 
 /// Reconstruct catalog by applying migrations before a specific version
@@ -402,7 +417,7 @@ async fn reconstruct_from_migration_chain_before_version(
             "No existing migrations found before {}, starting from empty schema",
             target_version
         );
-        return Catalog::load(shadow_pool).await;
+        return load_managed_catalog(shadow_pool, objects).await;
     }
 
     println!(
@@ -438,7 +453,7 @@ async fn reconstruct_from_migration_chain_before_version(
             })?;
     }
 
-    Catalog::load(shadow_pool).await
+    load_managed_catalog(shadow_pool, objects).await
 }
 
 /// Helper to determine if a baseline should be created or updated for a migration

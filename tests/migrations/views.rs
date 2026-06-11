@@ -182,8 +182,8 @@ async fn test_table_column_type_change_cascades_to_view() -> Result<()> {
             target_db.execute("CREATE VIEW test_schema.user_stats AS SELECT id, count FROM test_schema.users WHERE count > 0").await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline - cascade should handle view dependency
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -237,7 +237,7 @@ async fn test_table_column_type_change_cascades_to_view() -> Result<()> {
             }
 
             // Verify final state exactly
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.tables.len(), 1);
             assert_eq!(final_catalog.views.len(), 1);
 
@@ -292,8 +292,8 @@ async fn test_view_dependency_chain() -> Result<()> {
             // Note: only high_value_orders is removed, active_orders remains
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -324,7 +324,7 @@ async fn test_view_dependency_chain() -> Result<()> {
             }
 
             // Verify final state exactly
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.tables.len(), 1);
             assert_eq!(final_catalog.views.len(), 0); // Both views should be gone
 
@@ -358,8 +358,8 @@ async fn test_cross_schema_view_dependencies() -> Result<()> {
             target_db.execute("CREATE VIEW reporting.low_stock AS SELECT id, name FROM inventory.items WHERE quantity < 10").await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -412,7 +412,7 @@ async fn test_cross_schema_view_dependencies() -> Result<()> {
             }
 
             // Verify final state exactly
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert!(final_catalog.schemas.len() >= 2);
             assert_eq!(final_catalog.tables.len(), 1);
             assert_eq!(final_catalog.views.len(), 1);
@@ -462,8 +462,8 @@ async fn test_view_with_custom_type_dependency() -> Result<()> {
             target_db.execute("CREATE VIEW test_schema.active_accounts AS SELECT id, name FROM test_schema.accounts WHERE status = 'active'").await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -516,7 +516,7 @@ async fn test_view_with_custom_type_dependency() -> Result<()> {
             }
 
             // Verify final state exactly
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.types.len(), 1);
             assert_eq!(final_catalog.tables.len(), 1);
             assert_eq!(final_catalog.views.len(), 1);
@@ -584,8 +584,8 @@ async fn test_view_comment_migration() -> Result<()> {
                 .await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -617,7 +617,7 @@ async fn test_view_comment_migration() -> Result<()> {
             }
 
             // Verify final state
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.views.len(), 1);
 
             let commented_view = &final_catalog.views[0];
@@ -659,8 +659,8 @@ async fn test_drop_view_comment_migration() -> Result<()> {
                 .await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -691,7 +691,7 @@ async fn test_drop_view_comment_migration() -> Result<()> {
             }
 
             // Verify final state
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.views.len(), 1);
 
             let uncommented_view = &final_catalog.views[0];

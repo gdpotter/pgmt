@@ -59,7 +59,22 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    pub async fn load(pool: &PgPool) -> anyhow::Result<Self> {
+    /// Load only the objects pgmt manages: the physical catalog scoped by the
+    /// objects config. This is what diff/render/validate consumers should
+    /// use — comparing or rendering an unfiltered catalog leaks image-provided
+    /// substrate (the shadow branch legitimately contains it).
+    pub async fn load_managed(
+        pool: &PgPool,
+        filter: &crate::config::filter::ObjectFilter,
+    ) -> anyhow::Result<Self> {
+        Ok(filter.filter_catalog(Self::load_unfiltered(pool).await?))
+    }
+
+    /// Load the raw physical catalog, including objects outside pgmt's managed
+    /// universe. Only for callers that genuinely need the physical world
+    /// (substrate detection, init import before scoping is decided) or that
+    /// provably filter downstream.
+    pub async fn load_unfiltered(pool: &PgPool) -> anyhow::Result<Self> {
         Self::load_with_file_dependencies(pool, None).await
     }
 

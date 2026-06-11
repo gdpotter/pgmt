@@ -47,7 +47,7 @@ pub async fn cmd_diff(config: &Config, root_dir: &Path, args: DiffArgs) -> Resul
     let dev_pool =
         crate::db::connection::connect_to_database(&config.databases.dev, "development database")
             .await?;
-    let dev_catalog = Catalog::load(&dev_pool).await?;
+    let dev_catalog = Catalog::load_unfiltered(&dev_pool).await?;
 
     // Apply object filtering (excludes tracking table and configured exclusions)
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);

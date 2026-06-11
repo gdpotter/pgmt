@@ -4,7 +4,7 @@
 //! (DbObjectId), not full object details. It's used during schema processing to track which
 //! files create which objects, where we only need to know object existence, not their details.
 //!
-//! The single UNION ALL query is ~10-25x faster than a full Catalog::load() because it:
+//! The single UNION ALL query is ~10-25x faster than a full Catalog::load_unfiltered() because it:
 //! - Runs one query instead of 50+
 //! - Skips columns, comments, dependencies, function bodies, etc.
 //! - Returns only the minimal info needed to construct DbObjectId

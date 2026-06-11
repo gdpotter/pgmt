@@ -209,7 +209,7 @@ pub async fn apply_schema_to_shadow_with_roles(
         // Use the traditional method
         load_and_apply_schema(&shadow_pool, schema_dir, &schema_config, objects).await?;
 
-        Catalog::load(&shadow_pool)
+        Catalog::load_unfiltered(&shadow_pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to load catalog from shadow database: {}", e))?
     };

@@ -14,7 +14,7 @@ pub async fn verify_final_state(
     debug!("Verifying final database state...");
 
     // Load the current dev database catalog after changes
-    let current_catalog = Catalog::load(dev_pool)
+    let current_catalog = Catalog::load_unfiltered(dev_pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load final catalog for verification: {}", e))?;
 

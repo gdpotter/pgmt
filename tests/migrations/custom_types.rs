@@ -602,8 +602,8 @@ async fn test_composite_type_cascades_to_dependent_composite_type() -> Result<()
                 .await;
 
             // Load catalogs
-            let initial_catalog = Catalog::load(initial_db.pool()).await?;
-            let target_catalog = Catalog::load(target_db.pool()).await?;
+            let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+            let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Run full migration pipeline
             let mut steps = diff_all(&initial_catalog, &target_catalog);
@@ -677,7 +677,7 @@ async fn test_composite_type_cascades_to_dependent_composite_type() -> Result<()
             }
 
             // Verify final state
-            let final_catalog = Catalog::load(initial_db.pool()).await?;
+            let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             assert_eq!(final_catalog.types.len(), 2);
 
             let base_type = final_catalog
