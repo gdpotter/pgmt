@@ -293,7 +293,7 @@ WHERE priority = 'high';"#,
 
             // Schema should come first
             let schema_pos = migration_content
-                .find("CREATE SCHEMA \"app\"")
+                .find("CREATE SCHEMA IF NOT EXISTS \"app\"")
                 .expect("Schema not found");
 
             // Type should come before function and table

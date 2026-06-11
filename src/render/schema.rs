@@ -8,7 +8,10 @@ impl SqlRenderer for SchemaOperation {
     fn to_sql(&self) -> Vec<RenderedSql> {
         match self {
             SchemaOperation::Create { name } => vec![RenderedSql {
-                sql: format!("CREATE SCHEMA {};", quote_ident(name)),
+                // IF NOT EXISTS: shadow images can provide schemas (PostGIS's
+                // topology, Supabase's auth) that survive the template reset
+                // and may also appear in managed schema files.
+                sql: format!("CREATE SCHEMA IF NOT EXISTS {};", quote_ident(name)),
                 safety: Safety::Safe,
             }],
             SchemaOperation::Drop { name } => vec![RenderedSql {
@@ -40,7 +43,7 @@ mod tests {
         };
         let rendered = op.to_sql();
         assert_eq!(rendered.len(), 1);
-        assert_eq!(rendered[0].sql, "CREATE SCHEMA \"app\";");
+        assert_eq!(rendered[0].sql, "CREATE SCHEMA IF NOT EXISTS \"app\";");
         assert_eq!(rendered[0].safety, Safety::Safe);
     }
 
@@ -50,7 +53,7 @@ mod tests {
             name: "my-schema".to_string(),
         };
         let rendered = op.to_sql();
-        assert_eq!(rendered[0].sql, "CREATE SCHEMA \"my-schema\";");
+        assert_eq!(rendered[0].sql, "CREATE SCHEMA IF NOT EXISTS \"my-schema\";");
     }
 
     #[test]

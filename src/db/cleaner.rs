@@ -1,9 +1,41 @@
 use crate::config::filter::ObjectFilter;
 use crate::config::types::{Objects, TrackingTable};
 use crate::render::quote_ident;
+use once_cell::sync::Lazy;
 use sqlx::{Executor, PgPool, Row};
+use std::collections::HashSet;
 use std::format;
+use std::sync::Mutex;
 use tracing::debug;
+
+/// Shadow databases provisioned this process from a pristine template
+/// (Docker-managed shadows; see `DockerManager::start_shadow_database`).
+/// They are already in fresh-image state, and the scoped clean below would
+/// destroy the image-provided substrate the template preserves — so
+/// `clean_shadow_db` skips them. External `shadow.url` databases are never
+/// registered: their lifecycle belongs to whoever provisioned them (CI, an
+/// orchestrator, the user), and the scoped clean is the contract there.
+static TEMPLATE_PROVISIONED: Lazy<Mutex<HashSet<(String, u16, String)>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Record that the shadow database at host:port/database was just provisioned
+/// from the pristine template.
+pub fn mark_template_provisioned(host: &str, port: u16, database: &str) {
+    TEMPLATE_PROVISIONED
+        .lock()
+        .unwrap()
+        .insert((host.to_string(), port, database.to_string()));
+}
+
+fn is_template_provisioned(pool: &PgPool) -> bool {
+    let options = pool.connect_options();
+    let key = (
+        options.get_host().to_string(),
+        options.get_port(),
+        options.get_database().unwrap_or_default().to_string(),
+    );
+    TEMPLATE_PROVISIONED.lock().unwrap().contains(&key)
+}
 
 /// Clean the shadow database by dropping managed schemas.
 ///
@@ -11,7 +43,15 @@ use tracing::debug;
 /// will be dropped. Schemas excluded from management (e.g. Supabase's `auth`,
 /// `storage`, `realtime`) are preserved, allowing custom shadow database images
 /// to provide platform-specific schemas that user schema files can reference.
+///
+/// Docker-managed shadows were already reset from a pristine template at
+/// provision time and are skipped entirely.
 pub async fn clean_shadow_db(pool: &PgPool, objects: &Objects) -> anyhow::Result<()> {
+    if is_template_provisioned(pool) {
+        debug!("Shadow was provisioned from template this run; skipping clean");
+        return Ok(());
+    }
+
     let filter = ObjectFilter::new(objects, &TrackingTable::default());
 
     // Find all non-system schemas

@@ -162,3 +162,97 @@ async fn test_shadow_database_config_docker() -> Result<()> {
 
     Ok(())
 }
+
+/// Docker-managed shadows are reset from a pristine template on reuse: state
+/// from previous runs disappears, and the scoped clean (which would drop
+/// image-provided substrate) skips template-provisioned shadows entirely.
+#[tokio::test]
+async fn test_shadow_resets_from_template_on_reuse() -> Result<()> {
+    with_docker_cleanup(async {
+        let docker_manager = match DockerManager::new().await {
+            Ok(manager) => manager,
+            Err(e) => {
+                println!("Skipping Docker test - Docker daemon not available: {}", e);
+                return;
+            }
+        };
+
+        let mut environment = HashMap::new();
+        environment.insert("POSTGRES_PASSWORD".to_string(), "test_password".to_string());
+        let container_name = format!("pgmt_test_template_{}", Uuid::new_v4().simple());
+
+        // Keep the container alive between the two provisioning calls.
+        let config = ShadowDockerConfig {
+            version: None,
+            image: "postgres:18-alpine".to_string(),
+            platform: None,
+            environment,
+            container_name: Some(container_name),
+            auto_cleanup: false,
+            volumes: None,
+            network: None,
+        };
+
+        let url = docker_manager
+            .start_shadow_database(&config)
+            .await
+            .unwrap()
+            .into_connection_string();
+
+        // Dirty the shadow.
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        sqlx::query("CREATE SCHEMA junk_schema")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE junk (id int)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        // Re-provision; auto_cleanup so RAII removes the container at the end.
+        let config = ShadowDockerConfig {
+            auto_cleanup: true,
+            ..config
+        };
+        let shadow = docker_manager.start_shadow_database(&config).await.unwrap();
+        let pool = sqlx::PgPool::connect(&shadow.connection_string())
+            .await
+            .unwrap();
+
+        let junk: Option<String> = sqlx::query_scalar("SELECT to_regclass('public.junk')::text")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(junk.is_none(), "reset must discard previous run's state");
+        let template_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = 'pgmt_template')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(template_exists, "pristine template should exist");
+
+        // The scoped clean must skip template-provisioned shadows: an object
+        // created after the reset survives a clean_shadow_db call.
+        sqlx::query("CREATE SCHEMA post_reset")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pgmt::db::cleaner::clean_shadow_db(&pool, &pgmt::config::types::Objects::default())
+            .await
+            .unwrap();
+        let survives: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'post_reset')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(survives, "clean_shadow_db must no-op on template-provisioned shadows");
+
+        pool.close().await;
+    })
+    .await;
+
+    Ok(())
+}

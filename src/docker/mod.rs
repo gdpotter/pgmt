@@ -319,9 +319,15 @@ impl DockerManager {
             .find_existing_container(&container_name, config)
             .await?
         {
-            if self.is_container_healthy(&existing_info.id).await? {
+            if !self.is_container_healthy(&existing_info.id).await? {
+                warn!(
+                    "Existing container {} is unhealthy, removing",
+                    container_name
+                );
+                self.remove_container(&existing_info.id, true).await?;
+            } else if reset_from_template(&existing_info).await? {
                 debug!(
-                    "Using existing healthy PostgreSQL container: {}",
+                    "Reusing PostgreSQL container {} (shadow reset from template)",
                     container_name
                 );
                 // Register for cleanup (backup to RAII)
@@ -334,8 +340,10 @@ impl DockerManager {
                     auto_cleanup: config.auto_cleanup,
                 });
             } else {
+                // No pristine template to restore from (container predates
+                // template support) — the shadow may be dirty, so recreate.
                 warn!(
-                    "Existing container {} is unhealthy, removing",
+                    "Existing container {} has no pristine template, recreating",
                     container_name
                 );
                 self.remove_container(&existing_info.id, true).await?;
@@ -497,6 +505,11 @@ impl DockerManager {
             password,
         };
 
+        // The image's init scripts have finished (postgres is ready), so the
+        // shadow database is in fresh-image state: snapshot it as the pristine
+        // template that future runs reset from.
+        snapshot_template(&container_info).await?;
+
         // Register container for cleanup at process exit (backup to RAII)
         if config.auto_cleanup {
             register_container(container.id.clone());
@@ -609,7 +622,7 @@ impl DockerManager {
     async fn find_existing_container(
         &self,
         name: &str,
-        _config: &ShadowDockerConfig,
+        config: &ShadowDockerConfig,
     ) -> Result<Option<ContainerInfo>> {
         let list_options = ListContainersOptions {
             all: true,
@@ -631,7 +644,9 @@ impl DockerManager {
             && let (Some(id), Some(names)) = (&container.id, &container.names)
             && let Some(_container_name) = names.first()
         {
-            // Extract port information
+            // Extract port information. Credentials come from the same config
+            // that provisioned the container — custom POSTGRES_* env (e.g. the
+            // Supabase image) must round-trip through reuse.
             if let Some(ports) = &container.ports {
                 for port in ports {
                     if port.private_port == 5432 && port.public_port.is_some() {
@@ -639,9 +654,21 @@ impl DockerManager {
                             id: id.clone(),
                             host: "127.0.0.1".to_string(),
                             port: port.public_port.unwrap(),
-                            database: "pgmt_shadow".to_string(),
-                            username: "postgres".to_string(),
-                            password: "pgmt_shadow_password".to_string(), // Default, may need to be configurable
+                            database: config
+                                .environment
+                                .get("POSTGRES_DB")
+                                .cloned()
+                                .unwrap_or_else(|| "pgmt_shadow".to_string()),
+                            username: config
+                                .environment
+                                .get("POSTGRES_USER")
+                                .cloned()
+                                .unwrap_or_else(|| "postgres".to_string()),
+                            password: config
+                                .environment
+                                .get("POSTGRES_PASSWORD")
+                                .cloned()
+                                .unwrap_or_else(|| "pgmt_shadow_password".to_string()),
                         }));
                     }
                 }
@@ -1070,6 +1097,100 @@ pub async fn cleanup_all_containers() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Database holding the pristine fresh-image state of the shadow, snapshotted
+/// right after the container's init scripts finish. Every later run resets the
+/// shadow from it (`DROP DATABASE` + `CREATE DATABASE ... TEMPLATE`), which —
+/// unlike dropping schemas — cannot miss anything and preserves image-provided
+/// substrate (PostGIS's tiger/topology, Supabase's auth/storage, …).
+const SHADOW_TEMPLATE_DB: &str = "pgmt_template";
+
+/// Maintenance connection for CREATE/DROP DATABASE: those statements cannot
+/// run from the database being copied or dropped.
+async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
+    let admin_db = if info.database == "postgres" {
+        "template1"
+    } else {
+        "postgres"
+    };
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}?sslmode=disable",
+        info.username, info.password, info.host, info.port, admin_db
+    );
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&url)
+        .await
+        .map_err(|e| anyhow!("Failed to open maintenance connection to shadow container: {}", e))
+}
+
+/// Snapshot the just-initialized shadow database as the pristine template.
+async fn snapshot_template(info: &ContainerInfo) -> Result<()> {
+    use sqlx::Executor;
+    let admin = admin_pool(info).await?;
+    admin
+        .execute(
+            format!(
+                "CREATE DATABASE {} TEMPLATE {}",
+                crate::render::quote_ident(SHADOW_TEMPLATE_DB),
+                crate::render::quote_ident(&info.database)
+            )
+            .as_str(),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to snapshot pristine shadow template: {}", e))?;
+    admin.close().await;
+    crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
+    debug!("Snapshotted pristine shadow state into {}", SHADOW_TEMPLATE_DB);
+    Ok(())
+}
+
+/// Reset the shadow database from the pristine template. Returns false when
+/// the container has no template to restore from (it predates template
+/// support), in which case the caller must recreate the container.
+async fn reset_from_template(info: &ContainerInfo) -> Result<bool> {
+    use sqlx::Executor;
+    let admin = admin_pool(info).await?;
+
+    let template_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(SHADOW_TEMPLATE_DB)
+            .fetch_one(&admin)
+            .await?;
+    if !template_exists {
+        admin.close().await;
+        return Ok(false);
+    }
+
+    let reset_start = std::time::Instant::now();
+    admin
+        .execute(
+            format!(
+                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                crate::render::quote_ident(&info.database)
+            )
+            .as_str(),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to drop shadow database for reset: {}", e))?;
+    admin
+        .execute(
+            format!(
+                "CREATE DATABASE {} TEMPLATE {}",
+                crate::render::quote_ident(&info.database),
+                crate::render::quote_ident(SHADOW_TEMPLATE_DB)
+            )
+            .as_str(),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to recreate shadow database from template: {}", e))?;
+    admin.close().await;
+
+    crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
+    debug!("Shadow reset from template in {:?}", reset_start.elapsed());
+    Ok(true)
 }
 
 /// Whether a locally cached image satisfies a requested platform
