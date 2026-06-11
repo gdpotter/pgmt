@@ -130,7 +130,7 @@ fn test_init_workflow_components() -> Result<()> {
     assert!(project_path.join("schema_baselines").exists());
 
     // Test config file generation
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify config was created
     assert!(project_path.join("pgmt.yaml").exists());
@@ -179,7 +179,7 @@ fn test_init_workflow_error_handling() -> Result<()> {
 
     // Config generation should work
     let result =
-        pgmt::commands::init::project::generate_config_file(&options, &options.project_dir);
+        pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir);
     assert!(result.is_ok());
 
     // Import validation would be handled separately in the import logic

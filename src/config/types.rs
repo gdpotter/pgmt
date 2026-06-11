@@ -3,13 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Raw configuration input - all fields Optional for merging
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ConfigInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub databases: Option<DatabasesInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub directories: Option<DirectoriesInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub objects: Option<ObjectsInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub migration: Option<MigrationInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<SchemaInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub docker: Option<DockerInput>,
 }
 
@@ -25,33 +31,48 @@ pub struct Config {
 }
 
 // Database configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct DatabasesInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dev_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowDatabaseInput>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ShadowDatabaseInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub docker: Option<ShadowDockerInput>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ShadowDockerInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     /// Platform to request when pulling/running the image (e.g. "linux/amd64").
     /// Needed for images only published for one architecture (e.g. postgis/postgis
     /// has no arm64 build) so they can run under emulation on other hosts.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub container_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_cleanup: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
 }
 
@@ -134,11 +155,15 @@ impl ShadowDockerConfig {
 }
 
 // Directory configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct DirectoriesInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub migrations_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub baselines_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub roles_file: Option<String>,
 }
 
@@ -154,21 +179,27 @@ pub struct Directories {
 // Note: Boolean toggles (comments, grants, triggers, extensions) have been removed.
 // Schema files are now the source of truth - what's in your files is what gets managed.
 // Use exclude patterns to filter objects during init import.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ObjectsInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<ObjectIncludeInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<ObjectExcludeInput>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ObjectIncludeInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schemas: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct ObjectExcludeInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_schemas: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_tables: Option<Vec<String>>,
 }
 
@@ -191,19 +222,27 @@ pub struct ObjectExclude {
 }
 
 // Migration configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct MigrationInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub validate_baseline_consistency: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub create_baselines_by_default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tracking_table: Option<TrackingTableInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub column_order: Option<ColumnOrderMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filename_prefix: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct TrackingTableInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -237,9 +276,11 @@ pub enum ColumnOrderMode {
 }
 
 // Docker configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct DockerInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_cleanup: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub check_system_identifier: Option<bool>,
 }
 
@@ -250,10 +291,13 @@ pub struct Docker {
 }
 
 // Schema configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct SchemaInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub augment_dependencies_from_files: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub validate_file_dependencies: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub verbose_file_processing: Option<bool>,
 }
 

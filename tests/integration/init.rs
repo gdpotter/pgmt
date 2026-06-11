@@ -49,7 +49,7 @@ async fn test_init_workflow_minimal_setup() -> Result<()> {
     options.dev_database_url = "postgres://localhost/test_minimal".to_string();
 
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     assert!(project_path.exists());
     assert!(project_path.join("schema").exists());
@@ -91,7 +91,7 @@ async fn test_init_workflow_custom_configuration() -> Result<()> {
 
     // Execute the init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify custom schema directory structure
     assert!(project_path.join("db_schema").exists());
@@ -151,7 +151,7 @@ COMMENT ON COLUMN app.users.email IS 'User email address';
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // For this test, we verify the structure was created
     // The actual SQL import would require database connectivity
@@ -200,7 +200,7 @@ async fn test_init_workflow_with_directory_import() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Test the enhanced SQL file discovery functionality
     let discovered_files = pgmt::db::sql_executor::discover_sql_files_ordered(&import_dir)?;
@@ -261,7 +261,7 @@ async fn test_init_workflow_with_prisma_style_migrations() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Test enhanced discovery with Prisma structure
     let discovered_files = pgmt::db::sql_executor::discover_sql_files_ordered(&prisma_migrations)?;
@@ -322,7 +322,7 @@ async fn test_init_workflow_with_mixed_migration_structure() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Test discovery of mixed structure
     let discovered_files = pgmt::db::sql_executor::discover_sql_files_ordered(&migrations_dir)?;
@@ -357,7 +357,7 @@ async fn test_init_workflow_with_empty_migration_directory() -> Result<()> {
 
     // Execute init workflow - should succeed even with empty directory
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Test discovery with empty directory (should warn but not fail)
     let discovered_files = pgmt::db::sql_executor::discover_sql_files_ordered(&empty_migrations)?;
@@ -386,7 +386,7 @@ async fn test_init_workflow_preserves_existing_gitignore() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify that existing .gitignore was preserved
     let final_gitignore_content = fs::read_to_string(project_path.join(".gitignore"))?;
@@ -415,7 +415,7 @@ async fn test_init_workflow_nested_project_directory() -> Result<()> {
 
     // Execute init workflow - should create nested directories
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify nested structure was created
     assert!(project_path.exists());
@@ -845,7 +845,7 @@ async fn test_init_workflow_custom_directories() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify custom directories were created
     assert!(
@@ -894,12 +894,19 @@ async fn test_init_workflow_detected_pg_version() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify config contains detected version (should be converted to major version)
     let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
-    assert!(
-        config_content.contains("version: \"15\""),
+    let parsed: pgmt::config::types::ConfigInput = serde_yaml::from_str(&config_content)?;
+    let docker = parsed
+        .databases
+        .and_then(|d| d.shadow)
+        .and_then(|s| s.docker)
+        .expect("shadow.docker should be present");
+    assert_eq!(
+        docker.version.as_deref(),
+        Some("15"),
         "Config should contain detected pg version (major only): {}",
         config_content
     );
@@ -1031,12 +1038,19 @@ async fn test_init_workflow_explicit_pg_version_precedence() -> Result<()> {
 
     // Execute init workflow
     pgmt::commands::init::project::create_project_structure(&options)?;
-    pgmt::commands::init::project::generate_config_file(&options, &options.project_dir)?;
+    pgmt::commands::init::project::generate_config_file(&options, None, &options.project_dir)?;
 
     // Verify config uses explicit version (16), not detected (15)
     let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
-    assert!(
-        config_content.contains("version: \"16\""),
+    let parsed: pgmt::config::types::ConfigInput = serde_yaml::from_str(&config_content)?;
+    let docker = parsed
+        .databases
+        .and_then(|d| d.shadow)
+        .and_then(|s| s.docker)
+        .expect("shadow.docker should be present");
+    assert_eq!(
+        docker.version.as_deref(),
+        Some("16"),
         "Config should use explicit version (16), not detected (15): {}",
         config_content
     );

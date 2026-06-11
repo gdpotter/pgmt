@@ -46,7 +46,46 @@ impl DatabasesInput {
             dev_url: other.dev_url.or(self.dev_url),
             shadow_url: other.shadow_url.or(self.shadow_url),
             target_url: other.target_url.or(self.target_url),
-            shadow: other.shadow.or(self.shadow),
+            shadow: match (self.shadow, other.shadow) {
+                (Some(a), Some(b)) => Some(a.merge_with(b)),
+                (a, b) => b.or(a),
+            },
+        }
+    }
+}
+
+impl ShadowDatabaseInput {
+    /// An overlay replaces the shadow *mode* (auto / url / docker) wholesale,
+    /// but when both layers are docker mode the overlay only replaces the
+    /// fields it sets — hand-maintained fields like `environment` or
+    /// `container_name` survive a re-init that re-answers docker mode.
+    pub fn merge_with(self, other: ShadowDatabaseInput) -> ShadowDatabaseInput {
+        match (self.docker, other.docker) {
+            (Some(a), Some(b)) if other.url.is_none() => ShadowDatabaseInput {
+                auto: other.auto,
+                url: None,
+                docker: Some(a.merge_with(b)),
+            },
+            (_, b) => ShadowDatabaseInput {
+                auto: other.auto,
+                url: other.url,
+                docker: b,
+            },
+        }
+    }
+}
+
+impl ShadowDockerInput {
+    pub fn merge_with(self, other: ShadowDockerInput) -> ShadowDockerInput {
+        ShadowDockerInput {
+            version: other.version.or(self.version),
+            image: other.image.or(self.image),
+            platform: other.platform.or(self.platform),
+            environment: other.environment.or(self.environment),
+            container_name: other.container_name.or(self.container_name),
+            auto_cleanup: other.auto_cleanup.or(self.auto_cleanup),
+            volumes: other.volumes.or(self.volumes),
+            network: other.network.or(self.network),
         }
     }
 }

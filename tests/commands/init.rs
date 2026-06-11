@@ -221,7 +221,7 @@ fn test_generate_config_file_auto_shadow() -> Result<()> {
     let mut options = test_init_options(temp_dir.clone());
     options.dev_database_url = "postgres://localhost/myapp_dev".to_string();
 
-    generate_config_file(&options, &temp_dir)?;
+    generate_config_file(&options, None, &temp_dir)?;
 
     let config_path = temp_dir.join("pgmt.yaml");
     assert!(config_path.exists());
@@ -260,7 +260,7 @@ fn test_generate_config_file_manual_shadow() -> Result<()> {
         extensions: true,
     };
 
-    generate_config_file(&options, &temp_dir)?;
+    generate_config_file(&options, None, &temp_dir)?;
 
     let config_path = temp_dir.join("pgmt.yaml");
     assert!(config_path.exists());

@@ -227,7 +227,7 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
 
     // Step 5: Write config file LAST (now we have all the information)
     println!("📝 Generating configuration file...");
-    generate_config_file(&options, &options.project_dir)?;
+    generate_config_file(&options, existing_input.as_ref(), &options.project_dir)?;
     println!("✅ pgmt.yaml created");
 
     // Success summary
