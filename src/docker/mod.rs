@@ -1086,7 +1086,20 @@ fn image_matches_platform(
         return false;
     };
     local_os.is_some_and(|os| os.eq_ignore_ascii_case(want_os))
-        && local_arch.is_some_and(|arch| arch.eq_ignore_ascii_case(want_arch))
+        && local_arch.is_some_and(|arch| normalize_arch(arch) == normalize_arch(want_arch))
+}
+
+/// Docker reports architectures as GOARCH values ("amd64", "arm64") but users
+/// commonly write the uname spellings in pgmt.yaml; without normalization a
+/// `platform: linux/x86_64` would never match the cached image and trigger a
+/// registry pull on every run.
+fn normalize_arch(arch: &str) -> String {
+    let arch = arch.to_ascii_lowercase();
+    match arch.as_str() {
+        "x86_64" | "x86-64" => "amd64".to_string(),
+        "aarch64" => "arm64".to_string(),
+        _ => arch,
+    }
 }
 
 #[cfg(test)]
@@ -1118,6 +1131,23 @@ mod tests {
             Some("linux"),
             Some("arm"),
             Some("linux/arm/v7")
+        ));
+
+        // Arch aliases: users write uname spellings, Docker reports GOARCH.
+        assert!(image_matches_platform(
+            Some("linux"),
+            Some("amd64"),
+            Some("linux/x86_64")
+        ));
+        assert!(image_matches_platform(
+            Some("linux"),
+            Some("arm64"),
+            Some("linux/aarch64")
+        ));
+        assert!(!image_matches_platform(
+            Some("linux"),
+            Some("arm64"),
+            Some("linux/x86_64")
         ));
 
         // Unparseable request or missing local metadata: re-pull.
