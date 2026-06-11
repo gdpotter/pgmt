@@ -5,11 +5,11 @@ description: Current status and future development plans for pgmt.
 
 **Project Status:** Alpha - Approaching first release. Not yet recommended for production use.
 
-_Last updated: December 2024_
+_Last updated: June 2026_
 
 ## Current State
 
-pgmt supports most PostgreSQL schema objects: tables, views, functions, triggers, indexes, constraints, custom types, sequences, extensions, and grants. See [Supported Features](/docs/reference/supported-features) for the complete list.
+pgmt supports most PostgreSQL schema objects: tables, views, functions, aggregates, operators, casts, triggers, indexes, constraints, custom types, domains, sequences, extensions, RLS policies, comments, and grants. See [Supported Features](/docs/reference/supported-features) for the complete list.
 
 ## Future Directions
 

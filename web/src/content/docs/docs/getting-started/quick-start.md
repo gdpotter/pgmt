@@ -43,7 +43,7 @@ docker run -d \
   -e POSTGRES_PASSWORD=dev \
   -e POSTGRES_DB=myapp_dev \
   -p 5432:5432 \
-  postgres:15
+  postgres:18
 ```
 
 **Already have PostgreSQL?** Just create a database:
@@ -77,10 +77,11 @@ my-app/
 
 **Want more control?** Run `pgmt init` without `--defaults` for an interactive setup that:
 
+- Detects your PostgreSQL version and installed extensions, and warns when the
+  stock shadow image won't work (e.g. PostGIS) with a prompt for a custom image
 - Shows you exactly what's in your database (if importing existing schema)
-- Lets you configure which object types to manage (comments, grants, triggers, extensions)
-- Automatically validates generated schema files
-- Provides clear guidance if dependency issues are found
+- Lets you choose what the generated schema files include (grants, triggers, …)
+- Automatically validates generated schema files and explains dependency issues
 
 ## Create Your First Schema
 

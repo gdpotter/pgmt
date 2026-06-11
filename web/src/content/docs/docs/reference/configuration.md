@@ -77,12 +77,11 @@ objects:
   exclude:
     schemas: ['pg_*', 'information_schema'] # Glob patterns supported
     tables: ['cache_*', 'temp_*']
-
-  comments: true # Manage object comments
-  grants: true # Manage permissions
-  triggers: true # Manage triggers
-  extensions: true # Manage extensions
 ```
+
+There are no per-object-type toggles: your schema files are the source of
+truth, so whatever they contain (grants, triggers, comments, …) is what pgmt
+manages.
 
 ### migration
 
@@ -151,10 +150,6 @@ pgmt apply --no-comments --no-grants
 | `directories.migrations_dir`            | `migrations`                     |
 | `directories.baselines_dir`             | `schema_baselines`               |
 | `objects.exclude.schemas`               | `["pg_*", "information_schema"]` |
-| `objects.comments`                      | `true`                           |
-| `objects.grants`                        | `true`                           |
-| `objects.triggers`                      | `true`                           |
-| `objects.extensions`                    | `true`                           |
 | `migration.default_mode`                | `safe_only`                      |
 | `migration.create_baselines_by_default` | `false`                          |
 | `migration.column_order`                | `strict`                         |

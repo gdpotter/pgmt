@@ -72,7 +72,8 @@ pgmt init [OPTIONS]
 --baselines-dir <DIR>         # Baselines directory name (default: "schema_baselines")
 --auto-shadow                 # Use auto shadow database
 --shadow-pg-version <VER>     # PostgreSQL version for auto shadow (e.g., "14", "15", "16")
---shadow-image <IMAGE>        # Shadow Docker image (e.g. "postgis/postgis:16-3.5"); conflicts with --shadow-pg-version
+--shadow-image <IMAGE>        # Shadow Docker image (e.g. "postgis/postgis:16-3.5"); conflicts with --shadow-pg-version/--auto-shadow
+--baseline-description <TEXT> # Custom description for the created baseline
 --shadow-platform <PLATFORM>  # Platform for the shadow image (e.g. "linux/amd64") for single-arch images
 --shadow-url <URL>            # Use an external shadow database at this URL (skips Docker)
 --roles-file <PATH>           # Path to roles file (default: auto-detect roles.sql)
@@ -153,6 +154,10 @@ pgmt apply [OPTIONS]
 --safe-only                   # Apply only safe changes, skip destructive
 --require-approval            # Fail if destructive changes exist
 --watch                       # Watch for file changes
+--schemas <GLOB>...           # Only manage matching schemas
+--tables <GLOB>...            # Only manage matching tables
+--exclude-schemas <GLOB>...   # Exclude matching schemas
+--exclude-tables <GLOB>...    # Exclude matching tables
 ```
 
 **Default behavior:**
@@ -330,6 +335,7 @@ pgmt migrate validate [OPTIONS]
 ```bash
 --format <FORMAT>             # human | json
 --verbose                     # Detailed output
+--ignore-migrations <NAMES>   # Comma-separated migrations to skip during validation
 ```
 
 **Examples:**
@@ -462,10 +468,11 @@ pgmt config list --format json
 ## Environment Variables
 
 ```bash
-PGMT_CONFIG_FILE              # Override config file location
-PGMT_DEV_URL                  # Override dev database URL
-PGMT_SHADOW_URL               # Override shadow database URL
-PGMT_TARGET_URL               # Override target database URL
+DEV_DATABASE_URL              # Dev database URL (when not set via config/flag)
+TARGET_DATABASE_URL           # Target database URL (when not set via config/flag)
+PGMT_KEEP_SHADOW_ON_FAILURE   # Keep the shadow container alive after a startup
+                              # failure for debugging (any non-empty value)
+RUST_LOG                      # Log filter (e.g. RUST_LOG=debug)
 ```
 
 ## Exit Codes

@@ -383,8 +383,8 @@ Current implementation status for all PostgreSQL objects and operations in pgmt.
 
 - ✅ **PostgreSQL 13+** - Comprehensive support for modern PostgreSQL
 - ✅ **Cloud PostgreSQL** - Works with all major cloud providers
-- ✅ **Docker integration** - Development database automation
-- 🚧 **Docker shadow databases** - Planned for enhanced isolation
+- ✅ **Docker shadow databases** - Disposable shadow containers, custom images
+  (PostGIS, Supabase, …) with platform pinning for single-arch images
 
 ### Performance and Scale
 
