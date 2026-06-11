@@ -18,7 +18,7 @@ Requires PostgreSQL 13 or later.
 | Object                  | Status | Notes                                                                                                      |
 | ----------------------- | ------ | ---------------------------------------------------------------------------------------------------------- |
 | Schemas                 | ✅     |                                                                                                            |
-| Tables                  | ✅     | Columns, defaults, type changes, RLS settings                                                              |
+| Tables                  | ✅     | Columns, defaults, identity columns (`GENERATED ... AS IDENTITY`), type changes, RLS settings              |
 | Views                   | ✅     | Including `security_barrier` / `security_invoker`                                                          |
 | Materialized views      | ❌     | Planned                                                                                                    |
 | Partitioned tables      | ❌     | Planned                                                                                                    |
@@ -30,7 +30,7 @@ Requires PostgreSQL 13 or later.
 | Aggregates              | ✅     |                                                                                                            |
 | Operators               | ✅     | All clauses (`COMMUTATOR`, `NEGATOR`, `RESTRICT`, `JOIN`, `HASHES`, `MERGES`), prefix operators            |
 | Casts                   | ✅     | `WITH FUNCTION`, `WITH INOUT`, `WITHOUT FUNCTION`; see known issues for views using I/O casts              |
-| Sequences               | 🚧     | Create/drop, `OWNED BY` (SERIAL integration); some `ALTER SEQUENCE` options missing                        |
+| Sequences               | 🚧     | Create/drop, `OWNED BY` (SERIAL integration); identity-owned sequences are part of their column, not standalone objects; some `ALTER SEQUENCE` options missing |
 | Indexes                 | ✅     | All access methods; partial, expression, and covering indexes; operator classes, collations, storage parameters, tablespaces |
 | Constraints             | ✅     | Primary key, unique, foreign key (actions, deferrable), check, exclusion                                   |
 | Triggers                | ✅     | All timings and events, `WHEN` conditions, transition tables, column-specific `UPDATE OF`                  |

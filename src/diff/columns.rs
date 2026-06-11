@@ -47,6 +47,28 @@ pub fn diff(old: Option<&Column>, new: Option<&Column>) -> Vec<ColumnAction> {
                 }
             }
 
+            // Check for changes in IDENTITY
+            match (o.identity, n.identity) {
+                (None, Some(kind)) => {
+                    changes.push(ColumnAction::AddIdentity {
+                        name: n.name.clone(),
+                        kind,
+                    });
+                }
+                (Some(_), None) => {
+                    changes.push(ColumnAction::DropIdentity {
+                        name: n.name.clone(),
+                    });
+                }
+                (Some(old_kind), Some(new_kind)) if old_kind != new_kind => {
+                    changes.push(ColumnAction::SetIdentityKind {
+                        name: n.name.clone(),
+                        kind: new_kind,
+                    });
+                }
+                _ => {}
+            }
+
             // Check for changes in DEFAULT
             match (&o.default, &n.default) {
                 (Some(_), None) => {

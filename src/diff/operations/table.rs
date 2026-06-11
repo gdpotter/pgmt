@@ -1,7 +1,7 @@
 //! Table operations
 
 use super::{CommentOperation, OperationKind};
-use crate::catalog::table::{Column, PrimaryKey};
+use crate::catalog::table::{Column, IdentityKind, PrimaryKey};
 
 #[derive(Debug, Clone)]
 pub enum TableOperation {
@@ -44,6 +44,9 @@ pub enum ColumnAction {
     SetDefault { name: String, default: String },
     DropDefault { name: String },
     DropGenerated { name: String },
+    AddIdentity { name: String, kind: IdentityKind },
+    SetIdentityKind { name: String, kind: IdentityKind },
+    DropIdentity { name: String },
     AlterType { name: String, new_type: String },
     AddPrimaryKey { constraint: PrimaryKey },
     DropPrimaryKey { name: String },

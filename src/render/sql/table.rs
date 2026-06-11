@@ -45,6 +45,11 @@ pub fn render_create_table(table: &Table) -> String {
             col_def.push_str(&format!(" GENERATED ALWAYS AS ({}) STORED", generated_expr));
         }
 
+        // Identity column (mutually exclusive with generated and default)
+        if let Some(kind) = column.identity {
+            col_def.push_str(&format!(" GENERATED {} AS IDENTITY", kind.as_sql()));
+        }
+
         // Default value
         if let Some(ref default) = column.default {
             col_def.push_str(&format!(" DEFAULT {}", default));
@@ -99,6 +104,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -108,6 +114,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -136,6 +143,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -145,6 +153,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -177,6 +186,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -186,6 +196,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -218,6 +229,7 @@ mod tests {
                     default: Some("nextval('posts_id_seq'::regclass)".to_string()),
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -227,6 +239,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -236,6 +249,7 @@ mod tests {
                     default: None,
                     not_null: false,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -245,6 +259,7 @@ mod tests {
                     default: Some("CURRENT_TIMESTAMP".to_string()),
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -277,6 +292,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -286,6 +302,7 @@ mod tests {
                     default: None,
                     not_null: true,
                     generated: None,
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -295,6 +312,7 @@ mod tests {
                     default: None,
                     not_null: false,
                     generated: Some("first_name || ' ' || last_name".to_string()),
+                    identity: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -322,6 +340,7 @@ mod tests {
                 default: None,
                 not_null: false,
                 generated: None,
+                identity: None,
                 comment: None,
                 depends_on: vec![],
             }],

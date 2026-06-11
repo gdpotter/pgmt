@@ -72,14 +72,20 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
                 None => String::new(),
             };
 
+            let identity_clause = match &column.identity {
+                Some(kind) => format!(" GENERATED {} AS IDENTITY", kind.as_sql()),
+                None => String::new(),
+            };
+
             RenderedSql {
                 sql: format!(
-                    "ALTER TABLE {}.{} ADD COLUMN {} {}{}{}{};",
+                    "ALTER TABLE {}.{} ADD COLUMN {} {}{}{}{}{};",
                     quote_ident(schema),
                     quote_ident(table),
                     quote_ident(&column.name),
                     column.data_type,
                     generated_clause,
+                    identity_clause,
                     default_clause,
                     not_null_clause
                 ),
@@ -135,6 +141,37 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
         ColumnAction::DropGenerated { name } => RenderedSql {
             sql: format!(
                 "ALTER TABLE {}.{} ALTER COLUMN {} DROP EXPRESSION;",
+                quote_ident(schema),
+                quote_ident(table),
+                quote_ident(name)
+            ),
+            safety: Safety::Destructive,
+        },
+        ColumnAction::AddIdentity { name, kind } => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} ALTER COLUMN {} ADD GENERATED {} AS IDENTITY;",
+                quote_ident(schema),
+                quote_ident(table),
+                quote_ident(name),
+                kind.as_sql()
+            ),
+            safety: Safety::Safe,
+        },
+        ColumnAction::SetIdentityKind { name, kind } => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} ALTER COLUMN {} SET GENERATED {};",
+                quote_ident(schema),
+                quote_ident(table),
+                quote_ident(name),
+                kind.as_sql()
+            ),
+            safety: Safety::Safe,
+        },
+        // Dropping identity discards the internal sequence (and its current
+        // value), so surface it as destructive for review.
+        ColumnAction::DropIdentity { name } => RenderedSql {
+            sql: format!(
+                "ALTER TABLE {}.{} ALTER COLUMN {} DROP IDENTITY;",
                 quote_ident(schema),
                 quote_ident(table),
                 quote_ident(name)
@@ -229,6 +266,7 @@ mod tests {
             default: None,
             not_null: true,
             generated: None,
+            identity: None,
             comment: None,
             depends_on: vec![],
         }
@@ -243,6 +281,7 @@ mod tests {
                 default: None,
                 not_null: true,
                 generated: None,
+                identity: None,
                 comment: None,
                 depends_on: vec![],
             },
@@ -303,6 +342,7 @@ mod tests {
             default: Some("'active'".to_string()),
             not_null: false,
             generated: None,
+            identity: None,
             comment: None,
             depends_on: vec![],
         };

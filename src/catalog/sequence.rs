@@ -86,6 +86,14 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Sequence>> {
                 WHERE ext_dep.objid = c.oid
                 AND ext_dep.deptype = 'e'
             )
+            -- Exclude identity-owned sequences (deptype 'i'): they are internal
+            -- to their GENERATED ... AS IDENTITY column, not standalone objects
+            AND NOT EXISTS (
+                SELECT 1 FROM pg_depend id_dep
+                WHERE id_dep.objid = c.oid
+                AND id_dep.classid = 'pg_class'::regclass
+                AND id_dep.deptype = 'i'
+            )
         ORDER BY n.nspname, c.relname
         "#,
     )

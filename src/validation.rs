@@ -474,6 +474,7 @@ mod tests {
                 data_type: "text".to_string(),
                 default: None,
                 generated: None,
+                identity: None,
                 comment: None,
                 depends_on: vec![],
                 not_null: false,

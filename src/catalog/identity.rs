@@ -75,7 +75,8 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Sequences (excluding extension-owned)
+            -- Sequences (excluding extension-owned and identity-owned; the
+            -- latter are internal to their GENERATED ... AS IDENTITY column)
             SELECT 'sequence', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -84,6 +85,12 @@ impl CatalogIdentity {
               AND NOT EXISTS (
                 SELECT 1 FROM pg_depend dep
                 WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid
+                  AND dep.classid = 'pg_class'::regclass
+                  AND dep.deptype = 'i'
               )
 
             UNION ALL
