@@ -302,6 +302,10 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Drop shadow branches first, while any warm containers are still running
+    if let Err(e) = db::branch::cleanup_all_branches().await {
+        eprintln!("Warning: Failed to cleanup shadow branches: {}", e);
+    }
     if let Err(e) = docker::cleanup_all_containers().await {
         eprintln!("Warning: Failed to cleanup Docker containers: {}", e);
     }

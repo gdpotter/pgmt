@@ -42,7 +42,7 @@ async fn test_docker_postgres_container() -> Result<()> {
         // Verify connection string format
         assert!(shadow_db.connection_string().starts_with("postgres://"));
         assert!(shadow_db.connection_string().contains("test_password"));
-        assert!(shadow_db.connection_string().contains("pgmt_shadow"));
+        assert!(shadow_db.connection_string().contains("pgmt_branch_"));
 
         // Container is automatically cleaned up when shadow_db goes out of scope
     })
@@ -164,11 +164,12 @@ async fn test_shadow_database_config_docker() -> Result<()> {
     Ok(())
 }
 
-/// Docker-managed shadows are reset from a pristine template on reuse: state
-/// from previous runs disappears, and the scoped clean (which would drop
-/// image-provided substrate) skips template-provisioned shadows entirely.
+/// Docker-managed shadows are ephemeral branches of the container's pristine
+/// init database: each provisioning gets a fresh branch, previous state never
+/// leaks, and the scoped clean (which would drop image-provided substrate)
+/// skips branches entirely.
 #[tokio::test]
-async fn test_shadow_resets_from_template_on_reuse() -> Result<()> {
+async fn test_shadow_branches_from_pristine_source_on_reuse() -> Result<()> {
     with_docker_cleanup(async {
         let docker_manager = match DockerManager::new().await {
             Ok(manager) => manager,
@@ -226,17 +227,21 @@ async fn test_shadow_resets_from_template_on_reuse() -> Result<()> {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert!(junk.is_none(), "reset must discard previous run's state");
-        let template_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = 'pgmt_template_pgmt_shadow')")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert!(template_exists, "pristine template should exist");
+        assert!(junk.is_none(), "a new branch must not see previous state");
 
-        // The scoped clean must skip template-provisioned shadows: an object
-        // created after the reset survives a clean_shadow_db call.
-        sqlx::query("CREATE SCHEMA post_reset")
+        // The source database stayed pristine and keeps its marker.
+        let source_pristine: bool = sqlx::query_scalar(
+            "SELECT shobj_description(oid, 'pg_database') = 'pgmt:pristine-shadow-source' \
+             FROM pg_database WHERE datname = 'pgmt_shadow'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(source_pristine, "source should carry the pristine marker");
+
+        // The scoped clean must skip branches: an object created in the branch
+        // survives a clean_shadow_db call.
+        sqlx::query("CREATE SCHEMA post_branch")
             .execute(&pool)
             .await
             .unwrap();
@@ -244,12 +249,12 @@ async fn test_shadow_resets_from_template_on_reuse() -> Result<()> {
             .await
             .unwrap();
         let survives: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'post_reset')",
+            "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'post_branch')",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(survives, "clean_shadow_db must no-op on template-provisioned shadows");
+        assert!(survives, "clean_shadow_db must no-op on shadow branches");
 
         pool.close().await;
     })

@@ -569,7 +569,7 @@ fn test_object_exclude_accepts_both_key_spellings() {
 #[test]
 fn test_shadow_url_reset_mode_resolution() {
     let config_input: ConfigInput = serde_yaml::from_str(
-        "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n    reset: template\n",
+        "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n    reset: branch\n",
     )
     .unwrap();
     let config = ConfigBuilder::new()
@@ -579,7 +579,7 @@ fn test_shadow_url_reset_mode_resolution() {
     match config.databases.shadow {
         ShadowDatabase::Url { url, reset } => {
             assert_eq!(url, "postgres://ci/shadow");
-            assert_eq!(reset, ShadowResetMode::Template);
+            assert_eq!(reset, ShadowResetMode::Branch);
         }
         _ => panic!("Expected Url shadow"),
     }

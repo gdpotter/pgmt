@@ -28,13 +28,16 @@ databases:
     # OR manual:
     # url: postgres://localhost/myapp_shadow
     # reset: clean # How the url shadow returns to baseline between runs:
-    #   clean (default) — drop the schemas pgmt manages; never touches databases
-    #   template — treat the database as pgmt's own: snapshot its first-contact
-    #     state and drop/recreate it from that snapshot each run. Requires
-    #     CREATEDB. Use when the database exists solely for pgmt, e.g. a CI
-    #     service container. To discard the baseline, drop pgmt_template_<db>.
-    # ⚠️ The shadow database is disposable: pgmt resets it before validating
-    # or importing. Never point url at a database holding data you care about.
+    #   clean (default) — drop the schemas pgmt manages in the named database;
+    #     never creates or drops databases
+    #   branch — treat the named database as a read-only baseline: pgmt works
+    #     on an ephemeral copy (CREATE DATABASE ... TEMPLATE) and drops it on
+    #     exit, leaving the server as it found it. Requires CREATEDB and that
+    #     nothing else connects to the named database. Ideal for CI service
+    #     containers.
+    # ⚠️ With reset: clean the named database is disposable: pgmt resets it
+    # before validating or importing. Never point url at a database holding
+    # data you care about.
 
     # OR Docker with specific version:
     # docker:
@@ -122,10 +125,8 @@ docker:
 ## Environment Variables
 
 ```bash
-PGMT_CONFIG_FILE              # Override config file location
-PGMT_DEV_URL                  # Override dev database URL
-PGMT_SHADOW_URL               # Override shadow database URL
-PGMT_TARGET_URL               # Override target database URL
+DEV_DATABASE_URL              # Dev database URL (when not set via config/flag)
+TARGET_DATABASE_URL           # Target database URL (when not set via config/flag)
 PGMT_KEEP_SHADOW_ON_FAILURE   # Keep shadow container alive on startup failure (for debugging)
 ```
 
@@ -142,8 +143,7 @@ databases:
 ```bash
 pgmt apply --dev-url postgres://localhost/other_db
 pgmt apply --schema-dir custom_schema/
-pgmt apply --exclude-schemas "temp_*,cache_*"
-pgmt apply --no-comments --no-grants
+pgmt apply --exclude-schemas "temp_*" --exclude-schemas "cache_*"
 ```
 
 ## Defaults

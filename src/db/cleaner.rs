@@ -8,33 +8,32 @@ use std::format;
 use std::sync::Mutex;
 use tracing::debug;
 
-/// Shadow databases provisioned this process from a pristine template
-/// (Docker-managed shadows; see `DockerManager::start_shadow_database`).
-/// They are already in fresh-image state, and the scoped clean below would
-/// destroy the image-provided substrate the template preserves — so
-/// `clean_shadow_db` skips them. External `shadow.url` databases are never
-/// registered: their lifecycle belongs to whoever provisioned them (CI, an
-/// orchestrator, the user), and the scoped clean is the contract there.
-static TEMPLATE_PROVISIONED: Lazy<Mutex<HashSet<(String, u16, String)>>> =
+/// Shadow branches created this process (`db::branch`): fresh copies of the
+/// pristine source, so the scoped clean below has nothing to do — and would
+/// destroy the source-provided substrate (image init scripts, platform
+/// schemas) the branch inherits. External `shadow.url` databases in the
+/// default `reset: clean` mode are never registered: their lifecycle belongs
+/// to whoever provisioned them, and the scoped clean is the contract there.
+static BRANCH_PROVISIONED: Lazy<Mutex<HashSet<(String, u16, String)>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
-/// Record that the shadow database at host:port/database was just provisioned
-/// from the pristine template.
-pub fn mark_template_provisioned(host: &str, port: u16, database: &str) {
-    TEMPLATE_PROVISIONED
+/// Record that the database at host:port/database is a freshly-created shadow
+/// branch.
+pub fn mark_branch_provisioned(host: &str, port: u16, database: &str) {
+    BRANCH_PROVISIONED
         .lock()
         .unwrap()
         .insert((host.to_string(), port, database.to_string()));
 }
 
-fn is_template_provisioned(pool: &PgPool) -> bool {
+fn is_branch_provisioned(pool: &PgPool) -> bool {
     let options = pool.connect_options();
     let key = (
         options.get_host().to_string(),
         options.get_port(),
         options.get_database().unwrap_or_default().to_string(),
     );
-    TEMPLATE_PROVISIONED.lock().unwrap().contains(&key)
+    BRANCH_PROVISIONED.lock().unwrap().contains(&key)
 }
 
 /// Clean the shadow database by dropping managed schemas.
@@ -44,11 +43,11 @@ fn is_template_provisioned(pool: &PgPool) -> bool {
 /// `storage`, `realtime`) are preserved, allowing custom shadow database images
 /// to provide platform-specific schemas that user schema files can reference.
 ///
-/// Docker-managed shadows were already reset from a pristine template at
-/// provision time and are skipped entirely.
+/// Shadow branches (Docker-managed shadows and `reset: branch` URLs) are
+/// fresh copies of the pristine source and are skipped entirely.
 pub async fn clean_shadow_db(pool: &PgPool, objects: &Objects) -> anyhow::Result<()> {
-    if is_template_provisioned(pool) {
-        debug!("Shadow was provisioned from template this run; skipping clean");
+    if is_branch_provisioned(pool) {
+        debug!("Shadow is a fresh branch of its source; skipping clean");
         return Ok(());
     }
 

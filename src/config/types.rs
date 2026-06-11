@@ -50,7 +50,7 @@ pub struct ShadowDatabaseInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// How an external `url` shadow is brought back to its baseline between
-    /// runs. Ignored for Docker-managed shadows (always `template`).
+    /// runs. Ignored for Docker-managed shadows (always branched).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset: Option<ShadowResetMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,11 +65,12 @@ pub enum ShadowResetMode {
     /// when the server is shared or its lifecycle belongs to something else.
     #[default]
     Clean,
-    /// Treat the database as pgmt's own: snapshot its first-contact state
-    /// into a template database and drop/recreate it from that template each
-    /// run. Requires CREATEDB. Set this only when the database exists solely
-    /// for pgmt (e.g. a CI service container).
-    Template,
+    /// Treat the named database as a read-only baseline: work on an ephemeral
+    /// `CREATE DATABASE ... TEMPLATE` copy, dropped again at process exit.
+    /// The named database is never written to. Requires CREATEDB. Set this
+    /// only when the database exists solely for pgmt (e.g. a CI service
+    /// container).
+    Branch,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -121,12 +122,10 @@ impl ShadowDatabase {
                 let default_config = ShadowDockerConfig::default();
                 Self::generate_docker_shadow_url(&default_config).await
             }
-            ShadowDatabase::Url { url, reset } => {
-                if *reset == ShadowResetMode::Template {
-                    crate::db::template::ensure_reset_by_url(url).await?;
-                }
-                Ok(url.clone())
-            }
+            ShadowDatabase::Url { url, reset } => match reset {
+                ShadowResetMode::Branch => crate::db::branch::branch_url(url).await,
+                ShadowResetMode::Clean => Ok(url.clone()),
+            },
             ShadowDatabase::Docker(config) => Self::generate_docker_shadow_url(config).await,
         }
     }

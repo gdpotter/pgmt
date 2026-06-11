@@ -325,25 +325,26 @@ impl DockerManager {
                     container_name
                 );
                 self.remove_container(&existing_info.id, true).await?;
-            } else if reset_from_template(&existing_info).await? {
+            } else if source_is_pristine(&existing_info).await? {
                 debug!(
-                    "Reusing PostgreSQL container {} (shadow reset from template)",
+                    "Reusing PostgreSQL container {} (branching from pristine source)",
                     container_name
                 );
                 // Register for cleanup (backup to RAII)
                 if config.auto_cleanup {
                     register_container(existing_info.id.clone());
                 }
+                let branched = branch_shadow(&existing_info).await?;
                 // Wrap existing container in RAII
                 return Ok(ShadowDatabase {
-                    container_info: existing_info,
+                    container_info: branched,
                     auto_cleanup: config.auto_cleanup,
                 });
             } else {
-                // No pristine template to restore from (container predates
-                // template support) — the shadow may be dirty, so recreate.
+                // No pristine marker on the source database: a pre-branch pgmt
+                // version used it as a work surface, so it may be dirty.
                 warn!(
-                    "Existing container {} has no pristine template, recreating",
+                    "Existing container {} has no pristine shadow source, recreating",
                     container_name
                 );
                 self.remove_container(&existing_info.id, true).await?;
@@ -505,10 +506,12 @@ impl DockerManager {
             password,
         };
 
-        // The image's init scripts have finished (postgres is ready), so the
-        // shadow database is in fresh-image state: snapshot it as the pristine
-        // template that future runs reset from.
-        snapshot_template(&container_info).await?;
+        // The image's init scripts have finished (postgres is ready). The init
+        // database becomes the read-only pristine source: mark it (proof for
+        // future reuse that no pgmt version ever wrote to it), then hand out
+        // an ephemeral branch as the work database.
+        mark_source_pristine(&container_info).await?;
+        let container_info = branch_shadow(&container_info).await?;
 
         // Register container for cleanup at process exit (backup to RAII)
         if config.auto_cleanup {
@@ -1099,6 +1102,12 @@ pub async fn cleanup_all_containers() -> Result<()> {
     Ok(())
 }
 
+/// Comment laid down on the container's init database at first boot. Its
+/// presence on reuse proves no pgmt version ever used that database as a work
+/// surface, so it is safe to branch from. (Database comments are not copied
+/// by CREATE DATABASE ... TEMPLATE, so branches don't inherit it.)
+const PRISTINE_MARKER: &str = "pgmt:pristine-shadow-source";
+
 /// Maintenance connection for CREATE/DROP DATABASE: those statements cannot
 /// run from the database being copied or dropped.
 async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
@@ -1108,7 +1117,7 @@ async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
         info.password,
         info.host,
         info.port,
-        crate::db::template::admin_db_name(&info.database)
+        crate::db::branch::admin_db_name(&info.database)
     );
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -1118,30 +1127,46 @@ async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
         .map_err(|e| anyhow!("Failed to open maintenance connection to shadow container: {}", e))
 }
 
-/// Snapshot the just-initialized shadow database as the pristine template.
-async fn snapshot_template(info: &ContainerInfo) -> Result<()> {
+async fn mark_source_pristine(info: &ContainerInfo) -> Result<()> {
+    use sqlx::Executor;
     let admin = admin_pool(info).await?;
-    let result = crate::db::template::snapshot(&admin, &info.database).await;
+    let result = admin
+        .execute(
+            format!(
+                "COMMENT ON DATABASE {} IS '{}'",
+                crate::render::quote_ident(&info.database),
+                PRISTINE_MARKER
+            )
+            .as_str(),
+        )
+        .await;
     admin.close().await;
-    result?;
-    crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
+    result.map_err(|e| anyhow!("Failed to mark shadow source as pristine: {}", e))?;
     Ok(())
 }
 
-/// Reset the shadow database from the pristine template. Returns false when
-/// the container has no template to restore from (it predates template
-/// support), in which case the caller must recreate the container.
-async fn reset_from_template(info: &ContainerInfo) -> Result<bool> {
+async fn source_is_pristine(info: &ContainerInfo) -> Result<bool> {
     let admin = admin_pool(info).await?;
-    if !crate::db::template::template_exists(&admin, &info.database).await? {
-        admin.close().await;
-        return Ok(false);
-    }
-    let result = crate::db::template::reset(&admin, &info.database).await;
+    let comment: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1",
+    )
+    .bind(&info.database)
+    .fetch_optional(&admin)
+    .await?;
     admin.close().await;
-    result?;
-    crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
-    Ok(true)
+    Ok(comment.flatten().as_deref() == Some(PRISTINE_MARKER))
+}
+
+/// Create an ephemeral work branch of the container's pristine source
+/// database, returning connection info pointing at the branch.
+async fn branch_shadow(info: &ContainerInfo) -> Result<ContainerInfo> {
+    let admin = admin_pool(info).await?;
+    let result = crate::db::branch::create_branch(&admin, &info.database).await;
+    admin.close().await;
+    Ok(ContainerInfo {
+        database: result?,
+        ..info.clone()
+    })
 }
 
 /// Whether a locally cached image satisfies a requested platform
