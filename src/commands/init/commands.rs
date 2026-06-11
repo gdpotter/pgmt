@@ -285,6 +285,30 @@ async fn import_catalog_from_source(
         options.detected_pg_version.as_ref(),
     );
 
+    // Importing from a SQL source resets the shadow database first. For a
+    // Docker shadow that's a throwaway container, but an external URL is a
+    // database the user controls — confirm before dropping schemas in it.
+    if let crate::config::types::ShadowDatabase::Url(url) = &shadow_database
+        && matches!(
+            import_source,
+            ImportSource::SqlFile(_) | ImportSource::Directory(_)
+        )
+    {
+        println!(
+            "⚠️  The shadow database at {} will be reset: every schema pgmt manages will be dropped before the import.",
+            crate::db::connection::mask_url_password(url)
+        );
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt("   Reset this database and continue?")
+            .default(false)
+            .interact()?;
+        if !confirmed {
+            return Err(anyhow::anyhow!(
+                "import cancelled — shadow database left untouched"
+            ));
+        }
+    }
+
     // Resolve roles file path for import (roles must exist before schema GRANTs)
     let roles_path = options
         .roles_file
