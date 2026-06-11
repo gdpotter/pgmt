@@ -22,7 +22,3 @@ Most people start with the **[Quick Start](/docs/getting-started/quick-start)** 
 - **[Troubleshooting](/docs/guides/troubleshooting)** — Common issues and solutions
 - **[GitHub Discussions](https://github.com/gdpotter/pgmt/discussions)** — Ask questions
 - **[GitHub Issues](https://github.com/gdpotter/pgmt/issues)** — Report bugs
-
-:::note
-**Status: Alpha** — Core features are functional, but the API may evolve.
-:::

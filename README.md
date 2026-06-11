@@ -6,8 +6,6 @@
 
 Your schema files are the source of truth. pgmt tracks dependencies, applies changes instantly, and generates production-ready migrations.
 
-> **Status: Alpha** — API may change. Production use requires careful evaluation.
-
 ![pgmt demo](demos/out/demo.gif)
 
 One function changed. pgmt detected 3 dependent views, dropped them in the right order, applied the update, and recreated everything — automatically.
