@@ -53,10 +53,23 @@ pub fn generate_config_file(
     use crate::config::merge::Merge;
 
     let gathered = gathered_config_input(options);
-    let merged = match existing {
+    let mut merged = match existing {
         Some(base) => base.clone().merge(gathered),
         None => gathered,
     };
+
+    // Substrate schemas excluded during import are appended to whatever
+    // exclude list the config already carries.
+    if !options.substrate_exclusions.is_empty() {
+        let objects = merged.objects.get_or_insert_with(Default::default);
+        let exclude = objects.exclude.get_or_insert_with(Default::default);
+        let schemas = exclude.schemas.get_or_insert_with(Vec::new);
+        for schema in &options.substrate_exclusions {
+            if !schemas.contains(schema) {
+                schemas.push(schema.clone());
+            }
+        }
+    }
 
     let yaml = serde_yaml::to_string(&merged)?;
     let config_path = project_dir.join(CONFIG_FILENAME);
@@ -152,6 +165,7 @@ mod tests {
             tracking_table: crate::config::types::TrackingTable::default(),
             roles_file: None,
             objects: Default::default(),
+            substrate_exclusions: Vec::new(),
         }
     }
 
@@ -479,6 +493,75 @@ migration:
             parsed.migration.and_then(|m| m.filename_prefix).as_deref(),
             Some("V"),
             "migration section must survive re-init"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+
+#[cfg(test)]
+mod substrate_tests {
+    use super::*;
+    use std::env;
+    use std::path::Path;
+
+    fn options_with_exclusions(temp_dir: &Path, exclusions: Vec<String>) -> crate::commands::init::InitOptions {
+        let dir_defaults = crate::config::types::Directories::default();
+        crate::commands::init::InitOptions {
+            project_dir: temp_dir.to_path_buf(),
+            dev_database_url: "postgres://localhost/test_db".to_string(),
+            shadow_config: crate::prompts::ShadowDatabaseInput::Auto,
+            shadow_pg_version: None,
+            detected_pg_version: None,
+            schema_dir: std::path::PathBuf::from("schema"),
+            migrations_dir: dir_defaults.migrations,
+            baselines_dir: dir_defaults.baselines,
+            import_source: None,
+            object_config: crate::commands::init::ObjectManagementConfig::default(),
+            baseline_config: crate::commands::init::BaselineCreationConfig::default(),
+            tracking_table: crate::config::types::TrackingTable::default(),
+            roles_file: None,
+            objects: Default::default(),
+            substrate_exclusions: exclusions,
+        }
+    }
+
+    /// Substrate exclusions chosen during import land in the generated
+    /// config's exclude list, unioned with any hand-written exclusions.
+    #[test]
+    fn test_substrate_exclusions_written_to_config() {
+        let temp_dir = env::temp_dir().join("pgmt_test_substrate_exclusions");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let existing: crate::config::types::ConfigInput = serde_yaml::from_str(
+            "objects:\n  exclude:\n    schemas: [flyway_schema_history, tiger]\n",
+        )
+        .unwrap();
+
+        let options = options_with_exclusions(
+            &temp_dir,
+            vec![
+                "tiger".to_string(),
+                "tiger_data".to_string(),
+                "topology".to_string(),
+            ],
+        );
+
+        generate_config_file(&options, Some(&existing), &temp_dir).unwrap();
+
+        let content = std::fs::read_to_string(temp_dir.join("pgmt.yaml")).unwrap();
+        let parsed: crate::config::types::ConfigInput = serde_yaml::from_str(&content).unwrap();
+        let schemas = parsed
+            .objects
+            .and_then(|o| o.exclude)
+            .and_then(|e| e.schemas)
+            .expect("exclude.schemas should be present");
+
+        assert_eq!(
+            schemas,
+            vec!["flyway_schema_history", "tiger", "tiger_data", "topology"],
+            "hand-written exclusions kept, substrate appended, no duplicates"
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);

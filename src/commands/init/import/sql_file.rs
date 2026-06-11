@@ -8,16 +8,14 @@ use crate::db::sql_executor::{SqlExecutorConfig, execute_sql_file};
 /// Import schema from a single SQL file
 pub async fn import_from_sql_file(
     file: PathBuf,
-    shadow_config: &crate::config::types::ShadowDatabase,
+    shadow_url: &str,
     roles_file: Option<&Path>,
     objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
-    let shadow_url = shadow_config.get_connection_string().await?;
-
     tracing::debug!("Executing SQL file: {}", file.display());
 
     // Connect to shadow database with retry logic (quiet mode to avoid slow query logging)
-    let pool = connect_with_retry_quiet(&shadow_url).await?;
+    let pool = connect_with_retry_quiet(shadow_url).await?;
 
     // Custom shadow images (postgis, supabase, …) preinstall extensions and
     // schemas via init scripts, so a "fresh" shadow is not empty and dumps

@@ -131,6 +131,9 @@ pub struct InitOptions {
     /// Managed-object scoping (from an existing pgmt.yaml on re-init, defaults
     /// otherwise). Scopes the shadow clean during schema import.
     pub objects: crate::config::types::Objects,
+    /// Image-provided substrate schemas the user chose to exclude during
+    /// import; persisted to the generated pgmt.yaml's exclude list.
+    pub substrate_exclusions: Vec<String>,
 }
 
 /// Configuration options for what database objects to manage
@@ -197,8 +200,28 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
     println!("✅ Project directories created");
 
     // Step 2: Import existing schema catalog (just fetch, don't process yet)
-    let catalog = if let Some(ref import_source) = options.import_source {
-        import_catalog_from_source(import_source, &options).await?
+    let catalog = if let Some(import_source) = options.import_source.clone() {
+        match import_catalog_from_source(&import_source, &options).await? {
+            Some((catalog, substrate_exclusions)) => {
+                if !substrate_exclusions.is_empty() {
+                    options
+                        .objects
+                        .exclude
+                        .schemas
+                        .extend(substrate_exclusions.iter().cloned());
+                    options.substrate_exclusions = substrate_exclusions;
+                }
+                // Single filtering point: preview, generated files, and
+                // validation all see the catalog scoped by the objects config
+                // (existing config plus any substrate exclusions just chosen).
+                let filter = crate::config::filter::ObjectFilter::new(
+                    &options.objects,
+                    &options.tracking_table,
+                );
+                Some(filter.filter_catalog(catalog))
+            }
+            None => None,
+        }
     } else {
         None
     };
@@ -277,7 +300,9 @@ fn resolve_shadow_database(
 async fn import_catalog_from_source(
     import_source: &ImportSource,
     options: &InitOptions,
-) -> Result<Option<Catalog>> {
+) -> Result<Option<(Catalog, Vec<String>)>> {
+    use crate::config::types::{ShadowDatabase, ShadowResetMode};
+
     println!("📥 Importing existing schema...");
     println!("   Source: {}", import_source.description());
 
@@ -288,14 +313,19 @@ async fn import_catalog_from_source(
         options.detected_pg_version.as_ref(),
     );
 
+    let sql_source = matches!(
+        import_source,
+        ImportSource::SqlFile(_) | ImportSource::Directory(_)
+    );
+
     // Importing from a SQL source resets the shadow database first. For a
-    // Docker shadow that's a throwaway container, but an external URL is a
-    // database the user controls — confirm before dropping schemas in it.
-    if let crate::config::types::ShadowDatabase::Url { url, .. } = &shadow_database
-        && matches!(
-            import_source,
-            ImportSource::SqlFile(_) | ImportSource::Directory(_)
-        )
+    // Docker shadow that's a throwaway branch, but a clean-mode external URL
+    // is a database the user controls — confirm before dropping schemas in it.
+    if let ShadowDatabase::Url {
+        url,
+        reset: ShadowResetMode::Clean,
+    } = &shadow_database
+        && sql_source
     {
         println!(
             "⚠️  The shadow database at {} will be reset: every schema pgmt manages will be dropped before the import.",
@@ -312,6 +342,36 @@ async fn import_catalog_from_source(
         }
     }
 
+    // Provision the shadow now (live-database imports don't need one): SQL
+    // sources apply onto a fresh branch, and what already exists on that
+    // branch is the image-provided substrate.
+    let (shadow_url, substrate_exclusions) = if sql_source {
+        let shadow_url = shadow_database.get_connection_string().await?;
+
+        // Substrate is only trustworthy on branch-backed shadows: a clean-mode
+        // external database may hold leftovers from earlier runs.
+        let branch_backed = !matches!(
+            shadow_database,
+            ShadowDatabase::Url {
+                reset: ShadowResetMode::Clean,
+                ..
+            }
+        );
+        let exclusions = if branch_backed {
+            let substrate = fetch_substrate_schemas(&shadow_url).await?;
+            if substrate.is_empty() {
+                Vec::new()
+            } else {
+                super::prompts::prompt_substrate_exclusions(&substrate)?
+            }
+        } else {
+            Vec::new()
+        };
+        (shadow_url, exclusions)
+    } else {
+        (String::new(), Vec::new())
+    };
+
     // Resolve roles file path for import (roles must exist before schema GRANTs)
     let roles_path = options
         .roles_file
@@ -320,7 +380,7 @@ async fn import_catalog_from_source(
 
     match import_schema(
         import_source.clone(),
-        &shadow_database,
+        &shadow_url,
         roles_path.as_deref(),
         &options.objects,
     )
@@ -328,7 +388,7 @@ async fn import_catalog_from_source(
     {
         Ok(catalog) => {
             println!("✅ Schema import completed");
-            Ok(Some(catalog))
+            Ok(Some((catalog, substrate_exclusions)))
         }
         Err(e) => {
             // Use {:#} to show the full error chain including the root cause
@@ -365,6 +425,25 @@ async fn import_catalog_from_source(
             }
         }
     }
+}
+
+/// Schemas present on the freshly-branched shadow before any of the user's
+/// schema is applied: the image/baseline-provided substrate (PostGIS's tiger
+/// and topology, Supabase's auth and storage, …). `public` is never substrate
+/// — it always exists and is where managed objects usually live.
+pub async fn fetch_substrate_schemas(shadow_url: &str) -> Result<Vec<String>> {
+    let pool = crate::db::connection::connect_with_retry_quiet(shadow_url).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT nspname FROM pg_namespace
+         WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')
+           AND nspname NOT LIKE 'pg_temp_%'
+           AND nspname NOT LIKE 'pg_toast_temp_%'
+         ORDER BY nspname",
+    )
+    .fetch_all(&pool)
+    .await?;
+    pool.close().await;
+    Ok(rows.into_iter().map(|(n,)| n).collect())
 }
 
 /// Result of baseline creation during init

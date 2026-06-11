@@ -27,6 +27,7 @@ fn test_init_options(project_dir: PathBuf) -> InitOptions {
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
         objects: Default::default(),
+        substrate_exclusions: Vec::new(),
     }
 }
 

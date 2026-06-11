@@ -28,20 +28,23 @@ impl ImportSource {}
 /// managed schemas are reset while platform schemas provided by the shadow
 /// image (e.g. Supabase's auth/storage) are preserved — the same contract
 /// `pgmt apply` operates under.
+///
+/// `shadow_url` is the already-provisioned shadow connection string (ignored
+/// for live-database imports, which read the source catalog directly).
 pub async fn import_schema(
     source: ImportSource,
-    shadow_config: &crate::config::types::ShadowDatabase,
+    shadow_url: &str,
     roles_file: Option<&Path>,
     objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
     match source {
         ImportSource::Directory(dir) => {
             validate_directory_source(&dir)?;
-            import_from_directory(dir, shadow_config, roles_file, objects).await
+            import_from_directory(dir, shadow_url, roles_file, objects).await
         }
         ImportSource::SqlFile(file) => {
             validate_sql_file(&file)?;
-            import_from_sql_file(file, shadow_config, roles_file, objects).await
+            import_from_sql_file(file, shadow_url, roles_file, objects).await
         }
         ImportSource::Database(url) => {
             validate_database_url(&url)?;

@@ -194,6 +194,7 @@ pub async fn gather_init_options_with_args(
         tracking_table: crate::config::types::TrackingTable::default(),
         roles_file,
         objects,
+        substrate_exclusions: Vec::new(),
     })
 }
 
@@ -296,6 +297,28 @@ fn filter_nonstandard_extensions(installed: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter(|e| !STOCK_IMAGE_EXTENSIONS.contains(&e.as_str()))
         .collect()
+}
+
+/// Offer to exclude image-provided substrate schemas from management.
+///
+/// All entries are pre-checked: these schemas exist on a fresh shadow before
+/// the user's schema is applied, so managing them creates perpetual drift
+/// against whatever provides them (extension init, platform images).
+pub fn prompt_substrate_exclusions(substrate: &[String]) -> Result<Vec<String>> {
+    println!(
+        "🔍 The shadow database already provides these schemas before your schema is applied:"
+    );
+    println!("   {}", substrate.join(", "));
+    println!("   They come from the image/baseline, not your schema files.");
+
+    let defaults = vec![true; substrate.len()];
+    let selected = MultiSelect::new()
+        .with_prompt("   Exclude from pgmt management? (space toggles, enter confirms)")
+        .items(substrate)
+        .defaults(&defaults)
+        .interact()?;
+
+    Ok(selected.into_iter().map(|i| substrate[i].clone()).collect())
 }
 
 /// Prompt for schema import options

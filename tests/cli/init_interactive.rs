@@ -119,6 +119,7 @@ fn test_init_workflow_components() -> Result<()> {
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
         objects: Default::default(),
+        substrate_exclusions: Vec::new(),
     };
 
     // Test project structure creation
@@ -171,6 +172,7 @@ fn test_init_workflow_error_handling() -> Result<()> {
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
         objects: Default::default(),
+        substrate_exclusions: Vec::new(),
     };
 
     // Project structure creation should still work

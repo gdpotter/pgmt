@@ -8,11 +8,10 @@ use crate::db::sql_executor::{SqlExecutorConfig, discover_sql_files_ordered, exe
 /// Import schema from a directory of SQL files
 pub async fn import_from_directory(
     dir: PathBuf,
-    shadow_config: &crate::config::types::ShadowDatabase,
+    shadow_url: &str,
     roles_file: Option<&Path>,
     objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
-    let shadow_url = shadow_config.get_connection_string().await?;
 
     // Discover SQL files in alphabetical order
     let sql_files = discover_sql_files_ordered(&dir)?;
@@ -20,7 +19,7 @@ pub async fn import_from_directory(
     tracing::debug!("Found {} SQL files. Executing in order...", sql_files.len());
 
     // Connect to shadow database with retry logic (quiet mode to avoid slow query logging)
-    let pool = connect_with_retry_quiet(&shadow_url).await?;
+    let pool = connect_with_retry_quiet(shadow_url).await?;
 
     // Reset the managed universe before importing — custom shadow images
     // preinstall extensions/schemas via init scripts (see import_from_sql_file).

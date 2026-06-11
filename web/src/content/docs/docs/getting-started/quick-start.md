@@ -63,6 +63,8 @@ my-app/
 
 - Detects your PostgreSQL version and installed extensions, and warns when the
   stock shadow image won't work (e.g. PostGIS) with a prompt for a custom image
+- Detects schemas your shadow image provides (PostGIS's `topology`, Supabase's
+  `auth`, …) and offers to exclude them from management
 - Shows you exactly what's in your database (if importing existing schema)
 - Lets you choose what the generated schema files include (grants, triggers, …)
 - Automatically validates generated schema files and explains dependency issues

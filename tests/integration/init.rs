@@ -37,6 +37,7 @@ fn test_init_options(project_dir: PathBuf) -> InitOptions {
         tracking_table: pgmt::config::types::TrackingTable::default(),
         roles_file: None,
         objects: Default::default(),
+        substrate_exclusions: Vec::new(),
     }
 }
 
@@ -801,9 +802,10 @@ GRANT SELECT ON import_test_items TO import_test_role;
 
     // Import the schema with the roles file
     // This should apply roles.sql BEFORE schema.sql, allowing the GRANT to succeed
+    let shadow_url = ShadowDatabase::Auto.get_connection_string().await?;
     let catalog = import_schema(
         ImportSource::SqlFile(schema_file),
-        &ShadowDatabase::Auto,
+        &shadow_url,
         Some(roles_file.as_path()),
         &pgmt::config::types::Objects::default(),
     )
@@ -1211,13 +1213,9 @@ async fn test_sql_file_import_cleans_preinstalled_shadow_state() -> Result<()> {
             "CREATE SCHEMA topology;\nCREATE TABLE topology.t (id int);\n",
         )?;
 
-        let shadow = pgmt::config::types::ShadowDatabase::Url {
-            url: db.url(),
-            reset: Default::default(),
-        };
         let catalog = pgmt::commands::init::import::import_from_sql_file(
             dump,
-            &shadow,
+            &db.url(),
             None,
             &pgmt::config::types::Objects::default(),
         )
@@ -1268,12 +1266,8 @@ async fn test_sql_file_import_preserves_unmanaged_schemas() -> Result<()> {
             exclude: Default::default(),
         };
 
-        let shadow = pgmt::config::types::ShadowDatabase::Url {
-            url: db.url(),
-            reset: Default::default(),
-        };
         let catalog =
-            pgmt::commands::init::import::import_from_sql_file(dump, &shadow, None, &objects)
+            pgmt::commands::init::import::import_from_sql_file(dump, &db.url(), None, &objects)
                 .await
                 .expect("import referencing a preserved platform schema should succeed");
 
@@ -1284,6 +1278,25 @@ async fn test_sql_file_import_preserves_unmanaged_schemas() -> Result<()> {
                 .any(|t| t.schema == "public" && t.name == "profiles"),
             "imported table referencing the platform schema should be in the catalog"
         );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Substrate detection: schemas present on a fresh shadow before the user's
+/// schema is applied (image-provided), never `public` or system schemas.
+#[tokio::test]
+async fn test_fetch_substrate_schemas() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA tiger").await;
+        db.execute("CREATE SCHEMA topology").await;
+
+        let substrate = pgmt::commands::init::commands::fetch_substrate_schemas(&db.url())
+            .await
+            .unwrap();
+
+        assert_eq!(substrate, vec!["tiger".to_string(), "topology".to_string()]);
 
         Ok(())
     })

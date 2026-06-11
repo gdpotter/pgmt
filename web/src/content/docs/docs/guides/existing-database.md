@@ -50,6 +50,13 @@ databases:
 
 The same image must be available wherever pgmt runs (your machine, CI, teammates), since `migrate apply` and validation all spin up a shadow. See [Configuration](/docs/reference/configuration) for all shadow options.
 
+During import, pgmt also checks what the fresh shadow already provides: schemas
+like PostGIS's `tiger` and `topology` exist before your schema is applied, so
+they belong to the image, not your project. pgmt offers to exclude them from
+management (all pre-selected) and records the choice in `pgmt.yaml` under
+`objects.exclude.schemas` — without this, every diff would fight the image over
+objects it recreates.
+
 ## Fix Dependencies
 
 Validation might fail with errors like:
