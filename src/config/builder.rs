@@ -66,14 +66,20 @@ impl ConfigBuilder {
     ) -> Result<ShadowDatabase> {
         // CLI shadow_url takes highest precedence
         if let Some(url) = db_input.and_then(|d| d.shadow_url.as_ref()) {
-            return Ok(ShadowDatabase::Url(url.clone()));
+            return Ok(ShadowDatabase::Url {
+                url: url.clone(),
+                reset: ShadowResetMode::default(),
+            });
         }
 
         // Check config file shadow configuration
         if let Some(shadow_input) = db_input.and_then(|d| d.shadow.as_ref()) {
             // Explicit URL in config
             if let Some(url) = &shadow_input.url {
-                return Ok(ShadowDatabase::Url(url.clone()));
+                return Ok(ShadowDatabase::Url {
+                    url: url.clone(),
+                    reset: shadow_input.reset.unwrap_or_default(),
+                });
             }
 
             // Docker configuration

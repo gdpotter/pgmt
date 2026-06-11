@@ -6,3 +6,4 @@ pub mod migration_tracking;
 pub mod migration_tracking_functions;
 pub mod multi_file_schema;
 pub mod schema_loader;
+pub mod template_reset;

@@ -1099,24 +1099,16 @@ pub async fn cleanup_all_containers() -> Result<()> {
     Ok(())
 }
 
-/// Database holding the pristine fresh-image state of the shadow, snapshotted
-/// right after the container's init scripts finish. Every later run resets the
-/// shadow from it (`DROP DATABASE` + `CREATE DATABASE ... TEMPLATE`), which —
-/// unlike dropping schemas — cannot miss anything and preserves image-provided
-/// substrate (PostGIS's tiger/topology, Supabase's auth/storage, …).
-const SHADOW_TEMPLATE_DB: &str = "pgmt_template";
-
 /// Maintenance connection for CREATE/DROP DATABASE: those statements cannot
 /// run from the database being copied or dropped.
 async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
-    let admin_db = if info.database == "postgres" {
-        "template1"
-    } else {
-        "postgres"
-    };
     let url = format!(
         "postgres://{}:{}@{}:{}/{}?sslmode=disable",
-        info.username, info.password, info.host, info.port, admin_db
+        info.username,
+        info.password,
+        info.host,
+        info.port,
+        crate::db::template::admin_db_name(&info.database)
     );
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -1128,22 +1120,11 @@ async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
 
 /// Snapshot the just-initialized shadow database as the pristine template.
 async fn snapshot_template(info: &ContainerInfo) -> Result<()> {
-    use sqlx::Executor;
     let admin = admin_pool(info).await?;
-    admin
-        .execute(
-            format!(
-                "CREATE DATABASE {} TEMPLATE {}",
-                crate::render::quote_ident(SHADOW_TEMPLATE_DB),
-                crate::render::quote_ident(&info.database)
-            )
-            .as_str(),
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to snapshot pristine shadow template: {}", e))?;
+    let result = crate::db::template::snapshot(&admin, &info.database).await;
     admin.close().await;
+    result?;
     crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
-    debug!("Snapshotted pristine shadow state into {}", SHADOW_TEMPLATE_DB);
     Ok(())
 }
 
@@ -1151,45 +1132,15 @@ async fn snapshot_template(info: &ContainerInfo) -> Result<()> {
 /// the container has no template to restore from (it predates template
 /// support), in which case the caller must recreate the container.
 async fn reset_from_template(info: &ContainerInfo) -> Result<bool> {
-    use sqlx::Executor;
     let admin = admin_pool(info).await?;
-
-    let template_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
-            .bind(SHADOW_TEMPLATE_DB)
-            .fetch_one(&admin)
-            .await?;
-    if !template_exists {
+    if !crate::db::template::template_exists(&admin, &info.database).await? {
         admin.close().await;
         return Ok(false);
     }
-
-    let reset_start = std::time::Instant::now();
-    admin
-        .execute(
-            format!(
-                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                crate::render::quote_ident(&info.database)
-            )
-            .as_str(),
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to drop shadow database for reset: {}", e))?;
-    admin
-        .execute(
-            format!(
-                "CREATE DATABASE {} TEMPLATE {}",
-                crate::render::quote_ident(&info.database),
-                crate::render::quote_ident(SHADOW_TEMPLATE_DB)
-            )
-            .as_str(),
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to recreate shadow database from template: {}", e))?;
+    let result = crate::db::template::reset(&admin, &info.database).await;
     admin.close().await;
-
+    result?;
     crate::db::cleaner::mark_template_provisioned(&info.host, info.port, &info.database);
-    debug!("Shadow reset from template in {:?}", reset_start.elapsed());
     Ok(true)
 }
 

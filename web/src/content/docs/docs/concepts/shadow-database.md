@@ -44,7 +44,10 @@ that can't miss anything and preserves whatever the image provides (PostGIS's
 `topology` schema, Supabase's `auth`/`storage`, custom init scripts). For
 external `shadow.url` databases, pgmt instead drops the schemas it manages -
 it won't create or drop databases on a server it doesn't own, since that
-database's lifecycle may belong to CI or other orchestration.
+database's lifecycle may belong to CI or other orchestration. If the database
+does exist solely for pgmt (a CI service container, say), set
+`reset: template` to opt it into the same template semantics - see the
+[Configuration Reference](../reference/configuration).
 
 **This means:** pgmt supports every PostgreSQL feature automatically. Custom aggregates, procedural languages, extensions, expression indexes - if PostgreSQL can create it, pgmt can understand it. There's no "supported features" list to maintain because pgmt delegates parsing to PostgreSQL itself.
 

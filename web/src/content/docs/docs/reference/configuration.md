@@ -27,9 +27,14 @@ databases:
     auto: true # Auto-create shadow database (recommended)
     # OR manual:
     # url: postgres://localhost/myapp_shadow
-    # ⚠️ The shadow database is disposable: pgmt resets it (drops every
-    # managed schema) before validating or importing. Never point url at a
-    # database holding data you care about.
+    # reset: clean # How the url shadow returns to baseline between runs:
+    #   clean (default) — drop the schemas pgmt manages; never touches databases
+    #   template — treat the database as pgmt's own: snapshot its first-contact
+    #     state and drop/recreate it from that snapshot each run. Requires
+    #     CREATEDB. Use when the database exists solely for pgmt, e.g. a CI
+    #     service container. To discard the baseline, drop pgmt_template_<db>.
+    # ⚠️ The shadow database is disposable: pgmt resets it before validating
+    # or importing. Never point url at a database holding data you care about.
 
     # OR Docker with specific version:
     # docker:

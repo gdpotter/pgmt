@@ -265,7 +265,10 @@ fn resolve_shadow_database(
                 ..Default::default()
             })
         }
-        ShadowDatabaseInput::Manual(url) => ShadowDatabase::Url(url.clone()),
+        ShadowDatabaseInput::Manual(url) => ShadowDatabase::Url {
+            url: url.clone(),
+            reset: crate::config::types::ShadowResetMode::default(),
+        },
     }
 }
 
@@ -288,7 +291,7 @@ async fn import_catalog_from_source(
     // Importing from a SQL source resets the shadow database first. For a
     // Docker shadow that's a throwaway container, but an external URL is a
     // database the user controls — confirm before dropping schemas in it.
-    if let crate::config::types::ShadowDatabase::Url(url) = &shadow_database
+    if let crate::config::types::ShadowDatabase::Url { url, .. } = &shadow_database
         && matches!(
             import_source,
             ImportSource::SqlFile(_) | ImportSource::Directory(_)

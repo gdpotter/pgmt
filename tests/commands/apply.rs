@@ -44,6 +44,7 @@ fn test_apply_command_signature() {
                 target_url: None,
                 shadow: Some(ShadowDatabaseInput {
                     auto: Some(true),
+                    reset: None,
                     url: None,
                     docker: None,
                 }),
@@ -92,6 +93,7 @@ async fn test_apply_command_error_handling() -> Result<()> {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: Some(true),
+                reset: None,
                 url: None,
                 docker: None,
             }),
@@ -138,6 +140,7 @@ fn test_apply_command_configuration_requirements() -> Result<()> {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: Some(true),
+                reset: None,
                 url: None,
                 docker: None,
             }),

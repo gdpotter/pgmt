@@ -1211,7 +1211,10 @@ async fn test_sql_file_import_cleans_preinstalled_shadow_state() -> Result<()> {
             "CREATE SCHEMA topology;\nCREATE TABLE topology.t (id int);\n",
         )?;
 
-        let shadow = pgmt::config::types::ShadowDatabase::Url(db.url());
+        let shadow = pgmt::config::types::ShadowDatabase::Url {
+            url: db.url(),
+            reset: Default::default(),
+        };
         let catalog = pgmt::commands::init::import::import_from_sql_file(
             dump,
             &shadow,
@@ -1265,7 +1268,10 @@ async fn test_sql_file_import_preserves_unmanaged_schemas() -> Result<()> {
             exclude: Default::default(),
         };
 
-        let shadow = pgmt::config::types::ShadowDatabase::Url(db.url());
+        let shadow = pgmt::config::types::ShadowDatabase::Url {
+            url: db.url(),
+            reset: Default::default(),
+        };
         let catalog =
             pgmt::commands::init::import::import_from_sql_file(dump, &shadow, None, &objects)
                 .await

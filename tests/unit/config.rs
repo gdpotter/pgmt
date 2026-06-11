@@ -22,6 +22,7 @@ mod config_integration_tests {
                 target_url: None,
                 shadow: Some(ShadowDatabaseInput {
                     auto: Some(true),
+                    reset: None,
                     url: None,
                     docker: None,
                 }),
@@ -83,6 +84,7 @@ mod config_integration_tests {
                     target_url: None,
                     shadow: Some(ShadowDatabaseInput {
                         auto: Some(true),
+                        reset: None,
                         url: None,
                         docker: None,
                     }),
@@ -138,6 +140,7 @@ mod config_integration_tests {
                 target_url: None,
                 shadow: Some(ShadowDatabaseInput {
                     auto: Some(false),
+                    reset: None,
                     url: Some("postgres://localhost/manual_shadow".to_string()),
                     docker: None,
                 }),
@@ -153,7 +156,7 @@ mod config_integration_tests {
 
         // Test manual shadow database URL
         match &config.databases.shadow {
-            pgmt::config::ShadowDatabase::Url(url) => {
+            pgmt::config::ShadowDatabase::Url { url, .. } => {
                 assert_eq!(url, "postgres://localhost/manual_shadow");
                 let shadow_url = config.databases.shadow.get_connection_string().await?;
                 assert_eq!(shadow_url, "postgres://localhost/manual_shadow");
@@ -314,7 +317,7 @@ migration:
 
         // Verify shadow database configuration
         match &config.databases.shadow {
-            pgmt::config::ShadowDatabase::Url(url) => {
+            pgmt::config::ShadowDatabase::Url { url, .. } => {
                 assert_eq!(url, "postgres://localhost/test_shadow");
             }
             _ => panic!("Expected manual shadow database URL"),

@@ -64,11 +64,13 @@ impl ShadowDatabaseInput {
             (Some(a), Some(b)) if other.url.is_none() => ShadowDatabaseInput {
                 auto: other.auto,
                 url: None,
+                reset: other.reset.or(self.reset),
                 docker: Some(a.merge_with(b)),
             },
             (_, b) => ShadowDatabaseInput {
                 auto: other.auto,
                 url: other.url,
+                reset: other.reset.or(self.reset),
                 docker: b,
             },
         }

@@ -122,6 +122,7 @@ async fn test_shadow_database_config_docker() -> Result<()> {
 
     let shadow_input = ShadowDatabaseInput {
         auto: Some(false),
+        reset: None,
         url: None,
         docker: Some(docker_input),
     };
@@ -227,7 +228,7 @@ async fn test_shadow_resets_from_template_on_reuse() -> Result<()> {
             .unwrap();
         assert!(junk.is_none(), "reset must discard previous run's state");
         let template_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = 'pgmt_template')")
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = 'pgmt_template_pgmt_shadow')")
                 .fetch_one(&pool)
                 .await
                 .unwrap();

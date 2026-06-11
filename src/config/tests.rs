@@ -11,6 +11,7 @@ fn test_config_input_merge() {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: Some(true),
+                reset: None,
                 url: None,
                 docker: None,
             }),
@@ -154,7 +155,10 @@ fn test_config_builder_resolve() {
 #[tokio::test]
 async fn test_shadow_database_url_mode() {
     // Test explicit URL mode (this doesn't require Docker)
-    let shadow_db = ShadowDatabase::Url("postgres://localhost/explicit_shadow".to_string());
+    let shadow_db = ShadowDatabase::Url {
+        url: "postgres://localhost/explicit_shadow".to_string(),
+        reset: ShadowResetMode::default(),
+    };
     let url = shadow_db.get_connection_string().await.unwrap();
     assert_eq!(url, "postgres://localhost/explicit_shadow");
 
@@ -289,6 +293,7 @@ fn test_config_builder_shadow_docker_version() {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: None,
+                reset: None,
                 url: None,
                 docker: Some(ShadowDockerInput {
                     version: Some("16".to_string()),
@@ -334,6 +339,7 @@ fn test_config_builder_shadow_docker_explicit_image() {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: None,
+                reset: None,
                 url: None,
                 docker: Some(ShadowDockerInput {
                     version: Some("16".to_string()), // This should be ignored
@@ -388,6 +394,7 @@ fn test_config_builder_shadow_docker_platform() {
             target_url: None,
             shadow: Some(ShadowDatabaseInput {
                 auto: None,
+                reset: None,
                 url: None,
                 docker: Some(ShadowDockerInput {
                     version: None,
@@ -429,6 +436,7 @@ fn test_shadow_merge_docker_over_docker_preserves_unanswered_fields() {
     // survive a re-init that re-answers docker mode.
     let base = ShadowDatabaseInput {
         auto: None,
+        reset: None,
         url: None,
         docker: Some(ShadowDockerInput {
             image: Some("postgis/postgis:16-3.4".to_string()),
@@ -440,6 +448,7 @@ fn test_shadow_merge_docker_over_docker_preserves_unanswered_fields() {
     };
     let overlay = ShadowDatabaseInput {
         auto: None,
+        reset: None,
         url: None,
         docker: Some(ShadowDockerInput {
             image: Some("postgis/postgis:17-3.5".to_string()),
@@ -462,6 +471,7 @@ fn test_shadow_merge_mode_switch_to_auto_clears_docker() {
     // not survive, or the resolver would still pick docker mode.
     let base = ShadowDatabaseInput {
         auto: None,
+        reset: None,
         url: None,
         docker: Some(ShadowDockerInput {
             image: Some("postgis/postgis:16-3.5".to_string()),
@@ -471,6 +481,7 @@ fn test_shadow_merge_mode_switch_to_auto_clears_docker() {
     };
     let overlay = ShadowDatabaseInput {
         auto: Some(true),
+        reset: None,
         url: None,
         docker: None,
     };
@@ -488,6 +499,7 @@ fn test_shadow_merge_mode_switch_to_auto_clears_docker() {
 fn test_shadow_merge_mode_switch_to_url_clears_docker() {
     let base = ShadowDatabaseInput {
         auto: None,
+        reset: None,
         url: None,
         docker: Some(ShadowDockerInput {
             image: Some("postgis/postgis:16-3.5".to_string()),
@@ -496,6 +508,7 @@ fn test_shadow_merge_mode_switch_to_url_clears_docker() {
     };
     let overlay = ShadowDatabaseInput {
         auto: Some(false),
+        reset: None,
         url: Some("postgres://localhost/shadow".to_string()),
         docker: None,
     };
@@ -512,11 +525,13 @@ fn test_shadow_merge_mode_switch_to_url_clears_docker() {
 fn test_shadow_merge_mode_switch_url_to_docker_clears_url() {
     let base = ShadowDatabaseInput {
         auto: Some(false),
+        reset: None,
         url: Some("postgres://localhost/shadow".to_string()),
         docker: None,
     };
     let overlay = ShadowDatabaseInput {
         auto: None,
+        reset: None,
         url: None,
         docker: Some(ShadowDockerInput {
             image: Some("postgres:18-alpine".to_string()),
@@ -549,4 +564,37 @@ fn test_object_exclude_accepts_both_key_spellings() {
     let exclude = new_style.objects.unwrap().exclude.unwrap();
     assert_eq!(exclude.schemas, Some(vec!["pg_*".to_string()]));
     assert_eq!(exclude.tables, Some(vec!["cache_*".to_string()]));
+}
+
+#[test]
+fn test_shadow_url_reset_mode_resolution() {
+    let config_input: ConfigInput = serde_yaml::from_str(
+        "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n    reset: template\n",
+    )
+    .unwrap();
+    let config = ConfigBuilder::new()
+        .with_file(config_input)
+        .resolve()
+        .unwrap();
+    match config.databases.shadow {
+        ShadowDatabase::Url { url, reset } => {
+            assert_eq!(url, "postgres://ci/shadow");
+            assert_eq!(reset, ShadowResetMode::Template);
+        }
+        _ => panic!("Expected Url shadow"),
+    }
+
+    // Omitted reset defaults to the conservative clean mode.
+    let config_input: ConfigInput = serde_yaml::from_str(
+        "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n",
+    )
+    .unwrap();
+    let config = ConfigBuilder::new()
+        .with_file(config_input)
+        .resolve()
+        .unwrap();
+    match config.databases.shadow {
+        ShadowDatabase::Url { reset, .. } => assert_eq!(reset, ShadowResetMode::Clean),
+        _ => panic!("Expected Url shadow"),
+    }
 }
