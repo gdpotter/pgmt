@@ -281,3 +281,49 @@ fn test_init_directory_flags_in_help() {
         "Help should document --schema-dir flag"
     );
 }
+
+/// Re-init reads defaults straight from the existing ConfigInput — no mirror
+/// struct in between, so every config field is available to the prompts.
+/// Exercises the non-interactive (--defaults) path: existing values must win
+/// over built-in defaults.
+#[tokio::test]
+async fn test_gather_uses_existing_config_as_defaults() -> Result<()> {
+    use clap::Parser;
+
+    let args = pgmt::commands::init::InitArgs::try_parse_from([
+        "init",
+        "--defaults",
+        "--no-import",
+        "--no-baseline",
+    ])?;
+
+    // port 1 is never listening: the best-effort extension detection must
+    // fail fast and silently rather than block the gather
+    let existing: pgmt::config::types::ConfigInput = serde_yaml::from_str(
+        r#"
+databases:
+  dev_url: postgres://localhost:1/reinit_db
+directories:
+  schema_dir: db/schema
+  migrations_dir: db/migrations
+  baselines_dir: db/baselines
+objects:
+  include:
+    schemas: [public]
+"#,
+    )?;
+
+    let options = pgmt::commands::init::prompts::gather_init_options_with_args(
+        &args,
+        Some(&existing),
+    )
+    .await?;
+
+    assert_eq!(options.dev_database_url, "postgres://localhost:1/reinit_db");
+    assert_eq!(options.schema_dir, std::path::PathBuf::from("db/schema"));
+    assert_eq!(options.migrations_dir, "db/migrations");
+    assert_eq!(options.baselines_dir, "db/baselines");
+    assert_eq!(options.objects.include.schemas, vec!["public".to_string()]);
+
+    Ok(())
+}

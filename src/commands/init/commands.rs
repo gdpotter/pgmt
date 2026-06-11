@@ -29,64 +29,6 @@ pub enum ExistingConfigResult {
     Cancelled,
 }
 
-/// Values extracted from existing config for use as defaults
-#[derive(Debug, Default)]
-pub struct ExistingConfigDefaults {
-    pub dev_url: Option<String>,
-    #[allow(dead_code)] // Future: use for shadow config prompting
-    pub shadow_url: Option<String>,
-    pub shadow_pg_version: Option<String>,
-    pub schema_dir: Option<String>,
-    pub migrations_dir: Option<String>,
-    pub baselines_dir: Option<String>,
-    #[allow(dead_code)] // Future: use for roles file prompting
-    pub roles_file: Option<String>,
-    /// Managed-object scoping from the existing config. Used to scope the
-    /// shadow clean during schema import (preserves platform schemas like
-    /// Supabase's auth/storage when include.schemas is set).
-    pub objects: Option<crate::config::types::ObjectsInput>,
-}
-
-impl From<&crate::config::types::ConfigInput> for ExistingConfigDefaults {
-    fn from(config: &crate::config::types::ConfigInput) -> Self {
-        let shadow_url = config
-            .databases
-            .as_ref()
-            .and_then(|d| d.shadow.as_ref())
-            .and_then(|s| s.url.clone());
-
-        let shadow_pg_version = config
-            .databases
-            .as_ref()
-            .and_then(|d| d.shadow.as_ref())
-            .and_then(|s| s.docker.as_ref())
-            .and_then(|d| d.version.clone());
-
-        Self {
-            dev_url: config.databases.as_ref().and_then(|d| d.dev_url.clone()),
-            shadow_url,
-            shadow_pg_version,
-            schema_dir: config
-                .directories
-                .as_ref()
-                .and_then(|d| d.schema_dir.clone()),
-            migrations_dir: config
-                .directories
-                .as_ref()
-                .and_then(|d| d.migrations_dir.clone()),
-            baselines_dir: config
-                .directories
-                .as_ref()
-                .and_then(|d| d.baselines_dir.clone()),
-            roles_file: config
-                .directories
-                .as_ref()
-                .and_then(|d| d.roles_file.clone()),
-            objects: config.objects.clone(),
-        }
-    }
-}
-
 /// Check for existing config file and prompt user for how to proceed
 pub fn check_existing_config(
     project_dir: &Path,
@@ -110,23 +52,28 @@ pub fn check_existing_config(
     // Load existing config
     let config_path_str = config_path.to_string_lossy();
     let (existing_config, _) = load_config(&config_path_str)?;
-    let defaults = ExistingConfigDefaults::from(&existing_config);
 
     // Show current configuration
+    let databases = existing_config.databases.as_ref();
+    let directories = existing_config.directories.as_ref();
     println!("📋 Existing configuration found:\n");
-    if let Some(ref url) = defaults.dev_url {
+    if let Some(url) = databases.and_then(|d| d.dev_url.as_ref()) {
         println!("   Database: {}", mask_url_password(url));
     }
-    if let Some(ref schema_dir) = defaults.schema_dir {
+    if let Some(schema_dir) = directories.and_then(|d| d.schema_dir.as_ref()) {
         println!("   Schema dir: {}", schema_dir);
     }
-    if let Some(ref migrations_dir) = defaults.migrations_dir {
+    if let Some(migrations_dir) = directories.and_then(|d| d.migrations_dir.as_ref()) {
         println!("   Migrations: {}", migrations_dir);
     }
-    if let Some(ref baselines_dir) = defaults.baselines_dir {
+    if let Some(baselines_dir) = directories.and_then(|d| d.baselines_dir.as_ref()) {
         println!("   Baselines: {}", baselines_dir);
     }
-    if let Some(ref pg_version) = defaults.shadow_pg_version {
+    if let Some(pg_version) = databases
+        .and_then(|d| d.shadow.as_ref())
+        .and_then(|s| s.docker.as_ref())
+        .and_then(|d| d.version.as_ref())
+    {
         println!("   Shadow PG: {}", pg_version);
     }
     println!();
@@ -224,16 +171,16 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
     let existing_config = check_existing_config(&project_dir, args.fresh)?;
 
     // Handle the different init modes
-    let existing_defaults = match existing_config {
+    let existing_input = match existing_config {
         ExistingConfigResult::NotFound | ExistingConfigResult::Fresh => None,
-        ExistingConfigResult::Update(config) => Some(ExistingConfigDefaults::from(config.as_ref())),
+        ExistingConfigResult::Update(config) => Some(*config),
         ExistingConfigResult::Cancelled => {
             return Ok(());
         }
     };
 
     // Gather configuration through prompts or CLI args (WITHOUT object management yet)
-    let mut options = gather_init_options_with_args(args, existing_defaults.as_ref()).await?;
+    let mut options = gather_init_options_with_args(args, existing_input.as_ref()).await?;
 
     // Show confirmation summary and get user approval (unless using defaults)
     if !args.defaults {
@@ -945,62 +892,6 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_existing_config_defaults_from_config_input() {
-        use crate::config::types::{
-            ConfigInput, DatabasesInput, DirectoriesInput,
-            ShadowDatabaseInput as ConfigShadowInput, ShadowDockerInput,
-        };
-
-        let config = ConfigInput {
-            databases: Some(DatabasesInput {
-                dev_url: Some("postgres://localhost/mydb".to_string()),
-                shadow: Some(ConfigShadowInput {
-                    docker: Some(ShadowDockerInput {
-                        version: Some("15".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            directories: Some(DirectoriesInput {
-                schema_dir: Some("custom_schema".to_string()),
-                migrations_dir: Some("db/migrations".to_string()),
-                baselines_dir: Some("db/baselines".to_string()),
-                roles_file: Some("roles.sql".to_string()),
-            }),
-            ..Default::default()
-        };
-
-        let defaults = ExistingConfigDefaults::from(&config);
-
-        assert_eq!(
-            defaults.dev_url,
-            Some("postgres://localhost/mydb".to_string())
-        );
-        assert_eq!(defaults.shadow_pg_version, Some("15".to_string()));
-        assert_eq!(defaults.schema_dir, Some("custom_schema".to_string()));
-        assert_eq!(defaults.migrations_dir, Some("db/migrations".to_string()));
-        assert_eq!(defaults.baselines_dir, Some("db/baselines".to_string()));
-        assert_eq!(defaults.roles_file, Some("roles.sql".to_string()));
-    }
-
-    #[test]
-    fn test_existing_config_defaults_from_empty_config() {
-        use crate::config::types::ConfigInput;
-
-        let config = ConfigInput::default();
-        let defaults = ExistingConfigDefaults::from(&config);
-
-        assert_eq!(defaults.dev_url, None);
-        assert_eq!(defaults.shadow_pg_version, None);
-        assert_eq!(defaults.schema_dir, None);
-        assert_eq!(defaults.migrations_dir, None);
-        assert_eq!(defaults.baselines_dir, None);
-        assert_eq!(defaults.roles_file, None);
     }
 
     #[test]

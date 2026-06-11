@@ -2,23 +2,27 @@ use anyhow::Result;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::path::PathBuf;
 
-use super::commands::ExistingConfigDefaults;
 use super::import::ImportSource;
 use super::{BaselineCreationConfig, DatabaseState, InitOptions, ObjectManagementConfig};
-use crate::config::types::Directories;
+use crate::config::types::{ConfigInput, Directories};
 use crate::prompts::ShadowDatabaseInput;
 
 /// Gather initialization options using CLI arguments when available
-/// If `existing_defaults` is provided, those values will be used as defaults in prompts
+/// If `existing_config` is provided (re-init), its values are used as
+/// defaults in prompts — same precedence as CLI args, just one layer lower.
 pub async fn gather_init_options_with_args(
     args: &super::InitArgs,
-    existing_defaults: Option<&ExistingConfigDefaults>,
+    existing_config: Option<&ConfigInput>,
 ) -> Result<InitOptions> {
     // Current directory as default project directory
     let project_dir = std::env::current_dir()?;
 
     // Get directory defaults
     let dir_defaults = Directories::default();
+
+    // Convenience views into the existing config's sections
+    let existing_databases = existing_config.and_then(|c| c.databases.as_ref());
+    let existing_directories = existing_config.and_then(|c| c.directories.as_ref());
 
     // Database URL - use CLI arg or prompt
     let (dev_database_url, detected_pg_version) = if let Some(url) = &args.dev_url {
@@ -48,13 +52,13 @@ pub async fn gather_init_options_with_args(
         }
     } else if args.defaults {
         // In defaults mode, use existing value if available, otherwise use default
-        let url = existing_defaults
+        let url = existing_databases
             .and_then(|d| d.dev_url.clone())
             .unwrap_or_else(|| "postgres://localhost/pgmt_dev".to_string());
         (url, None)
     } else {
         // Interactive prompt - pass existing value as default
-        let existing_url = existing_defaults.and_then(|d| d.dev_url.clone());
+        let existing_url = existing_databases.and_then(|d| d.dev_url.clone());
         let result =
             crate::prompts::prompt_database_url_with_guidance_and_default(existing_url).await?;
         (result.url, result.pg_version)
@@ -100,7 +104,7 @@ pub async fn gather_init_options_with_args(
         PathBuf::from(&args.schema_dir)
     } else {
         // Use existing or default
-        existing_defaults
+        existing_directories
             .and_then(|d| d.schema_dir.clone())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("schema"))
@@ -110,13 +114,13 @@ pub async fn gather_init_options_with_args(
     let migrations_dir = args
         .migrations_dir
         .clone()
-        .or_else(|| existing_defaults.and_then(|d| d.migrations_dir.clone()))
+        .or_else(|| existing_directories.and_then(|d| d.migrations_dir.clone()))
         .unwrap_or_else(|| dir_defaults.migrations.clone());
 
     let baselines_dir = args
         .baselines_dir
         .clone()
-        .or_else(|| existing_defaults.and_then(|d| d.baselines_dir.clone()))
+        .or_else(|| existing_directories.and_then(|d| d.baselines_dir.clone()))
         .unwrap_or_else(|| dir_defaults.baselines.clone());
 
     // Import existing schema option - use CLI arg or prompt
@@ -164,7 +168,7 @@ pub async fn gather_init_options_with_args(
     // Managed-object scoping: honor an existing pgmt.yaml on re-init so the
     // shadow clean during import preserves non-managed (platform) schemas.
     let objects = crate::config::builder::resolve_objects_input(
-        existing_defaults.and_then(|d| d.objects.as_ref()),
+        existing_config.and_then(|c| c.objects.as_ref()),
         &crate::config::types::Objects::default(),
     );
 
