@@ -76,6 +76,15 @@ pub async fn cmd_migrate_baseline(
     debug!("Loading schema files into shadow database");
     let catalog = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
 
+    // Scope to managed objects: the shadow branch inherits image-provided
+    // substrate (excluded schemas, their extensions, comments, grants), which
+    // must not be rendered into the baseline.
+    let filter = crate::config::filter::ObjectFilter::new(
+        &config.objects,
+        &config.migration.tracking_table,
+    );
+    let catalog = filter.filter_catalog(catalog);
+
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 

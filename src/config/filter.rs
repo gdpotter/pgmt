@@ -148,6 +148,19 @@ impl ObjectFilter {
             .extensions
             .retain(|ext| self.should_include_schema(&ext.schema));
 
+        // Keep the dependency maps consistent with the filtered object set —
+        // consumers like `pgmt debug dependencies` iterate them directly.
+        let stale: Vec<_> = catalog
+            .forward_deps
+            .keys()
+            .filter(|id| !catalog.contains_id(id))
+            .cloned()
+            .collect();
+        for id in stale {
+            catalog.forward_deps.remove(&id);
+        }
+        catalog.rebuild_reverse_deps();
+
         catalog
     }
 
@@ -390,5 +403,104 @@ mod tests {
                 .any(|id| id.contains("excluded_schema"))
         );
         assert!(!remaining_ids.iter().any(|id| id.contains("excluded_table")));
+    }
+}
+
+#[cfg(test)]
+mod substrate_filter_tests {
+    use super::*;
+    use crate::catalog::Catalog;
+    use crate::catalog::extension::Extension;
+    use crate::catalog::id::DbObjectId;
+    use crate::catalog::schema::Schema;
+
+    /// Excluding a substrate schema must also drop its extensions, its entry
+    /// in the dependency maps, and anything pointing at it — this is what the
+    /// baseline command renders from.
+    #[test]
+    fn test_excluded_schema_drops_extension_and_dependency_entries() {
+        let mut catalog = Catalog::empty();
+        catalog.schemas = vec![
+            Schema {
+                name: "public".to_string(),
+                comment: None,
+            },
+            Schema {
+                name: "topology".to_string(),
+                comment: Some("PostGIS Topology schema".to_string()),
+            },
+        ];
+        catalog.extensions = vec![
+            Extension {
+                name: "postgis".to_string(),
+                schema: "public".to_string(),
+                version: "3.5".to_string(),
+                relocatable: false,
+                comment: None,
+                depends_on: vec![],
+            },
+            Extension {
+                name: "postgis_topology".to_string(),
+                schema: "topology".to_string(),
+                version: "3.5".to_string(),
+                relocatable: false,
+                comment: None,
+                depends_on: vec![DbObjectId::Schema {
+                    name: "topology".to_string(),
+                }],
+            },
+        ];
+        catalog.forward_deps.insert(
+            DbObjectId::Extension {
+                name: "postgis_topology".to_string(),
+            },
+            vec![DbObjectId::Schema {
+                name: "topology".to_string(),
+            }],
+        );
+        catalog.forward_deps.insert(
+            DbObjectId::Extension {
+                name: "postgis".to_string(),
+            },
+            vec![],
+        );
+        catalog.rebuild_reverse_deps();
+
+        let objects = Objects {
+            include: ObjectInclude::default(),
+            exclude: ObjectExclude {
+                schemas: vec!["topology".to_string()],
+                tables: vec![],
+            },
+        };
+        let filter = ObjectFilter::new(&objects, &TrackingTable::default());
+        let filtered = filter.filter_catalog(catalog);
+
+        assert_eq!(
+            filtered.schemas.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            vec!["public"],
+            "excluded schema must be dropped"
+        );
+        assert_eq!(
+            filtered
+                .extensions
+                .iter()
+                .map(|e| &e.name)
+                .collect::<Vec<_>>(),
+            vec!["postgis"],
+            "extensions installed in excluded schemas must be dropped"
+        );
+        assert!(
+            !filtered.forward_deps.contains_key(&DbObjectId::Extension {
+                name: "postgis_topology".to_string()
+            }),
+            "dependency maps must not retain filtered objects"
+        );
+        assert!(
+            !filtered.reverse_deps.contains_key(&DbObjectId::Schema {
+                name: "topology".to_string()
+            }),
+            "reverse deps must be rebuilt after filtering"
+        );
     }
 }

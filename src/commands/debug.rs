@@ -273,7 +273,15 @@ pub async fn cmd_debug_dependencies(
     );
 
     let schema_dir = root_dir.join(&config.directories.schema);
-    let processed = processor.process_schema_directory(&schema_dir).await?;
+    let mut processed = processor.process_schema_directory(&schema_dir).await?;
+
+    // Scope to managed objects: the shadow branch inherits image-provided
+    // substrate, which is not part of the project's dependency graph.
+    let filter = crate::config::filter::ObjectFilter::new(
+        &config.objects,
+        &config.migration.tracking_table,
+    );
+    processed.catalog = filter.filter_catalog(processed.catalog);
 
     // Build the dependency report
     let mut objects = Vec::new();

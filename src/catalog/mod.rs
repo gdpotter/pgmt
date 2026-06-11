@@ -189,7 +189,7 @@ impl Catalog {
     }
 
     /// Rebuild `reverse_deps` from the current `forward_deps`.
-    fn rebuild_reverse_deps(&mut self) {
+    pub(crate) fn rebuild_reverse_deps(&mut self) {
         self.reverse_deps.clear();
         for (object_id, deps) in &self.forward_deps {
             for dep in deps {
