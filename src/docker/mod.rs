@@ -891,36 +891,23 @@ impl DockerManager {
 
     /// Wait for PostgreSQL to be ready to accept connections
     async fn wait_for_postgres_ready(&self, container_id: &str) -> Result<()> {
-        // Detect test environment for optimized retry settings
-        // Check multiple indicators that we're running in a test environment
-        let is_test_env = std::env::var("CARGO").is_ok()
-            && (std::thread::current()
-                .name()
-                .is_some_and(|name| name.contains("test"))
-                || std::env::var("RUST_TEST_THREADS").is_ok()
-                || std::env::var("CARGO_PKG_NAME").is_ok_and(|name| name == "pgmt"));
-
-        let (max_attempts, retry_delay_ms) = if is_test_env {
-            // Test environment: more frequent checks, reasonable timeout for test environment
-            debug!(
-                "🧪 Test environment detected - using optimized retry settings (25 attempts × 6s = 150s max)"
-            );
-            (25_u32, 1000_u64) // 25 attempts × (5s timeout + 1s delay) = 150 seconds max
-        } else {
-            // Production environment: less frequent checks, longer timeout for reliability
-            debug!(
-                "🏭 Production environment - using standard retry settings (30 attempts × 7s = 210s max)"
-            );
-            (30_u32, 2000_u64) // 30 attempts × (5s timeout + 2s delay) = 210 seconds max
-        };
-
+        // Poll frequently: a connection attempt against a port that isn't
+        // accepting yet fails immediately, so tight polling costs nothing and
+        // notices readiness within RETRY_DELAY_MS instead of whole seconds —
+        // this directly bounds shadow database cold-start latency.
         const INITIAL_DELAY_MS: u64 = 500;
+        const RETRY_DELAY_MS: u64 = 250;
+        const READY_TIMEOUT: Duration = Duration::from_secs(180);
 
         // Initial delay to let container start
         sleep(Duration::from_millis(INITIAL_DELAY_MS)).await;
 
-        for attempt in 1..=max_attempts {
-            debug!("🔍 Readiness check attempt {}/{}", attempt, max_attempts);
+        let deadline = std::time::Instant::now() + READY_TIMEOUT;
+        let mut attempt = 0_u32;
+
+        loop {
+            attempt += 1;
+            debug!("🔍 Readiness check attempt {}", attempt);
 
             // Get container info for connection testing
             let inspect = self
@@ -962,14 +949,14 @@ impl DockerManager {
                         );
                         return Ok(());
                     }
-                    Err(e) if attempt < max_attempts => {
+                    Err(e) if std::time::Instant::now() < deadline => {
                         debug!("❌ PostgreSQL not ready yet (attempt {}): {}", attempt, e);
-                        sleep(Duration::from_millis(retry_delay_ms)).await;
+                        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                     }
                     Err(e) => {
                         return Err(anyhow!(
-                            "PostgreSQL failed to become ready after {} attempts. Last error: {}",
-                            max_attempts,
+                            "PostgreSQL failed to become ready within {}s. Last error: {}",
+                            READY_TIMEOUT.as_secs(),
                             e
                         ));
                     }
@@ -979,18 +966,16 @@ impl DockerManager {
                     "⚠️  Could not extract container connection info on attempt {}",
                     attempt
                 );
-                if attempt < max_attempts {
-                    sleep(Duration::from_millis(retry_delay_ms)).await;
+                if std::time::Instant::now() < deadline {
+                    sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                 } else {
                     return Err(anyhow!(
-                        "Could not extract container connection info after {} attempts",
-                        max_attempts
+                        "Could not extract container connection info within {}s",
+                        READY_TIMEOUT.as_secs()
                     ));
                 }
             }
         }
-
-        unreachable!()
     }
 }
 
