@@ -42,6 +42,8 @@ pub async fn import_from_sql_file(
     execute_sql_file(&pool, &file, &executor_config).await?;
 
     // Extract catalog
+    // Physical-world load: init applies the objects filter at a single
+    // point after the substrate-exclusion prompt (scoping isn't final here).
     let catalog = Catalog::load_unfiltered(&pool).await?;
 
     // Cleanup

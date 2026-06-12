@@ -144,7 +144,10 @@ fn truncate_for_log(s: &str) -> String {
     }
 }
 
-/// Apply current schema from config to shadow database
+/// Apply current schema from config to shadow database, returning the
+/// **managed** catalog (the shadow branch inherits image substrate, which is
+/// outside the managed universe). All consumers — diff, migrate new, baseline,
+/// status, validation — share this source, so they see identical state.
 pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) -> Result<Catalog> {
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let schema_dir = root_dir.join(&config.directories.schema);
@@ -152,7 +155,7 @@ pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) ->
 
     let ops_config = SchemaOpsConfig::default();
 
-    apply_schema_to_shadow_with_roles(
+    let catalog = apply_schema_to_shadow_with_roles(
         &shadow_url,
         &schema_dir,
         Some(&roles_file),
@@ -161,7 +164,13 @@ pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) ->
         config.schema.verbose_file_processing,
         &config.objects,
     )
-    .await
+    .await?;
+
+    let filter = crate::config::filter::ObjectFilter::new(
+        &config.objects,
+        &config.migration.tracking_table,
+    );
+    Ok(filter.filter_catalog(catalog))
 }
 
 /// Apply schema to shadow database with roles file support and optional file dependency augmentation
@@ -209,6 +218,8 @@ pub async fn apply_schema_to_shadow_with_roles(
         // Use the traditional method
         load_and_apply_schema(&shadow_pool, schema_dir, &schema_config, objects).await?;
 
+        // Physical-world load: apply_current_schema_to_shadow (the only
+        // config-aware caller) scopes the result to the managed universe.
         Catalog::load_unfiltered(&shadow_pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to load catalog from shadow database: {}", e))?

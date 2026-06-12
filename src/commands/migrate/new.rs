@@ -1,4 +1,4 @@
-use crate::config::{Config, ObjectFilter};
+use crate::config::Config;
 use crate::db::connection::connect_with_retry;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
@@ -72,9 +72,10 @@ pub async fn cmd_migrate_new(
     // Reconnect for baseline validation later
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let filtered_old_catalog = filter.filter_catalog(old_catalog);
-    let filtered_new_catalog = filter.filter_catalog(new_catalog);
+    // Both sides are already managed catalogs: the baseline/migration-chain
+    // reconstruction and apply_current_schema_to_shadow filter at load.
+    let filtered_old_catalog = old_catalog;
+    let filtered_new_catalog = new_catalog;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(

@@ -98,10 +98,10 @@ pub async fn cmd_migrate_validate(
     let desired_catalog =
         crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
 
-    // Apply object filtering to both catalogs
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let filtered_expected = filter.filter_catalog(expected_catalog);
-    let filtered_desired = filter.filter_catalog(desired_catalog);
+    // Both sides are already managed catalogs (reconstruction and
+    // apply_current_schema_to_shadow filter at load).
+    let filtered_expected = expected_catalog;
+    let filtered_desired = desired_catalog;
 
     // Step 3: Compare expected state (baseline + migrations) vs desired state (schema files)
     if !validation_options.quiet {
@@ -250,6 +250,7 @@ async fn reconstruct_expected_state_from_schema_files(
         }
     }
 
-    // Load and return the reconstructed catalog
-    Catalog::load_unfiltered(shadow_pool).await
+    // Load and return the reconstructed catalog, scoped to managed objects
+    let filter = ObjectFilter::new(objects, &crate::config::types::TrackingTable::default());
+    Catalog::load_managed(shadow_pool, &filter).await
 }

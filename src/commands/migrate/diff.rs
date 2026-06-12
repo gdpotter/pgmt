@@ -60,12 +60,9 @@ pub async fn cmd_migrate_diff(
     eprintln!("Loading target database...");
     let target_pool =
         crate::db::connection::connect_to_database(target_url, "target database").await?;
-    let target_catalog = Catalog::load_unfiltered(&target_pool).await?;
-
-    // Apply object filtering (excludes tracking table and configured exclusions)
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let filtered_target_catalog = filter.filter_catalog(target_catalog);
-    let filtered_schema_catalog = filter.filter_catalog(schema_catalog);
+    let filtered_target_catalog = Catalog::load_managed(&target_pool, &filter).await?;
+    let filtered_schema_catalog = schema_catalog;
 
     // Compute differences (target -> schema, so SQL shows how to fix target)
     eprintln!("Computing differences...\n");

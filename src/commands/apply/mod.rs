@@ -90,14 +90,11 @@ pub async fn cmd_apply(
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     info!("Analyzing database catalogs...");
-    let old_catalog = Catalog::load_unfiltered(&dev_pool)
+    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
+    let old = Catalog::load_managed(&dev_pool, &filter)
         .await
         .context("Failed to load catalog from development database")?;
-    let new_catalog = processed_schema.with_file_dependencies_applied();
-
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let old = filter.filter_catalog(old_catalog);
-    let new = filter.filter_catalog(new_catalog);
+    let new = filter.filter_catalog(processed_schema.with_file_dependencies_applied());
 
     info!("Computing schema differences...");
     let raw_steps = diff_all(&old, &new);
@@ -144,11 +141,9 @@ pub async fn cmd_apply(
                 let reprocessed_schema = reprocessor.process_schema_directory(&schema_dir).await?;
 
                 info!("Re-analyzing database catalogs...");
-                let new_old_catalog = Catalog::load_unfiltered(&dev_pool).await?;
-                let new_new_catalog = reprocessed_schema.with_file_dependencies_applied();
-
-                let old_filtered = filter.filter_catalog(new_old_catalog);
-                let new_filtered = filter.filter_catalog(new_new_catalog);
+                let old_filtered = Catalog::load_managed(&dev_pool, &filter).await?;
+                let new_filtered =
+                    filter.filter_catalog(reprocessed_schema.with_file_dependencies_applied());
 
                 info!("Re-computing schema differences...");
                 let new_raw_steps = diff_all(&old_filtered, &new_filtered);

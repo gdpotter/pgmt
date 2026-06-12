@@ -18,6 +18,8 @@ pub async fn import_from_database(url: String) -> Result<Catalog> {
     tracing::debug!("Analyzing database schema...");
 
     // Load full catalog first to analyze available schemas
+    // Physical-world load: the interactive schema selection below and
+    // init's single filtering point scope the result.
     let full_catalog = Catalog::load_unfiltered(&pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load database catalog: {}", e))?;

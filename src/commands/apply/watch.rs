@@ -213,13 +213,9 @@ async fn perform_single_apply(
     let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     // Analyze differences
-    let old_catalog = Catalog::load_unfiltered(dev_pool).await?;
-    let new_catalog = processed_schema.with_file_dependencies_applied();
-
-    // Apply object filtering
     let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let old = filter.filter_catalog(old_catalog);
-    let new = filter.filter_catalog(new_catalog);
+    let old = Catalog::load_managed(dev_pool, &filter).await?;
+    let new = filter.filter_catalog(processed_schema.with_file_dependencies_applied());
 
     let raw_steps = diff_all(&old, &new);
     let full_steps = cascade::expand(raw_steps, &old, &new);

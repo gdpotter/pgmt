@@ -165,6 +165,8 @@ impl SchemaProcessor {
 
         // Step 5: Load full catalog once at the end for diff operations
         debug!("Loading full catalog for diff operations");
+        // Physical-world load: every consumer (apply, watch, debug) scopes
+        // this catalog with the objects filter before diffing or reporting.
         let final_catalog = Catalog::load_unfiltered(&self.pool)
             .await
             .context("Failed to load final catalog")?;
