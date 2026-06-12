@@ -38,7 +38,9 @@ fn test_dev_url_required_error_lists_all_sources() {
         .args(["apply", "--dry-run"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No development database configured"))
+        .stderr(predicate::str::contains(
+            "No development database configured",
+        ))
         .stderr(predicate::str::contains("--dev-url"))
         .stderr(predicate::str::contains("PGMT_DEV_URL"))
         .stderr(predicate::str::contains("databases.dev_url"));
@@ -94,7 +96,9 @@ fn test_legacy_env_names_are_not_read() {
         .env("DEV_DATABASE_URL", "postgres://legacyhost:1/db")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No development database configured"))
+        .stderr(predicate::str::contains(
+            "No development database configured",
+        ))
         .stderr(predicate::str::contains("legacyhost").not());
 }
 

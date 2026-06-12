@@ -160,8 +160,11 @@ pub async fn cleanup_all_branches() -> Result<()> {
             Ok(admin) => {
                 if let Err(e) = admin
                     .execute(
-                        format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", quote_ident(&branch))
-                            .as_str(),
+                        format!(
+                            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                            quote_ident(&branch)
+                        )
+                        .as_str(),
                     )
                     .await
                 {

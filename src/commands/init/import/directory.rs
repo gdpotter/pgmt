@@ -12,7 +12,6 @@ pub async fn import_from_directory(
     roles_file: Option<&Path>,
     objects: &crate::config::types::Objects,
 ) -> Result<Catalog> {
-
     // Discover SQL files in alphabetical order
     let sql_files = discover_sql_files_ordered(&dir)?;
 

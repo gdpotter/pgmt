@@ -250,7 +250,13 @@ pub async fn get_migration_starting_state(
         all_migrations
     };
 
-    replay_migrations(shadow_pool, &migrations_to_replay, config, baseline_config.verbose).await?;
+    replay_migrations(
+        shadow_pool,
+        &migrations_to_replay,
+        config,
+        baseline_config.verbose,
+    )
+    .await?;
     load_managed_catalog(shadow_pool, config).await
 }
 
@@ -268,55 +274,60 @@ pub async fn get_migration_update_starting_state(
 ) -> Result<Catalog> {
     let all_migrations = discover_migrations(migrations_dir)?;
 
-    let migrations_to_replay = if let Some(baseline) =
-        find_baseline_for_version(baselines_dir, target_version)?
-    {
-        if baseline_config.verbose {
-            info!("Loading previous baseline: {}", baseline.path.display());
-        }
-        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
+    let migrations_to_replay =
+        if let Some(baseline) = find_baseline_for_version(baselines_dir, target_version)? {
+            if baseline_config.verbose {
+                info!("Loading previous baseline: {}", baseline.path.display());
+            }
+            load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
 
-        let in_range: Vec<_> = all_migrations
-            .into_iter()
-            .filter(|m| m.version > baseline.version && m.version < target_version)
-            .collect();
-        if baseline_config.verbose && !in_range.is_empty() {
-            println!(
-                "Applying {} migration(s) between baseline and target",
-                in_range.len()
-            );
-        }
-        in_range
-    } else {
-        if baseline_config.verbose {
-            info!(
-                "No previous baseline found, reconstructing from migrations before {}",
-                target_version
-            );
-        }
-        cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
-        crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
-
-        let before_target: Vec<_> = all_migrations
-            .into_iter()
-            .filter(|m| m.version < target_version)
-            .collect();
-        if before_target.is_empty() {
-            println!(
-                "No existing migrations found before {}, starting from empty schema",
-                target_version
-            );
+            let in_range: Vec<_> = all_migrations
+                .into_iter()
+                .filter(|m| m.version > baseline.version && m.version < target_version)
+                .collect();
+            if baseline_config.verbose && !in_range.is_empty() {
+                println!(
+                    "Applying {} migration(s) between baseline and target",
+                    in_range.len()
+                );
+            }
+            in_range
         } else {
-            println!(
-                "Applying {} existing migration(s) before {}",
-                before_target.len(),
-                target_version
-            );
-        }
-        before_target
-    };
+            if baseline_config.verbose {
+                info!(
+                    "No previous baseline found, reconstructing from migrations before {}",
+                    target_version
+                );
+            }
+            cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
+            crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
 
-    replay_migrations(shadow_pool, &migrations_to_replay, config, baseline_config.verbose).await?;
+            let before_target: Vec<_> = all_migrations
+                .into_iter()
+                .filter(|m| m.version < target_version)
+                .collect();
+            if before_target.is_empty() {
+                println!(
+                    "No existing migrations found before {}, starting from empty schema",
+                    target_version
+                );
+            } else {
+                println!(
+                    "Applying {} existing migration(s) before {}",
+                    before_target.len(),
+                    target_version
+                );
+            }
+            before_target
+        };
+
+    replay_migrations(
+        shadow_pool,
+        &migrations_to_replay,
+        config,
+        baseline_config.verbose,
+    )
+    .await?;
     load_managed_catalog(shadow_pool, config).await
 }
 

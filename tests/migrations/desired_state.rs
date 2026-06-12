@@ -12,7 +12,11 @@ use pgmt::schema_ops::build_desired_state;
 fn write_schema_with_require(root: &std::path::Path) {
     let schema_dir = root.join("schema");
     std::fs::create_dir_all(&schema_dir).unwrap();
-    std::fs::write(schema_dir.join("alpha.sql"), "CREATE TABLE alpha (id int);\n").unwrap();
+    std::fs::write(
+        schema_dir.join("alpha.sql"),
+        "CREATE TABLE alpha (id int);\n",
+    )
+    .unwrap();
     // No intrinsic dependency between the tables — only the -- require: edge
     std::fs::write(
         schema_dir.join("beta.sql"),

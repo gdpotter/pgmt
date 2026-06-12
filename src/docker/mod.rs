@@ -1124,7 +1124,12 @@ async fn admin_pool(info: &ContainerInfo) -> Result<sqlx::PgPool> {
         .acquire_timeout(Duration::from_secs(10))
         .connect(&url)
         .await
-        .map_err(|e| anyhow!("Failed to open maintenance connection to shadow container: {}", e))
+        .map_err(|e| {
+            anyhow!(
+                "Failed to open maintenance connection to shadow container: {}",
+                e
+            )
+        })
 }
 
 async fn mark_source_pristine(info: &ContainerInfo) -> Result<()> {

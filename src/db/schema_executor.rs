@@ -65,7 +65,6 @@ impl Default for SqlExecutorConfig {
     }
 }
 
-
 /// Enhanced SQL execution error with configurable formatting
 #[derive(Debug)]
 pub struct SqlExecutionError {

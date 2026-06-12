@@ -505,7 +505,10 @@ mod substrate_tests {
     use std::env;
     use std::path::Path;
 
-    fn options_with_exclusions(temp_dir: &Path, exclusions: Vec<String>) -> crate::commands::init::InitOptions {
+    fn options_with_exclusions(
+        temp_dir: &Path,
+        exclusions: Vec<String>,
+    ) -> crate::commands::init::InitOptions {
         let dir_defaults = crate::config::types::Directories::default();
         crate::commands::init::InitOptions {
             project_dir: temp_dir.to_path_buf(),

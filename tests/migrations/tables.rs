@@ -887,17 +887,16 @@ async fn test_create_table_with_identity_columns() -> Result<()> {
             |steps, final_catalog| {
                 use pgmt::catalog::table::IdentityKind;
 
-                let create_step = steps
-                    .iter()
-                    .find_map(|s| match s {
-                        MigrationStep::Table(TableOperation::Create { columns, name, .. })
-                            if name == "rental" =>
-                        {
-                            Some(columns)
-                        }
-                        _ => None,
-                    })
-                    .expect("Should have CreateTable step");
+                let create_step =
+                    steps
+                        .iter()
+                        .find_map(|s| match s {
+                            MigrationStep::Table(TableOperation::Create {
+                                columns, name, ..
+                            }) if name == "rental" => Some(columns),
+                            _ => None,
+                        })
+                        .expect("Should have CreateTable step");
                 assert_eq!(
                     create_step[0].identity,
                     Some(IdentityKind::ByDefault),

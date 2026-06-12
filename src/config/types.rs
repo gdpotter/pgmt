@@ -102,10 +102,7 @@ pub struct ShadowDockerInput {
 #[derive(Debug, Clone)]
 pub enum ShadowDatabase {
     Auto, // Docker mode with default configuration
-    Url {
-        url: String,
-        reset: ShadowResetMode,
-    },
+    Url { url: String, reset: ShadowResetMode },
     Docker(ShadowDockerConfig),
 }
 

@@ -157,4 +157,3 @@ pub async fn cmd_migrate_validate(
         ))
     }
 }
-

@@ -12,7 +12,8 @@ async fn test_url_shadow_branch_mode() -> Result<()> {
         // harness database itself holds an open pool; the branch source must
         // be connection-free).
         let source_db = format!("pgmt_src_{}", uuid::Uuid::new_v4().simple());
-        db.execute(&format!("CREATE DATABASE \"{}\"", source_db)).await;
+        db.execute(&format!("CREATE DATABASE \"{}\"", source_db))
+            .await;
         let base = db.url();
         let source_url = format!("{}/{}", &base[..base.rfind('/').unwrap()], source_db);
 
@@ -78,7 +79,10 @@ async fn test_url_shadow_branch_mode() -> Result<()> {
 
         // A second provisioning gets a fresh branch with the dirt gone.
         let branch_url_2 = shadow.get_connection_string().await.unwrap();
-        assert_ne!(branch_url_2, branch_url, "each provisioning gets its own branch");
+        assert_ne!(
+            branch_url_2, branch_url,
+            "each provisioning gets its own branch"
+        );
         let pool = sqlx::PgPool::connect(&branch_url_2).await.unwrap();
         let junk: Option<String> = sqlx::query_scalar("SELECT to_regclass('public.junk')::text")
             .fetch_one(&pool)
@@ -90,13 +94,12 @@ async fn test_url_shadow_branch_mode() -> Result<()> {
         // Exit cleanup drops every branch — the server is left as found.
         pgmt::db::branch::cleanup_all_branches().await.unwrap();
         let branch_name = |url: &str| url.rsplit('/').next().unwrap().to_string();
-        let leftover: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ANY($1))",
-        )
-        .bind(vec![branch_name(&branch_url), branch_name(&branch_url_2)])
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let leftover: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ANY($1))")
+                .bind(vec![branch_name(&branch_url), branch_name(&branch_url_2)])
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert!(!leftover, "cleanup must drop this process's branches");
 
         db.execute(&format!(

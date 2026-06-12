@@ -202,21 +202,28 @@ mod tests {
         let args = DevUrlArgs {
             dev_url: Some("postgres://cli/db".into()),
         };
-        let resolved = args.resolve(&file_with(Some("postgres://file/db"), None)).unwrap();
+        let resolved = args
+            .resolve(&file_with(Some("postgres://file/db"), None))
+            .unwrap();
         assert_eq!(resolved.as_str(), "postgres://cli/db");
     }
 
     #[test]
     fn dev_falls_back_to_file() {
         let args = DevUrlArgs::default();
-        let resolved = args.resolve(&file_with(Some("postgres://file/db"), None)).unwrap();
+        let resolved = args
+            .resolve(&file_with(Some("postgres://file/db"), None))
+            .unwrap();
         assert_eq!(resolved.as_str(), "postgres://file/db");
     }
 
     #[test]
     fn dev_unset_is_an_error() {
         let args = DevUrlArgs::default();
-        let err = args.resolve(&ConfigInput::default()).unwrap_err().to_string();
+        let err = args
+            .resolve(&ConfigInput::default())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("PGMT_DEV_URL"));
         assert!(err.contains("databases.dev_url"));
     }
@@ -224,14 +231,19 @@ mod tests {
     #[test]
     fn target_unset_is_an_error_with_guidance() {
         let args = TargetUrlArgs::default();
-        let err = args.resolve(&ConfigInput::default()).unwrap_err().to_string();
+        let err = args
+            .resolve(&ConfigInput::default())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("PGMT_TARGET_URL"));
         assert!(err.contains("--target-url"));
     }
 
     #[test]
     fn shadow_defaults_to_auto() {
-        let shadow = ShadowUrlArgs::default().resolve(&ConfigInput::default()).unwrap();
+        let shadow = ShadowUrlArgs::default()
+            .resolve(&ConfigInput::default())
+            .unwrap();
         assert!(matches!(shadow, ShadowDatabase::Auto));
     }
 

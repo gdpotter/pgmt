@@ -62,7 +62,9 @@ fn test_apply_command_signature() {
             docker: None,
         };
 
-        let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+        let config = ConfigBuilder::new()
+            .with_file(config_input.clone())
+            .resolve()?;
         let dev = DevUrlArgs::default().resolve(&config_input)?;
         let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
 
@@ -113,7 +115,9 @@ async fn test_apply_command_error_handling() -> Result<()> {
         docker: None,
     };
 
-    let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+    let config = ConfigBuilder::new()
+        .with_file(config_input.clone())
+        .resolve()?;
     let dev = DevUrlArgs::default().resolve(&config_input)?;
     let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
 
@@ -163,7 +167,9 @@ fn test_apply_command_configuration_requirements() -> Result<()> {
     };
 
     // Verify config and connections can be resolved successfully
-    let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+    let config = ConfigBuilder::new()
+        .with_file(config_input.clone())
+        .resolve()?;
     let dev = DevUrlArgs::default().resolve(&config_input)?;
 
     // Basic validation that required fields exist

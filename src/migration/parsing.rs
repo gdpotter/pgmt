@@ -398,5 +398,4 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
-
 }

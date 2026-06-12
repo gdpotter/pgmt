@@ -66,7 +66,8 @@ pub async fn cmd_migrate_new(
     .await?;
 
     debug!("Applying current schema to shadow database");
-    let new_catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+    let new_catalog =
+        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(

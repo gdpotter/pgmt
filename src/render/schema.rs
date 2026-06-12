@@ -53,7 +53,10 @@ mod tests {
             name: "my-schema".to_string(),
         };
         let rendered = op.to_sql();
-        assert_eq!(rendered[0].sql, "CREATE SCHEMA IF NOT EXISTS \"my-schema\";");
+        assert_eq!(
+            rendered[0].sql,
+            "CREATE SCHEMA IF NOT EXISTS \"my-schema\";"
+        );
     }
 
     #[test]
