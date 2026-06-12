@@ -1,7 +1,7 @@
 use crate::catalog::Catalog;
 use crate::config::{ColumnOrderMode, Config, ObjectFilter};
 use crate::diff::operations::{MigrationStep, SqlRenderer};
-use crate::diff::{cascade, diff_all, diff_order};
+use crate::diff::plan;
 use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -12,8 +12,6 @@ use std::path::Path;
 pub struct ValidationConfig {
     /// Whether to show detailed differences on validation failure
     pub show_differences: bool,
-    /// Whether to apply object filtering during validation
-    pub apply_object_filter: bool,
     /// Whether to provide verbose output during validation
     pub verbose: bool,
 }
@@ -22,7 +20,6 @@ impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             show_differences: true,
-            apply_object_filter: true,
             verbose: true,
         }
     }
@@ -56,29 +53,25 @@ pub async fn validate_database_against_schema_files(
 }
 
 /// Compare two catalogs and return validation result
+///
+/// Catalogs arrive managed from every current caller; the filter here is a
+/// defensive, idempotent re-scope since this sink accepts catalogs from
+/// arbitrary callers.
 pub fn validate_catalogs(
     actual_catalog: &Catalog,
     expected_catalog: &Catalog,
     config: &Config,
     validation_config: &ValidationConfig,
 ) -> Result<ValidationResult> {
-    let (actual, expected) = if validation_config.apply_object_filter {
-        let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-        (
-            filter.filter_catalog(actual_catalog.clone()),
-            filter.filter_catalog(expected_catalog.clone()),
-        )
-    } else {
-        (actual_catalog.clone(), expected_catalog.clone())
-    };
+    let filter = ObjectFilter::from_config(config);
+    let actual = filter.filter_catalog(actual_catalog.clone());
+    let expected = filter.filter_catalog(expected_catalog.clone());
 
     if validation_config.verbose {
         println!("🔍 Comparing schemas...");
     }
 
-    let steps = diff_all(&actual, &expected);
-    let expanded_steps = cascade::expand(steps, &actual, &expected);
-    let ordered_steps = diff_order(expanded_steps, &actual, &expected)?;
+    let ordered_steps = plan(&actual, &expected)?;
 
     // Check column order mismatches (respecting ColumnOrderMode)
     let column_order_mismatches = if config.migration.column_order != ColumnOrderMode::Relaxed {
@@ -220,23 +213,21 @@ impl std::fmt::Display for BaselineValidationError {
     }
 }
 
-/// Enhanced validation with optional file dependency suggestions
-pub fn validate_baseline_consistency_with_suggestions(
+/// Validate that a baseline catalog matches the expected (schema-file) catalog
+pub fn validate_baseline_consistency(
     baseline_catalog: &Catalog,
     expected_catalog: &Catalog,
-    _suggest_file_dependencies: bool,
+    config: &Config,
 ) -> Result<(), BaselineValidationError> {
-    let config = Config::default();
     let validation_config = ValidationConfig {
         show_differences: false,
-        apply_object_filter: false,
         verbose: false,
     };
 
     let result = validate_catalogs(
         baseline_catalog,
         expected_catalog,
-        &config,
+        config,
         &validation_config,
     )
     .map_err(|_| BaselineValidationError {
@@ -503,7 +494,6 @@ mod tests {
     fn test_validation_config_default() {
         let config = ValidationConfig::default();
         assert!(config.show_differences);
-        assert!(config.apply_object_filter);
         assert!(config.verbose);
     }
 

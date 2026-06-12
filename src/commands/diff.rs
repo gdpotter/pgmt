@@ -5,7 +5,7 @@
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
-use crate::diff::{cascade, diff_all, diff_order};
+use crate::diff::plan;
 use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::Result;
 use std::path::Path;
@@ -47,19 +47,12 @@ pub async fn cmd_diff(config: &Config, root_dir: &Path, args: DiffArgs) -> Resul
     let dev_pool =
         crate::db::connection::connect_to_database(&config.databases.dev, "development database")
             .await?;
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
-    let filtered_dev_catalog = Catalog::load_managed(&dev_pool, &filter).await?;
-    let filtered_schema_catalog = schema_catalog;
+    let filter = ObjectFilter::from_config(config);
+    let dev_catalog = Catalog::load_managed(&dev_pool, &filter).await?;
 
     // Compute differences (dev -> schema, so SQL shows how to update dev)
     eprintln!("Computing differences...\n");
-    let steps = diff_all(&filtered_dev_catalog, &filtered_schema_catalog);
-    let expanded_steps = cascade::expand(steps, &filtered_dev_catalog, &filtered_schema_catalog);
-    let ordered_steps = diff_order(
-        expanded_steps,
-        &filtered_dev_catalog,
-        &filtered_schema_catalog,
-    )?;
+    let ordered_steps = plan(&dev_catalog, &schema_catalog)?;
 
     // Output results
     let context = DiffContext::new("dev database", "schema files");
@@ -67,8 +60,8 @@ pub async fn cmd_diff(config: &Config, root_dir: &Path, args: DiffArgs) -> Resul
         &ordered_steps,
         &args.format,
         &context,
-        &filtered_dev_catalog,
-        &filtered_schema_catalog,
+        &dev_catalog,
+        &schema_catalog,
         args.output_sql.as_deref(),
     )?;
 

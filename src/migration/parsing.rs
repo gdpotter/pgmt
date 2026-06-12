@@ -133,18 +133,6 @@ pub fn find_latest_baseline(baselines_dir: &Path) -> Result<Option<ParsedBaselin
     Ok(baselines.last().cloned())
 }
 
-/// Find migrations that have a version less than the target version
-pub fn find_migrations_before_version(
-    migrations_dir: &Path,
-    target_version: u64,
-) -> Result<Vec<ParsedMigration>> {
-    let migrations = discover_migrations(migrations_dir)?;
-    Ok(migrations
-        .into_iter()
-        .filter(|m| m.version < target_version)
-        .collect())
-}
-
 /// Find the baseline that should be used for a specific migration version
 /// (i.e., the latest baseline that has a version less than the target version)
 pub fn find_baseline_for_version(
@@ -411,41 +399,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    #[test]
-    fn test_find_migrations_before_version() {
-        let temp_dir = env::temp_dir().join("pgmt_test_find_migrations_before_version");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-
-        // Create test migration files
-        std::fs::write(temp_dir.join("V1000000000_first_migration.sql"), "-- First").unwrap();
-        std::fs::write(
-            temp_dir.join("V2000000000_second_migration.sql"),
-            "-- Second",
-        )
-        .unwrap();
-        std::fs::write(
-            temp_dir.join("V4000000000_fourth_migration.sql"),
-            "-- Fourth",
-        )
-        .unwrap();
-
-        // Find migrations before version 3000000000
-        let migrations = find_migrations_before_version(&temp_dir, 3000000000).unwrap();
-        assert_eq!(migrations.len(), 2);
-        assert_eq!(migrations[0].version, 1000000000);
-        assert_eq!(migrations[1].version, 2000000000);
-
-        // Find migrations before version 1500000000
-        let migrations = find_migrations_before_version(&temp_dir, 1500000000).unwrap();
-        assert_eq!(migrations.len(), 1);
-        assert_eq!(migrations[0].version, 1000000000);
-
-        // Find migrations before version 500000000 (should be empty)
-        let migrations = find_migrations_before_version(&temp_dir, 500000000).unwrap();
-        assert_eq!(migrations.len(), 0);
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
 }

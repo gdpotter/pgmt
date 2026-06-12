@@ -16,7 +16,7 @@ pub async fn verify_final_state(
     // Load the current dev database catalog after changes, scoped the same
     // way as the diff; expected may come from any caller, so filter it too
     // (idempotent).
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
+    let filter = ObjectFilter::from_config(config);
     let current_filtered = Catalog::load_managed(dev_pool, &filter)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load final catalog for verification: {}", e))?;

@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
-use sqlx::{Executor, PgPool};
-use std::path::Path;
+use sqlx::PgPool;
 
 use crate::db::error_context::SqlErrorContext;
 use crate::render::Safety;
@@ -66,8 +65,6 @@ impl Default for SqlExecutorConfig {
     }
 }
 
-/// Legacy schema executor - maintained for backward compatibility
-pub struct SchemaExecutor {}
 
 /// Enhanced SQL execution error with configurable formatting
 #[derive(Debug)]
@@ -348,54 +345,7 @@ impl SqlContentExecutor {
     }
 }
 
-// Legacy SchemaExecutor implementation for backward compatibility
-impl SchemaExecutor {
-    /// Execute SQL on any executor (pool or transaction) with enhanced error reporting
-    /// This method is kept for migration compatibility
-    pub async fn execute_sql_with_enhanced_errors<'e, E>(
-        executor: E,
-        file_path: &Path,
-        sql_content: &str,
-    ) -> Result<sqlx::postgres::PgQueryResult>
-    where
-        E: Executor<'e, Database = sqlx::Postgres>,
-    {
-        let relative_path = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown_file.sql");
-
-        // Execute the SQL content
-        match executor.execute(sql_content).await {
-            Ok(result) => Ok(result),
-            Err(sqlx_error) => {
-                // Use shared utility to extract rich error context from PostgreSQL
-                let ctx = SqlErrorContext::from_sqlx_error(&sqlx_error, sql_content);
-
-                let error_info = SqlExecutionError {
-                    source_context: relative_path.to_string(),
-                    sql_content: sql_content.to_string(),
-                    line_number: ctx.line_number,
-                    postgres_error: ctx.message,
-                    pg_detail: ctx.detail,
-                    pg_hint: ctx.hint,
-                    pg_context: ctx.context,
-                    suggestion: SqlContentExecutor::generate_suggestion(&sqlx_error),
-                    troubleshooting_tips: SqlContentExecutor::generate_troubleshooting_tips(
-                        &sqlx_error,
-                    ),
-                    dependencies_info: None,
-                };
-
-                let formatted_error =
-                    error_info.format_error(&ErrorLevel::Enhanced, &SourceContextStyle::File, 200); // Use smaller truncation for legacy compatibility
-                Err(anyhow!(formatted_error))
-            }
-        }
-    }
-}
-
-// Static helper methods for error analysis (used by both SqlContentExecutor and SchemaExecutor)
+// Static helper methods for error analysis
 impl SqlContentExecutor {
     /// Generate helpful suggestions based on common error patterns
     fn generate_suggestion(error: &sqlx::Error) -> Option<String> {

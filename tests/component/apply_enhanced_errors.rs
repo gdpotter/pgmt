@@ -171,13 +171,11 @@ CREATE TABLE users (
         fs::write(&migration_path, invalid_migration_sql)?;
 
         // Test the enhanced SQL executor for migrations
-        use pgmt::db::schema_executor::SchemaExecutor;
-        let result = SchemaExecutor::execute_sql_with_enhanced_errors(
-            shadow_db.pool(),
-            &migration_path,
-            invalid_migration_sql,
-        )
-        .await;
+        use pgmt::db::schema_executor::BaselineExecutor;
+        let executor = BaselineExecutor::new(shadow_db.pool().clone(), false, false);
+        let result = executor
+            .execute_baseline(invalid_migration_sql, "V001__test_migration.sql")
+            .await;
 
         assert!(
             result.is_err(),

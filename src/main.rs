@@ -639,7 +639,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                         .resolve()?;
 
                     info!("Validating schema consistency");
-                    commands::cmd_validate(&config).await
+                    commands::cmd_validate(&config, &root_dir).await
                 }
                 Commands::Config { command } => {
                     match &command {

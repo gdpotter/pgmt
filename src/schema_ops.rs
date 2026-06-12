@@ -1,5 +1,6 @@
 use crate::catalog::Catalog;
 use crate::config::Config;
+use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
 use crate::db::connection::connect_with_retry;
 use crate::db::error_context::SqlErrorContext;
@@ -8,97 +9,6 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::path::Path;
 use tracing::{debug, info};
-
-#[derive(Debug, Clone)]
-pub struct SchemaOpsConfig {
-    pub clean_before_apply: bool,
-    pub verbose: bool,
-    pub validate_after_apply: bool,
-}
-
-impl Default for SchemaOpsConfig {
-    fn default() -> Self {
-        Self {
-            clean_before_apply: true,
-            verbose: true,
-            validate_after_apply: true,
-        }
-    }
-}
-
-/// Load and apply schema files to a database
-pub async fn load_and_apply_schema(
-    pool: &PgPool,
-    schema_dir: &Path,
-    config: &SchemaOpsConfig,
-    objects: &crate::config::types::Objects,
-) -> Result<()> {
-    if config.clean_before_apply {
-        info!("🧹 Cleaning database before applying schema...");
-        cleaner::clean_shadow_db(pool, objects)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
-    }
-
-    // Use the schema processor for better error reporting and file dependency tracking
-    let processor_config = SchemaProcessorConfig {
-        verbose: config.verbose,
-        clean_before_apply: false, // Already cleaned above if requested
-        objects: objects.clone(),
-    };
-    let processor = SchemaProcessor::new(pool.clone(), processor_config);
-    processor.process_schema_directory(schema_dir).await?;
-
-    if config.validate_after_apply {
-        info!("🔍 Validating applied schema...");
-        validate_schema_applied(pool).await?;
-        info!("✅ Schema validation completed");
-    }
-
-    Ok(())
-}
-
-/// Apply schema with file dependency tracking and augmentation
-async fn apply_schema_with_file_dependency_tracking(
-    shadow_pool: &PgPool,
-    schema_dir: &Path,
-    config: &SchemaOpsConfig,
-    verbose: bool,
-    objects: &crate::config::types::Objects,
-) -> Result<Catalog> {
-    // Use SchemaProcessor which encapsulates all the file dependency tracking logic
-    let processor_config = SchemaProcessorConfig {
-        verbose,
-        clean_before_apply: config.clean_before_apply,
-        objects: objects.clone(),
-    };
-    let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
-    let processed_schema = processor
-        .process_schema_directory(schema_dir)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to process schema files from directory: {}\n\n\
-                Common causes:\n\
-                • Schema directory doesn't exist or is empty\n\
-                • Circular dependencies between files (A requires B, B requires A)\n\
-                • Missing dependency files referenced in '-- require:' headers\n\
-                • Invalid file paths in dependency declarations\n\
-                • SQL syntax errors in schema files",
-                schema_dir.display()
-            )
-        })?;
-
-    let catalog = processed_schema.with_file_dependencies_applied();
-
-    if config.validate_after_apply {
-        info!("🔍 Validating applied schema...");
-        validate_schema_applied(shadow_pool).await?;
-        info!("✅ Schema validation completed");
-    }
-
-    Ok(catalog)
-}
 
 /// Apply roles file to a database if it exists
 ///
@@ -144,86 +54,72 @@ fn truncate_for_log(s: &str) -> String {
     }
 }
 
-/// Apply current schema from config to shadow database, returning the
-/// **managed** catalog (the shadow branch inherits image substrate, which is
-/// outside the managed universe). All consumers — diff, migrate new, baseline,
-/// status, validation — share this source, so they see identical state.
-pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) -> Result<Catalog> {
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+/// Build the desired-state catalog on a shadow database: clean it, apply the
+/// roles file and schema files, and return the **managed** catalog (the shadow
+/// branch inherits image substrate, which is outside the managed universe).
+///
+/// This is THE desired-state source. Every command that needs "what the schema
+/// files describe" — apply, diff, migrate new/update/validate/diff, baseline —
+/// goes through here, so settings like
+/// `schema.augment_dependencies_from_files` apply uniformly.
+pub async fn build_desired_state(
+    config: &Config,
+    root_dir: &Path,
+    shadow_pool: &PgPool,
+) -> Result<Catalog> {
     let schema_dir = root_dir.join(&config.directories.schema);
     let roles_file = root_dir.join(&config.directories.roles);
 
-    let ops_config = SchemaOpsConfig::default();
+    info!("🧹 Cleaning database before applying schema...");
+    cleaner::clean_shadow_db(shadow_pool, &config.objects)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
 
-    let catalog = apply_schema_to_shadow_with_roles(
-        &shadow_url,
-        &schema_dir,
-        Some(&roles_file),
-        &ops_config,
-        config.schema.augment_dependencies_from_files,
-        config.schema.verbose_file_processing,
-        &config.objects,
-    )
-    .await?;
+    apply_roles_file(shadow_pool, &roles_file).await?;
 
-    let filter = crate::config::filter::ObjectFilter::new(
-        &config.objects,
-        &config.migration.tracking_table,
-    );
-    Ok(filter.filter_catalog(catalog))
+    let processor_config = SchemaProcessorConfig {
+        verbose: config.schema.verbose_file_processing,
+        clean_before_apply: false, // Already cleaned above
+        objects: config.objects.clone(),
+    };
+    let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
+    let processed_schema = processor
+        .process_schema_directory(&schema_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to process schema files from directory: {}\n\n\
+                Common causes:\n\
+                • Schema directory doesn't exist or is empty\n\
+                • Circular dependencies between files (A requires B, B requires A)\n\
+                • Missing dependency files referenced in '-- require:' headers\n\
+                • Invalid file paths in dependency declarations\n\
+                • SQL syntax errors in schema files",
+                schema_dir.display()
+            )
+        })?;
+
+    let catalog = if config.schema.augment_dependencies_from_files {
+        processed_schema.with_file_dependencies_applied()
+    } else {
+        processed_schema.catalog
+    };
+
+    info!("🔍 Validating applied schema...");
+    validate_schema_applied(shadow_pool).await?;
+    info!("✅ Schema validation completed");
+
+    Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
 }
 
-/// Apply schema to shadow database with roles file support and optional file dependency augmentation
-pub async fn apply_schema_to_shadow_with_roles(
-    shadow_url: &str,
-    schema_dir: &Path,
-    roles_file: Option<&Path>,
-    config: &SchemaOpsConfig,
-    enable_file_deps: bool,
-    verbose_file_processing: bool,
-    objects: &crate::config::types::Objects,
-) -> Result<Catalog> {
-    let shadow_pool = connect_with_retry(shadow_url).await?;
+/// Connect to the configured shadow database, build the desired state on it,
+/// and return the managed catalog. Convenience wrapper around
+/// [`build_desired_state`] for commands that don't hold a shadow pool.
+pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) -> Result<Catalog> {
+    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_pool = connect_with_retry(&shadow_url).await?;
 
-    // Clean the database first if requested
-    if config.clean_before_apply {
-        info!("🧹 Cleaning database before applying schema...");
-        cleaner::clean_shadow_db(&shadow_pool, objects)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
-    }
-
-    // Apply roles file before schema files (if provided)
-    if let Some(roles_path) = roles_file {
-        apply_roles_file(&shadow_pool, roles_path).await?;
-    }
-
-    // Create a config that skips cleaning since we already did it
-    let schema_config = SchemaOpsConfig {
-        clean_before_apply: false,
-        ..*config
-    };
-
-    // If file dependency augmentation is enabled, use the enhanced method
-    let catalog = if enable_file_deps {
-        apply_schema_with_file_dependency_tracking(
-            &shadow_pool,
-            schema_dir,
-            &schema_config,
-            verbose_file_processing,
-            objects,
-        )
-        .await?
-    } else {
-        // Use the traditional method
-        load_and_apply_schema(&shadow_pool, schema_dir, &schema_config, objects).await?;
-
-        // Physical-world load: apply_current_schema_to_shadow (the only
-        // config-aware caller) scopes the result to the managed universe.
-        Catalog::load_unfiltered(&shadow_pool)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to load catalog from shadow database: {}", e))?
-    };
+    let catalog = build_desired_state(config, root_dir, &shadow_pool).await?;
 
     shadow_pool.close().await;
     Ok(catalog)
@@ -244,29 +140,4 @@ async fn validate_schema_applied(pool: &PgPool) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to query system tables: {}", e))?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_schema_ops_config_default() {
-        let config = SchemaOpsConfig::default();
-        assert!(config.clean_before_apply);
-        assert!(config.verbose);
-        assert!(config.validate_after_apply);
-    }
-
-    #[test]
-    fn test_schema_ops_config_custom() {
-        let config = SchemaOpsConfig {
-            clean_before_apply: false,
-            verbose: false,
-            validate_after_apply: false,
-        };
-        assert!(!config.clean_before_apply);
-        assert!(!config.verbose);
-        assert!(!config.validate_after_apply);
-    }
 }

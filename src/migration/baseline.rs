@@ -4,17 +4,17 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::catalog::Catalog;
+use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use crate::config::Config;
-use crate::config::types::Objects;
+use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
 use crate::db::schema_executor::BaselineExecutor;
-use crate::config::filter::ObjectFilter;
-use crate::config::types::TrackingTable;
 use crate::migration::{
-    discover_migrations, find_baseline_for_version, find_latest_baseline,
-    generate_baseline_filename,
+    ParsedMigration, discover_migrations, find_baseline_for_version, find_latest_baseline,
+    generate_baseline_filename, parse_migration_sections, validate_sections,
 };
-use crate::validation::validate_baseline_consistency_with_suggestions;
+use crate::progress::SectionReporter;
+use crate::validation::validate_baseline_consistency;
 
 /// Configuration for baseline operations
 #[derive(Debug, Clone)]
@@ -42,8 +42,8 @@ pub struct BaselineOperationResult {
 /// managed universe. Shadow branches legitimately contain image-provided
 /// substrate (excluded schemas, their extensions), which must never appear in
 /// baselines or count as a validation difference.
-async fn load_managed_catalog(shadow_pool: &PgPool, objects: &Objects) -> Result<Catalog> {
-    let filter = ObjectFilter::new(objects, &TrackingTable::default());
+async fn load_managed_catalog(shadow_pool: &PgPool, config: &Config) -> Result<Catalog> {
+    let filter = ObjectFilter::from_config(config);
     Catalog::load_managed(shadow_pool, &filter).await
 }
 
@@ -52,9 +52,9 @@ pub async fn load_baseline_into_shadow(
     shadow_pool: &PgPool,
     baseline_path: &Path,
     roles_file: &Path,
-    objects: &Objects,
+    config: &Config,
 ) -> Result<Catalog> {
-    cleaner::clean_shadow_db(shadow_pool, objects).await?;
+    cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
 
     // Apply roles before baseline (handles non-existent files gracefully)
     crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
@@ -73,7 +73,74 @@ pub async fn load_baseline_into_shadow(
         .await
         .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
 
-    load_managed_catalog(shadow_pool, objects).await
+    load_managed_catalog(shadow_pool, config).await
+}
+
+/// Replay migration files onto a shadow database, in order.
+///
+/// This is THE replay path — every reconstruction (migrate new/update starting
+/// state, migrate validate expected state) goes through here. It is
+/// section-aware: a migration is parsed into its sections and executed with
+/// each section's transaction mode, so non-transactional sections (e.g.
+/// CREATE INDEX CONCURRENTLY) replay the same way they run in production.
+async fn replay_migrations(
+    shadow_pool: &PgPool,
+    migrations: &[ParsedMigration],
+    config: &Config,
+    verbose: bool,
+) -> Result<()> {
+    for migration in migrations {
+        if verbose {
+            println!(
+                "  Applying {} - {}",
+                migration.version, migration.description
+            );
+        }
+
+        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
+            format!(
+                "Failed to read migration file: {}",
+                migration.path.display()
+            )
+        })?;
+
+        let sections = parse_migration_sections(&migration.path, &migration_sql)?;
+        validate_sections(&sections)?;
+
+        let reporter = SectionReporter::new(sections.len(), false);
+        let mut executor = SectionExecutor::new(
+            shadow_pool.clone(),
+            config.migration.tracking_table.clone(),
+            reporter,
+            ExecutionMode::Validation,
+        );
+
+        for section in &sections {
+            executor
+                .execute_section(migration.version, section)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to apply migration {}: {}",
+                        migration.version,
+                        migration.path.display()
+                    )
+                })?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Warn about migrations that predate the baseline and will never replay
+fn warn_pre_baseline_migrations(migrations: &[ParsedMigration], baseline_version: u64) {
+    for m in migrations.iter().filter(|m| m.version <= baseline_version) {
+        eprintln!(
+            "Warning: Migration {} predates baseline {} and will be skipped. \
+             Run 'pgmt migrate update {}' to renumber it.",
+            m.version, baseline_version, m.version
+        );
+    }
 }
 
 /// Update or create a baseline file for a migration
@@ -104,356 +171,153 @@ pub async fn ensure_baseline_for_migration(
     })
 }
 
-/// Enhanced validation with optional file dependency suggestions
-pub async fn validate_baseline_against_catalog_with_suggestions(
+/// Validate that a baseline file reproduces the expected catalog
+pub async fn validate_baseline_against_catalog(
     shadow_pool: &PgPool,
     baseline_path: &Path,
     expected_catalog: &Catalog,
-    config: &BaselineConfig,
-    suggest_file_dependencies: bool,
+    baseline_config: &BaselineConfig,
     roles_file: &Path,
-    objects: &Objects,
+    config: &Config,
 ) -> Result<()> {
-    if !config.validate_consistency {
+    if !baseline_config.validate_consistency {
         return Ok(());
     }
 
-    if config.verbose {
+    if baseline_config.verbose {
         println!("Validating baseline matches intended schema...");
     }
 
     let baseline_catalog =
-        load_baseline_into_shadow(shadow_pool, baseline_path, roles_file, objects).await?;
-    validate_baseline_consistency_with_suggestions(
-        &baseline_catalog,
-        expected_catalog,
-        suggest_file_dependencies,
-    )?;
+        load_baseline_into_shadow(shadow_pool, baseline_path, roles_file, config).await?;
+    validate_baseline_consistency(&baseline_catalog, expected_catalog, config)?;
 
-    if config.verbose {
+    if baseline_config.verbose {
         println!("✓ Baseline validation passed");
     }
 
     Ok(())
 }
 
-/// Get the starting catalog state for migration generation
-/// Returns either the latest baseline or reconstructs from migration chain,
-/// then applies any migrations that come after the baseline
+/// Get the starting catalog state for migration generation: the latest
+/// baseline (or empty schema) plus every migration after it.
+///
+/// This is also the "expected state" for `migrate validate` — both commands
+/// reconstruct history through the same baseline + replay path.
 pub async fn get_migration_starting_state(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
     migrations_dir: &Path,
     roles_file: &Path,
-    config: &BaselineConfig,
-    objects: &Objects,
+    baseline_config: &BaselineConfig,
+    config: &Config,
 ) -> Result<Catalog> {
-    let latest_baseline = find_latest_baseline(baselines_dir)?;
+    let all_migrations = discover_migrations(migrations_dir)?;
 
-    if let Some(baseline) = latest_baseline {
-        if config.verbose {
+    let migrations_to_replay = if let Some(baseline) = find_latest_baseline(baselines_dir)? {
+        if baseline_config.verbose {
             info!("Loading baseline: {}", baseline.path.display());
         }
-        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, objects).await?;
+        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
+        warn_pre_baseline_migrations(&all_migrations, baseline.version);
 
-        // Warn about pre-baseline migrations that will be skipped
-        let all_migrations = discover_migrations(migrations_dir)?;
-        for m in all_migrations
-            .iter()
-            .filter(|m| m.version <= baseline.version)
-        {
-            eprintln!(
-                "Warning: Migration {} predates baseline {} and will be skipped. \
-                 Run 'pgmt migrate update {}' to renumber it.",
-                m.version, baseline.version, m.version
+        let after_baseline: Vec<_> = all_migrations
+            .into_iter()
+            .filter(|m| m.version > baseline.version)
+            .collect();
+        if baseline_config.verbose && !after_baseline.is_empty() {
+            println!(
+                "Applying {} migration(s) after baseline",
+                after_baseline.len()
             );
         }
-
-        // Apply any migrations that come after the baseline
-        apply_migrations_after_version(shadow_pool, migrations_dir, baseline.version, config, objects)
-            .await
+        after_baseline
     } else {
-        if config.verbose {
+        if baseline_config.verbose {
             info!("No existing baseline found, reconstructing from existing migrations");
         }
-        reconstruct_from_migration_chain(shadow_pool, migrations_dir, roles_file, objects).await
-    }
+        cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
+        crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
+
+        if all_migrations.is_empty() {
+            println!("No existing migrations found, starting from empty schema");
+        } else {
+            println!(
+                "Applying {} existing migration(s) to reconstruct state",
+                all_migrations.len()
+            );
+        }
+        all_migrations
+    };
+
+    replay_migrations(shadow_pool, &migrations_to_replay, config, baseline_config.verbose).await?;
+    load_managed_catalog(shadow_pool, config).await
 }
 
-/// Get the starting catalog state for updating a specific migration version
-/// Loads the baseline before the target version, then applies any migrations
-/// between the baseline and the target version
+/// Get the starting catalog state for updating a specific migration version:
+/// the baseline before the target version (or empty schema) plus the
+/// migrations between them.
 pub async fn get_migration_update_starting_state(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
     migrations_dir: &Path,
     target_version: u64,
     roles_file: &Path,
-    config: &BaselineConfig,
-    objects: &Objects,
+    baseline_config: &BaselineConfig,
+    config: &Config,
 ) -> Result<Catalog> {
-    let previous_baseline = find_baseline_for_version(baselines_dir, target_version)?;
+    let all_migrations = discover_migrations(migrations_dir)?;
 
-    if let Some(baseline) = previous_baseline {
-        if config.verbose {
+    let migrations_to_replay = if let Some(baseline) =
+        find_baseline_for_version(baselines_dir, target_version)?
+    {
+        if baseline_config.verbose {
             info!("Loading previous baseline: {}", baseline.path.display());
         }
-        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, objects).await?;
+        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
 
-        // Apply migrations between baseline and target version
-        apply_migrations_in_range(
-            shadow_pool,
-            migrations_dir,
-            baseline.version,
-            target_version,
-            config,
-            objects,
-        )
-        .await
+        let in_range: Vec<_> = all_migrations
+            .into_iter()
+            .filter(|m| m.version > baseline.version && m.version < target_version)
+            .collect();
+        if baseline_config.verbose && !in_range.is_empty() {
+            println!(
+                "Applying {} migration(s) between baseline and target",
+                in_range.len()
+            );
+        }
+        in_range
     } else {
-        if config.verbose {
+        if baseline_config.verbose {
             info!(
                 "No previous baseline found, reconstructing from migrations before {}",
                 target_version
             );
         }
-        reconstruct_from_migration_chain_before_version(
-            shadow_pool,
-            migrations_dir,
-            target_version,
-            roles_file,
-            objects,
-        )
-        .await
-    }
-}
+        cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
+        crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
 
-/// Apply migrations that come after a specific version
-/// Used after loading a baseline to apply subsequent migrations
-async fn apply_migrations_after_version(
-    shadow_pool: &PgPool,
-    migrations_dir: &Path,
-    after_version: u64,
-    config: &BaselineConfig,
-    objects: &Objects,
-) -> Result<Catalog> {
-    let all_migrations = discover_migrations(migrations_dir)?;
-    let migrations_to_apply: Vec<_> = all_migrations
-        .into_iter()
-        .filter(|m| m.version > after_version)
-        .collect();
-
-    if !migrations_to_apply.is_empty() {
-        if config.verbose {
+        let before_target: Vec<_> = all_migrations
+            .into_iter()
+            .filter(|m| m.version < target_version)
+            .collect();
+        if before_target.is_empty() {
             println!(
-                "Applying {} migration(s) after baseline",
-                migrations_to_apply.len()
+                "No existing migrations found before {}, starting from empty schema",
+                target_version
+            );
+        } else {
+            println!(
+                "Applying {} existing migration(s) before {}",
+                before_target.len(),
+                target_version
             );
         }
+        before_target
+    };
 
-        for migration in migrations_to_apply {
-            if config.verbose {
-                println!(
-                    "  Applying {} - {}",
-                    migration.version, migration.description
-                );
-            }
-
-            let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
-                format!(
-                    "Failed to read migration file: {}",
-                    migration.path.display()
-                )
-            })?;
-
-            let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-            let source = format!("{} - {}", migration.version, migration.description);
-            executor
-                .execute_baseline(&migration_sql, &source)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to apply migration {}: {}",
-                        migration.version,
-                        migration.path.display()
-                    )
-                })?;
-        }
-    }
-
-    load_managed_catalog(shadow_pool, objects).await
-}
-
-/// Apply migrations in a version range (after_version, before_version)
-/// Used after loading a baseline when updating a specific migration
-async fn apply_migrations_in_range(
-    shadow_pool: &PgPool,
-    migrations_dir: &Path,
-    after_version: u64,
-    before_version: u64,
-    config: &BaselineConfig,
-    objects: &Objects,
-) -> Result<Catalog> {
-    let all_migrations = discover_migrations(migrations_dir)?;
-    let migrations_to_apply: Vec<_> = all_migrations
-        .into_iter()
-        .filter(|m| m.version > after_version && m.version < before_version)
-        .collect();
-
-    if !migrations_to_apply.is_empty() {
-        if config.verbose {
-            println!(
-                "Applying {} migration(s) between baseline and target",
-                migrations_to_apply.len()
-            );
-        }
-
-        for migration in migrations_to_apply {
-            if config.verbose {
-                println!(
-                    "  Applying {} - {}",
-                    migration.version, migration.description
-                );
-            }
-
-            let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
-                format!(
-                    "Failed to read migration file: {}",
-                    migration.path.display()
-                )
-            })?;
-
-            let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-            let source = format!("{} - {}", migration.version, migration.description);
-            executor
-                .execute_baseline(&migration_sql, &source)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to apply migration {}: {}",
-                        migration.version,
-                        migration.path.display()
-                    )
-                })?;
-        }
-    }
-
-    load_managed_catalog(shadow_pool, objects).await
-}
-
-/// Reconstruct catalog by applying all migrations in chronological order
-async fn reconstruct_from_migration_chain(
-    shadow_pool: &PgPool,
-    migrations_dir: &Path,
-    roles_file: &Path,
-    objects: &Objects,
-) -> Result<Catalog> {
-    cleaner::clean_shadow_db(shadow_pool, objects).await?;
-
-    // Apply roles before migrations (handles non-existent files gracefully)
-    crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
-
-    let migrations = discover_migrations(migrations_dir)?;
-
-    if migrations.is_empty() {
-        println!("No existing migrations found, starting from empty schema");
-        return load_managed_catalog(shadow_pool, objects).await;
-    }
-
-    println!(
-        "Applying {} existing migration(s) to reconstruct state",
-        migrations.len()
-    );
-
-    for migration in migrations {
-        println!(
-            "  Applying {} - {}",
-            migration.version, migration.description
-        );
-
-        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
-            format!(
-                "Failed to read migration file: {}",
-                migration.path.display()
-            )
-        })?;
-
-        let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-        let source = format!("{} - {}", migration.version, migration.description);
-        executor
-            .execute_baseline(&migration_sql, &source)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to apply migration {}: {}",
-                    migration.version,
-                    migration.path.display()
-                )
-            })?;
-    }
-
-    load_managed_catalog(shadow_pool, objects).await
-}
-
-/// Reconstruct catalog by applying migrations before a specific version
-async fn reconstruct_from_migration_chain_before_version(
-    shadow_pool: &PgPool,
-    migrations_dir: &Path,
-    target_version: u64,
-    roles_file: &Path,
-    objects: &Objects,
-) -> Result<Catalog> {
-    use crate::migration::find_migrations_before_version;
-
-    cleaner::clean_shadow_db(shadow_pool, objects).await?;
-
-    // Apply roles before migrations (handles non-existent files gracefully)
-    crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
-
-    let migrations = find_migrations_before_version(migrations_dir, target_version)?;
-
-    if migrations.is_empty() {
-        println!(
-            "No existing migrations found before {}, starting from empty schema",
-            target_version
-        );
-        return load_managed_catalog(shadow_pool, objects).await;
-    }
-
-    println!(
-        "Applying {} existing migration(s) before {}",
-        migrations.len(),
-        target_version
-    );
-
-    for migration in migrations {
-        println!(
-            "  Applying {} - {}",
-            migration.version, migration.description
-        );
-
-        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
-            format!(
-                "Failed to read migration file: {}",
-                migration.path.display()
-            )
-        })?;
-
-        let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
-        let source = format!("{} - {}", migration.version, migration.description);
-        executor
-            .execute_baseline(&migration_sql, &source)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to apply migration {}: {}",
-                    migration.version,
-                    migration.path.display()
-                )
-            })?;
-    }
-
-    load_managed_catalog(shadow_pool, objects).await
+    replay_migrations(shadow_pool, &migrations_to_replay, config, baseline_config.verbose).await?;
+    load_managed_catalog(shadow_pool, config).await
 }
 
 /// Helper to determine if a baseline should be created or updated for a migration

@@ -1,6 +1,6 @@
 use crate::catalog::Catalog;
 use crate::diff::operations::{MigrationStep, SqlRenderer};
-use crate::diff::{cascade, diff_all, diff_order};
+use crate::diff::plan;
 use anyhow::Result;
 
 /// Input for migration generation - all pure data, no side effects
@@ -25,9 +25,7 @@ pub struct MigrationGenerationResult {
 /// Pure function to generate migration from two catalogs
 /// No side effects - just transformation of data
 pub fn generate_migration(input: MigrationGenerationInput) -> Result<MigrationGenerationResult> {
-    let steps = diff_all(&input.old_catalog, &input.new_catalog);
-    let expanded_steps = cascade::expand(steps, &input.old_catalog, &input.new_catalog);
-    let ordered_steps = diff_order(expanded_steps, &input.old_catalog, &input.new_catalog)?;
+    let ordered_steps = plan(&input.old_catalog, &input.new_catalog)?;
 
     let has_changes = !ordered_steps.is_empty();
 

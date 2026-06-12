@@ -33,6 +33,17 @@ use petgraph::graph::DiGraph;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{info, warn};
 
+/// The engine: diff two catalogs, expand cascades, and order the steps.
+///
+/// Every command's migration plan comes from here — apply, diff, migrate
+/// new/update/validate/diff, baseline rendering, and validation all diff two
+/// managed catalogs through this one path.
+pub fn plan(old: &Catalog, new: &Catalog) -> anyhow::Result<Vec<MigrationStep>> {
+    let steps = diff_all(old, new);
+    let expanded = cascade::expand(steps, old, new);
+    diff_order(expanded, old, new)
+}
+
 pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
     info!("Diffing catalogs...");
     let mut out = Vec::new();

@@ -110,9 +110,14 @@ migration:
 
 ```yaml
 schema:
-  augment_dependencies_from_files: true # Use -- require: directives
+  augment_dependencies_from_files: true # Use -- require: directives for ordering
   validate_file_dependencies: true
+  verbose_file_processing: false # Per-file progress while loading schema files
 ```
+
+These settings apply uniformly to every command that loads your schema files
+(`apply`, `diff`, `migrate new/update/validate/diff`, `migrate baseline`) —
+they all build the desired state through the same path.
 
 ### docker
 

@@ -4,7 +4,7 @@ use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
     BaselineConfig, ensure_baseline_for_migration, find_latest_migration,
     generate_baseline_filename, get_migration_update_starting_state,
-    should_manage_baseline_for_migration, validate_baseline_against_catalog_with_suggestions,
+    should_manage_baseline_for_migration, validate_baseline_against_catalog,
 };
 use anyhow::{Result, anyhow};
 use std::path::Path;
@@ -56,39 +56,26 @@ pub async fn cmd_migrate_update_with_options(
         latest_migration.version,
         &roles_file,
         &baseline_config,
-        &config.objects,
+        config,
     )
     .await?;
 
     // Step 2: Reset shadow database and apply current schema
     debug!("Applying current schema to shadow database");
-    // Use apply_current_schema_to_shadow which respects file dependency settings
-    // This function creates its own connection, so close the existing one first
-    shadow_pool.close().await;
-    let new_catalog = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
-
-    // Reconnect for baseline validation later
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
-    // Apply object filtering
-    // Both sides are already managed catalogs: the baseline/migration-chain
-    // reconstruction and apply_current_schema_to_shadow filter at load.
-    let filtered_old_catalog = old_catalog;
-    let filtered_new_catalog = new_catalog;
+    let new_catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
-        &filtered_old_catalog,
-        &filtered_new_catalog,
+        &old_catalog,
+        &new_catalog,
         config.migration.column_order,
     )?;
 
     // Step 3: Generate migration using pure logic
     debug!("Generating updated migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: filtered_old_catalog,
-        new_catalog: filtered_new_catalog.clone(),
+        old_catalog,
+        new_catalog: new_catalog.clone(),
         description: latest_migration.description.clone(), // We keep the original description
         version: latest_migration.version,
         filename_prefix: config.migration.filename_prefix.clone(),
@@ -133,16 +120,13 @@ pub async fn cmd_migrate_update_with_options(
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
         if baseline_config.validate_consistency {
-            // Use enhanced validation with file dependency suggestions when enabled
-            let suggest_file_deps = config.schema.augment_dependencies_from_files;
-            validate_baseline_against_catalog_with_suggestions(
+            validate_baseline_against_catalog(
                 &shadow_pool,
                 &result.path,
-                &filtered_new_catalog,
+                &new_catalog,
                 &baseline_config,
-                suggest_file_deps,
                 &roles_file,
-                &config.objects,
+                config,
             )
             .await?;
         }
@@ -232,31 +216,18 @@ pub async fn cmd_migrate_update_specific(
         target_migration.version,
         &roles_file,
         &baseline_config,
-        &config.objects,
+        config,
     )
     .await?;
 
     // Apply current schema to shadow database
     debug!("Applying current schema to shadow database");
-    // Use apply_current_schema_to_shadow which respects file dependency settings
-    // This function creates its own connection, so close the existing one first
-    shadow_pool.close().await;
-    let new_catalog = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
-
-    // Reconnect for baseline validation later
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
-    // Apply object filtering
-    // Both sides are already managed catalogs: the baseline/migration-chain
-    // reconstruction and apply_current_schema_to_shadow filter at load.
-    let filtered_old_catalog = old_catalog;
-    let filtered_new_catalog = new_catalog;
+    let new_catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
-        &filtered_old_catalog,
-        &filtered_new_catalog,
+        &old_catalog,
+        &new_catalog,
         config.migration.column_order,
     )?;
 
@@ -279,8 +250,8 @@ pub async fn cmd_migrate_update_specific(
     // Generate migration content
     debug!("Generating updated migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: filtered_old_catalog,
-        new_catalog: filtered_new_catalog.clone(),
+        old_catalog,
+        new_catalog: new_catalog.clone(),
         description: new_description.clone(),
         version: new_version,
         filename_prefix: config.migration.filename_prefix.clone(),
@@ -409,16 +380,13 @@ pub async fn cmd_migrate_update_specific(
         }
 
         if baseline_config.validate_consistency {
-            // Use enhanced validation with file dependency suggestions when enabled
-            let suggest_file_deps = config.schema.augment_dependencies_from_files;
-            validate_baseline_against_catalog_with_suggestions(
+            validate_baseline_against_catalog(
                 &shadow_pool,
                 &result.path,
-                &filtered_new_catalog,
+                &new_catalog,
                 &baseline_config,
-                suggest_file_deps,
                 &roles_file,
-                &config.objects,
+                config,
             )
             .await?;
         }

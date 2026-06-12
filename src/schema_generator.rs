@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::catalog::Catalog;
 use crate::catalog::id::DbObjectId;
 use crate::diff::operations::{MigrationStep, SqlRenderer};
-use crate::diff::{diff_all, diff_order};
+use crate::diff::plan;
 
 #[derive(Debug, Clone)]
 pub struct SchemaGeneratorConfig {
@@ -68,13 +68,10 @@ impl SchemaGenerator {
     pub fn generate_files(&self) -> Result<()> {
         self.create_directory_structure()?;
 
+        // Schema files are the "empty → catalog" diff, same engine as every
+        // other command (cascade expansion is a no-op on a create-only diff).
         let empty_catalog = Catalog::empty();
-        let steps = diff_all(&empty_catalog, &self.catalog);
-
-        // diff_all includes grant diffing which now handles REVOKE generation
-        // for missing default privileges. Step-level dependencies are used
-        // by diff_order for proper ordering.
-        let ordered_steps = diff_order(steps, &empty_catalog, &self.catalog)?;
+        let ordered_steps = plan(&empty_catalog, &self.catalog)?;
         let filtered_steps = self.filter_steps_by_config(ordered_steps);
         let organized_files = self.organize_steps_into_files(filtered_steps)?;
         self.write_organized_files(organized_files)?;

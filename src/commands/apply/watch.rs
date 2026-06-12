@@ -8,9 +8,8 @@ use tracing::{error, info};
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
-use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use crate::diff::operations::SqlRenderer;
-use crate::diff::{cascade, diff_all, diff_order};
+use crate::diff::plan;
 use crate::render::{RenderedSql, Safety};
 
 use super::ApplyOutcome;
@@ -194,32 +193,14 @@ async fn perform_single_apply(
     shadow_pool: &PgPool,
     execution_mode: ExecutionMode,
 ) -> Result<ApplyOutcome> {
-    let schema_dir = root_dir.join(&config.directories.schema);
-    let roles_file = root_dir.join(&config.directories.roles);
-
-    // Clean shadow database first, then apply roles, then apply schema
-    crate::db::cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
-
-    // Apply roles file before schema files (if it exists)
-    crate::schema_ops::apply_roles_file(shadow_pool, &roles_file).await?;
-
     // Process schema to shadow database
-    let processor_config = SchemaProcessorConfig {
-        verbose: true,
-        clean_before_apply: false, // Already cleaned above
-        objects: config.objects.clone(),
-    };
-    let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
-    let processed_schema = processor.process_schema_directory(&schema_dir).await?;
+    let new = crate::schema_ops::build_desired_state(config, root_dir, shadow_pool).await?;
 
     // Analyze differences
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
+    let filter = ObjectFilter::from_config(config);
     let old = Catalog::load_managed(dev_pool, &filter).await?;
-    let new = filter.filter_catalog(processed_schema.with_file_dependencies_applied());
 
-    let raw_steps = diff_all(&old, &new);
-    let full_steps = cascade::expand(raw_steps, &old, &new);
-    let ordered = diff_order(full_steps, &old, &new)?;
+    let ordered = plan(&old, &new)?;
 
     if ordered.is_empty() {
         return Ok(ApplyOutcome::NoChanges);

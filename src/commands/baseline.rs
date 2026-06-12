@@ -74,10 +74,9 @@ pub async fn cmd_migrate_baseline(
 
     // Create the baseline from current schema files
     debug!("Loading schema files into shadow database");
-    let catalog = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
-
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
+    let catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     let request = BaselineCreationRequest {
         catalog: catalog.clone(),
@@ -142,25 +141,21 @@ pub async fn cmd_migrate_baseline(
 
     // Validate baseline unless --force
     if config.migration.validate_baseline_consistency && !force {
-        use crate::migration::baseline::{
-            BaselineConfig, validate_baseline_against_catalog_with_suggestions,
-        };
+        use crate::migration::baseline::{BaselineConfig, validate_baseline_against_catalog};
 
         let baseline_config = BaselineConfig {
             validate_consistency: true,
             verbose: false,
         };
 
-        let suggest_file_deps = config.schema.augment_dependencies_from_files;
         let roles_file = root_dir.join(&config.directories.roles);
-        if let Err(validation_error) = validate_baseline_against_catalog_with_suggestions(
+        if let Err(validation_error) = validate_baseline_against_catalog(
             &shadow_pool,
             &result.path,
             &catalog,
             &baseline_config,
-            suggest_file_deps,
             &roles_file,
-            &config.objects,
+            config,
         )
         .await
         {

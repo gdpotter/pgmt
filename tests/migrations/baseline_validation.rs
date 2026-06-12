@@ -40,7 +40,7 @@ async fn test_baseline_validation_concept() -> Result<()> {
 async fn test_baseline_validation_ignores_excluded_substrate() -> Result<()> {
     use crate::helpers::harness::with_test_db;
     use pgmt::config::filter::ObjectFilter;
-    use pgmt::config::types::{ObjectExclude, ObjectInclude, Objects, TrackingTable};
+    use pgmt::config::types::{Config, ObjectExclude, ObjectInclude, Objects};
     use sqlx::postgres::PgConnectOptions;
     use std::str::FromStr;
 
@@ -56,17 +56,20 @@ async fn test_baseline_validation_ignores_excluded_substrate() -> Result<()> {
             opts.get_database().unwrap(),
         );
 
-        let objects = Objects {
-            include: ObjectInclude::default(),
-            exclude: ObjectExclude {
-                schemas: vec!["topology".to_string()],
-                tables: vec![],
+        let config = Config {
+            objects: Objects {
+                include: ObjectInclude::default(),
+                exclude: ObjectExclude {
+                    schemas: vec!["topology".to_string()],
+                    tables: vec![],
+                },
             },
+            ..Default::default()
         };
 
         // Expected catalog: what the (filtered) schema files produce.
         db.execute("CREATE TABLE public.users (id int)").await;
-        let filter = ObjectFilter::new(&objects, &TrackingTable::default());
+        let filter = ObjectFilter::from_config(&config);
         let expected = pgmt::catalog::Catalog::load_managed(db.pool(), &filter)
             .await
             .unwrap();
@@ -78,7 +81,7 @@ async fn test_baseline_validation_ignores_excluded_substrate() -> Result<()> {
         std::fs::write(&baseline_path, "CREATE TABLE public.users (id int);\n").unwrap();
         let roles_path = temp.path().join("roles.sql");
 
-        pgmt::migration::baseline::validate_baseline_against_catalog_with_suggestions(
+        pgmt::migration::baseline::validate_baseline_against_catalog(
             db.pool(),
             &baseline_path,
             &expected,
@@ -86,9 +89,8 @@ async fn test_baseline_validation_ignores_excluded_substrate() -> Result<()> {
                 validate_consistency: true,
                 verbose: false,
             },
-            false,
             &roles_path,
-            &objects,
+            &config,
         )
         .await
         .expect("substrate in the shadow branch must not fail baseline validation");

@@ -22,6 +22,13 @@ impl ObjectFilter {
         }
     }
 
+    /// The single definition of the managed universe for a configured project.
+    /// Every command must build its filter here; `new` is for callers that
+    /// don't have a full Config yet (init while composing one, unit tests).
+    pub fn from_config(config: &crate::config::types::Config) -> Self {
+        Self::new(&config.objects, &config.migration.tracking_table)
+    }
+
     /// Check if a schema should be included
     pub fn should_include_schema(&self, schema_name: &str) -> bool {
         // Check exclude patterns first

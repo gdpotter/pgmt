@@ -51,6 +51,9 @@ pub async fn clean_shadow_db(pool: &PgPool, objects: &Objects) -> anyhow::Result
         return Ok(());
     }
 
+    // Only schema-level decisions are made here, and the tracking table never
+    // influences should_include_schema — so the default is safe even when a
+    // custom tracking table is configured.
     let filter = ObjectFilter::new(objects, &TrackingTable::default());
 
     // Find all non-system schemas

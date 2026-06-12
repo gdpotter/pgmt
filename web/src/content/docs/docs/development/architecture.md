@@ -61,6 +61,26 @@ Manages migration file lifecycle.
 
 **Configuration:** Dual type system - `ConfigInput` (partial configs with `Option<T>`) and `Config` (resolved values) enables merging CLI args, YAML, and defaults.
 
+## One Engine, Many Uses
+
+Every command is a schema diff: introspect two states, compare them, render
+the steps. To keep commands from drifting apart, each stage of that sentence
+has exactly one implementation, and commands compose them rather than
+re-implementing any part:
+
+| Stage | Single entry point |
+| ----- | ------------------ |
+| What counts as "managed" | `ObjectFilter::from_config` (`src/config/filter.rs`) |
+| What the schema files describe | `schema_ops::build_desired_state` |
+| What history (baseline + migrations) produces | `migration::baseline::get_migration_starting_state` (section-aware replay) |
+| The diff itself | `diff::plan` (diff → cascade expansion → topological order) |
+
+So `apply` is `plan(dev, desired)`, `migrate diff` is `plan(target, desired)`,
+`migrate new` is `plan(history, desired)`, `migrate baseline` and schema-file
+generation are `plan(empty, desired)`, and `migrate validate` checks that
+`plan(history, desired)` is empty. A behavior change in any stage reaches
+every command at once; a command bypassing these entry points is a bug.
+
 ## Operation Classification
 
 Migration operations have two separate classifications that are sometimes conflated:

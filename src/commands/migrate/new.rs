@@ -3,7 +3,7 @@ use crate::db::connection::connect_with_retry;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
     BaselineConfig, ensure_baseline_for_migration, get_migration_starting_state,
-    validate_baseline_against_catalog_with_suggestions,
+    validate_baseline_against_catalog,
 };
 use crate::prompts::prompt_required_string_with_validation;
 use anyhow::Result;
@@ -59,35 +59,24 @@ pub async fn cmd_migrate_new(
         &migrations_dir,
         &roles_file,
         &baseline_config,
-        &config.objects,
+        config,
     )
     .await?;
 
     debug!("Applying current schema to shadow database");
-    // Use apply_current_schema_to_shadow which respects file dependency settings
-    // This function creates its own connection, so close the existing one first
-    shadow_pool.close().await;
-    let new_catalog = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
-
-    // Reconnect for baseline validation later
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
-    // Both sides are already managed catalogs: the baseline/migration-chain
-    // reconstruction and apply_current_schema_to_shadow filter at load.
-    let filtered_old_catalog = old_catalog;
-    let filtered_new_catalog = new_catalog;
+    let new_catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
-        &filtered_old_catalog,
-        &filtered_new_catalog,
+        &old_catalog,
+        &new_catalog,
         config.migration.column_order,
     )?;
 
     debug!("Generating migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: filtered_old_catalog,
-        new_catalog: filtered_new_catalog.clone(),
+        old_catalog,
+        new_catalog: new_catalog.clone(),
         description: description.clone(),
         version,
         filename_prefix: config.migration.filename_prefix.clone(),
@@ -114,15 +103,13 @@ pub async fn cmd_migrate_new(
         println!("Created baseline: {}", result.path.display());
 
         if baseline_config.validate_consistency {
-            let suggest_file_deps = config.schema.augment_dependencies_from_files;
-            validate_baseline_against_catalog_with_suggestions(
+            validate_baseline_against_catalog(
                 &shadow_pool,
                 &result.path,
-                &filtered_new_catalog,
+                &new_catalog,
                 &baseline_config,
-                suggest_file_deps,
                 &roles_file,
-                &config.objects,
+                config,
             )
             .await?;
         }

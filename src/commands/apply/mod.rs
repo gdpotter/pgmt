@@ -42,9 +42,9 @@ pub enum ApplyOutcome {
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
-use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use crate::diff::operations::SqlRenderer;
-use crate::diff::{cascade, diff_all, diff_order};
+use crate::diff::plan;
+use crate::schema_ops::build_desired_state;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
@@ -72,34 +72,16 @@ pub async fn cmd_apply(
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     info!("Processing schema to shadow database...");
-    let schema_dir = root_dir.join(&config.directories.schema);
-    let roles_file = root_dir.join(&config.directories.roles);
-
-    // Clean shadow database first, then apply roles, then apply schema
-    crate::db::cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
-
-    // Apply roles file before schema files (if it exists)
-    crate::schema_ops::apply_roles_file(&shadow_pool, &roles_file).await?;
-
-    let processor_config = SchemaProcessorConfig {
-        verbose: true,
-        clean_before_apply: false, // Already cleaned above
-        objects: config.objects.clone(),
-    };
-    let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
-    let processed_schema = processor.process_schema_directory(&schema_dir).await?;
+    let new = build_desired_state(config, root_dir, &shadow_pool).await?;
 
     info!("Analyzing database catalogs...");
-    let filter = ObjectFilter::new(&config.objects, &config.migration.tracking_table);
+    let filter = ObjectFilter::from_config(config);
     let old = Catalog::load_managed(&dev_pool, &filter)
         .await
         .context("Failed to load catalog from development database")?;
-    let new = filter.filter_catalog(processed_schema.with_file_dependencies_applied());
 
     info!("Computing schema differences...");
-    let raw_steps = diff_all(&old, &new);
-    let full_steps = cascade::expand(raw_steps, &old, &new);
-    let ordered = diff_order(full_steps, &old, &new)?;
+    let ordered = plan(&old, &new)?;
 
     if ordered.is_empty() {
         println!("✅ No schema changes detected - database is up to date");
@@ -131,24 +113,13 @@ pub async fn cmd_apply(
                 println!("🔄 Refreshing schema analysis...");
 
                 info!("Re-processing schema to shadow database...");
-
-                // Clean and re-apply roles before reprocessing schema
-                crate::db::cleaner::clean_shadow_db(&shadow_pool, &config.objects).await?;
-                crate::schema_ops::apply_roles_file(&shadow_pool, &roles_file).await?;
-
-                let reprocessor =
-                    SchemaProcessor::new(shadow_pool.clone(), processor_config.clone());
-                let reprocessed_schema = reprocessor.process_schema_directory(&schema_dir).await?;
+                let new_filtered = build_desired_state(config, root_dir, &shadow_pool).await?;
 
                 info!("Re-analyzing database catalogs...");
                 let old_filtered = Catalog::load_managed(&dev_pool, &filter).await?;
-                let new_filtered =
-                    filter.filter_catalog(reprocessed_schema.with_file_dependencies_applied());
 
                 info!("Re-computing schema differences...");
-                let new_raw_steps = diff_all(&old_filtered, &new_filtered);
-                let new_full_steps = cascade::expand(new_raw_steps, &old_filtered, &new_filtered);
-                let new_ordered = diff_order(new_full_steps, &old_filtered, &new_filtered)?;
+                let new_ordered = plan(&old_filtered, &new_filtered)?;
 
                 if new_ordered.is_empty() {
                     println!(

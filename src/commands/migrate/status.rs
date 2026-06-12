@@ -1,12 +1,12 @@
-use crate::catalog::Catalog;
-use crate::config::{Config, ObjectFilter};
+use crate::config::Config;
 use crate::db::connection::connect_with_retry;
-use crate::migration::{discover_migrations, find_latest_baseline};
+use crate::migration::{
+    BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
+};
 use crate::migration_tracking::format_tracking_table_name;
 use crate::validation::{ValidationConfig, validate_catalogs};
 use crate::validation_output::{BaselineInfo, ValidationOutputOptions, format_validation_output};
-use anyhow::{Context, Result, anyhow};
-use sqlx::PgPool;
+use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use crate::db::connection::connect_to_database;
@@ -72,22 +72,24 @@ pub async fn cmd_migrate_validate(
     let shadow_url = config.databases.shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
-    // Step 1: Reconstruct expected state from baseline + migration files
+    // Step 1: Reconstruct expected state from baseline + migration files,
+    // through the same replay path migrate new/update use for their starting
+    // state — both commands must see the same history.
     if !validation_options.quiet {
         eprintln!("📊 Reconstructing expected state from baseline + migration files...");
     }
     let roles_file = root_dir.join(&config.directories.roles);
-    let roles_path = if roles_file.exists() {
-        Some(roles_file.as_path())
-    } else {
-        None
+    let baseline_config = BaselineConfig {
+        validate_consistency: false,
+        verbose: !validation_options.quiet,
     };
-    let expected_catalog = reconstruct_expected_state_from_schema_files(
+    let expected_catalog = get_migration_starting_state(
         &shadow_pool,
         &baselines_dir,
         &migrations_dir,
-        roles_path,
-        &config.objects,
+        &roles_file,
+        &baseline_config,
+        config,
     )
     .await?;
 
@@ -96,12 +98,7 @@ pub async fn cmd_migrate_validate(
         eprintln!("🔍 Loading desired state from current schema files...");
     }
     let desired_catalog =
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir).await?;
-
-    // Both sides are already managed catalogs (reconstruction and
-    // apply_current_schema_to_shadow filter at load).
-    let filtered_expected = expected_catalog;
-    let filtered_desired = desired_catalog;
+        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
     // Step 3: Compare expected state (baseline + migrations) vs desired state (schema files)
     if !validation_options.quiet {
@@ -111,13 +108,12 @@ pub async fn cmd_migrate_validate(
     }
     let validation_config = ValidationConfig {
         show_differences: validation_options.format == "human", // Only show differences in human format
-        apply_object_filter: false,                             // Already filtered above
         verbose: false,
     };
 
     let result = validate_catalogs(
-        &filtered_expected,
-        &filtered_desired,
+        &expected_catalog,
+        &desired_catalog,
         config,
         &validation_config,
     )?;
@@ -161,96 +157,3 @@ pub async fn cmd_migrate_validate(
     }
 }
 
-/// Reconstruct expected database state from schema files (baseline + ALL migration files)
-/// This validates against the source of truth, not what the database claims is applied
-async fn reconstruct_expected_state_from_schema_files(
-    shadow_pool: &PgPool,
-    baselines_dir: &Path,
-    migrations_dir: &Path,
-    roles_file: Option<&Path>,
-    objects: &crate::config::types::Objects,
-) -> Result<Catalog> {
-    use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
-    use crate::config::types::TrackingTable;
-    use crate::db::cleaner;
-    use crate::db::schema_executor::SchemaExecutor;
-    use crate::migration::{parse_migration_sections, validate_sections};
-    use crate::progress::SectionReporter;
-
-    // Clean shadow database
-    cleaner::clean_shadow_db(shadow_pool, objects).await?;
-
-    // Apply roles file before baseline/migrations (so grants can work)
-    if let Some(roles_path) = roles_file {
-        crate::schema_ops::apply_roles_file(shadow_pool, roles_path).await?;
-    }
-
-    // Apply the latest baseline if it exists
-    if let Some(baseline) = find_latest_baseline(baselines_dir)? {
-        let baseline_sql = std::fs::read_to_string(&baseline.path)?;
-        SchemaExecutor::execute_sql_with_enhanced_errors(
-            shadow_pool,
-            &baseline.path,
-            &baseline_sql,
-        )
-        .await
-        .context("Failed to apply baseline during schema file reconstruction")?;
-    }
-
-    // Get ALL migration files and apply them in chronological order
-    let all_migrations = discover_migrations(migrations_dir)?;
-    let mut sorted_migrations = all_migrations;
-    sorted_migrations.sort_by_key(|m| m.version);
-
-    // Apply migrations that come after the baseline (if any)
-    let baseline_version = find_latest_baseline(baselines_dir)?
-        .map(|b| b.version)
-        .unwrap_or(0);
-
-    for migration_file in &sorted_migrations {
-        if migration_file.version <= baseline_version {
-            eprintln!(
-                "Warning: Migration {} predates baseline {} and will be skipped. \
-                 Run 'pgmt migrate update {}' to renumber it.",
-                migration_file.version, baseline_version, migration_file.version
-            );
-        }
-    }
-
-    for migration_file in sorted_migrations {
-        if migration_file.version > baseline_version {
-            let migration_sql = std::fs::read_to_string(&migration_file.path).context(format!(
-                "Failed to read migration file {}",
-                migration_file.version
-            ))?;
-
-            // Parse sections (creates default section if no sections defined)
-            let sections = parse_migration_sections(&migration_file.path, &migration_sql)?;
-            validate_sections(&sections)?;
-
-            // Execute using SectionExecutor in Validation mode
-            let tracking_table = TrackingTable::default();
-            let reporter = SectionReporter::new(sections.len(), false);
-            let mut executor = SectionExecutor::new(
-                shadow_pool.clone(),
-                tracking_table,
-                reporter,
-                ExecutionMode::Validation,
-            );
-
-            for section in &sections {
-                executor
-                    .execute_section(migration_file.version, section)
-                    .await
-                    .context(format!(
-                        "Failed to apply migration file {} during reconstruction",
-                        migration_file.version
-                    ))?;
-            }
-        }
-    }
-
-    // Load and return the reconstructed catalog, scoped to managed objects
-    let filter = ObjectFilter::new(objects, &crate::config::types::TrackingTable::default());
-    Catalog::load_managed(shadow_pool, &filter).await
-}

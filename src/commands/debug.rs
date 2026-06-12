@@ -277,10 +277,7 @@ pub async fn cmd_debug_dependencies(
 
     // Scope to managed objects: the shadow branch inherits image-provided
     // substrate, which is not part of the project's dependency graph.
-    let filter = crate::config::filter::ObjectFilter::new(
-        &config.objects,
-        &config.migration.tracking_table,
-    );
+    let filter = crate::config::filter::ObjectFilter::from_config(config);
     processed.catalog = filter.filter_catalog(processed.catalog);
 
     // Build the dependency report
