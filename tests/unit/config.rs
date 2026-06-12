@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pgmt::config::{
-    ConfigBuilder, ConfigInput, DatabasesInput, ObjectExcludeInput, ObjectsInput,
-    ShadowDatabaseInput,
+    ConfigBuilder, ConfigInput, DatabasesInput, DevUrlArgs, ObjectExcludeInput, ObjectsInput,
+    ShadowDatabaseInput, ShadowUrlArgs, TargetUrlArgs,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -40,33 +40,28 @@ mod config_integration_tests {
             docker: None,
         };
 
-        let cli_config = ConfigInput {
-            databases: Some(DatabasesInput {
-                dev_url: None,
-                shadow_url: Some("postgres://localhost/cli_shadow".to_string()),
-                target_url: Some("postgres://localhost/cli_target".to_string()),
-                shadow: None,
-            }),
-            directories: None,
-            objects: Some(ObjectsInput {
-                include: None,
-                exclude: None,
-            }),
-            migration: None,
-            schema: None,
-            docker: None,
-        };
+        // A CLI flag beats the file; absent flags fall back to the file
+        let dev = DevUrlArgs::default().resolve(&file_config)?;
+        assert_eq!(dev.as_str(), "postgres://localhost/file_dev");
 
-        let config = ConfigBuilder::new()
-            .with_file(file_config)
-            .with_cli_args(cli_config)
-            .resolve()?;
+        let target = TargetUrlArgs {
+            target_url: Some("postgres://localhost/cli_target".to_string()),
+        }
+        .resolve(&file_config)?;
+        assert_eq!(target.as_str(), "postgres://localhost/cli_target");
 
-        assert_eq!(config.databases.dev, "postgres://localhost/file_dev");
-        assert_eq!(
-            config.databases.target,
-            Some("postgres://localhost/cli_target".to_string())
-        );
+        let shadow = ShadowUrlArgs {
+            shadow_url: Some("postgres://localhost/cli_shadow".to_string()),
+        }
+        .resolve(&file_config)?;
+        match shadow {
+            pgmt::config::ShadowDatabase::Url { url, .. } => {
+                assert_eq!(url, "postgres://localhost/cli_shadow")
+            }
+            _ => panic!("Expected Url shadow"),
+        }
+
+        let config = ConfigBuilder::new().with_file(file_config).resolve()?;
 
         // Verify exclude patterns from file config
         assert_eq!(config.objects.exclude.schemas, vec!["temp_*".to_string()]);
@@ -96,16 +91,13 @@ mod config_integration_tests {
                 docker: None,
             };
 
-            let config = ConfigBuilder::new()
-                .with_file(config_input)
-                .resolve()
-                .unwrap();
+            let shadow = ShadowUrlArgs::default().resolve(&config_input).unwrap();
 
             // Test shadow database URL generation
-            match &config.databases.shadow {
+            match &shadow {
                 pgmt::config::ShadowDatabase::Auto => {
                     // Auto mode now uses Docker containers, so skip this test if Docker isn't available
-                    match config.databases.shadow.get_connection_string().await {
+                    match shadow.get_connection_string().await {
                         Ok(shadow_url) => {
                             // Verify it's a usable postgres connection string
                             assert!(
@@ -152,13 +144,13 @@ mod config_integration_tests {
             docker: None,
         };
 
-        let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+        let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
 
         // Test manual shadow database URL
-        match &config.databases.shadow {
+        match &shadow {
             pgmt::config::ShadowDatabase::Url { url, .. } => {
                 assert_eq!(url, "postgres://localhost/manual_shadow");
-                let shadow_url = config.databases.shadow.get_connection_string().await?;
+                let shadow_url = shadow.get_connection_string().await?;
                 assert_eq!(shadow_url, "postgres://localhost/manual_shadow");
             }
             _ => panic!("Expected manual shadow database URL"),
@@ -212,10 +204,19 @@ mod config_integration_tests {
     fn test_config_defaults_with_empty_input() -> Result<()> {
         let empty_config = ConfigInput::default();
 
+        // Dev has no default: with nothing configured anywhere, resolution
+        // must fail with guidance rather than silently picking a URL
+        if std::env::var("PGMT_DEV_URL").is_err() {
+            let err = DevUrlArgs::default()
+                .resolve(&empty_config)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("PGMT_DEV_URL"));
+        }
+
         let config = ConfigBuilder::new().with_file(empty_config).resolve()?;
 
         // Verify defaults are applied
-        assert_eq!(config.databases.dev, "postgres://localhost/pgmt_dev");
         assert_eq!(config.directories.schema, "schema");
         assert_eq!(config.directories.migrations, "migrations");
         assert_eq!(config.directories.baselines, "schema_baselines");
@@ -261,10 +262,12 @@ mod config_integration_tests {
             docker: None, // Use defaults
         };
 
+        let dev = DevUrlArgs::default().resolve(&partial_config)?;
+        assert_eq!(dev.as_str(), "postgres://custom/dev");
+
         let config = ConfigBuilder::new().with_file(partial_config).resolve()?;
 
         // Custom settings should be applied
-        assert_eq!(config.databases.dev, "postgres://custom/dev");
         assert_eq!(config.objects.exclude.schemas, vec!["custom_*".to_string()]);
 
         // Defaults should be used for unspecified values
@@ -305,10 +308,12 @@ migration:
 
         // Load and parse the config
         let (config_input, _) = pgmt::config::load_config(config_path.to_str().unwrap())?;
+        let dev = DevUrlArgs::default().resolve(&config_input)?;
+        assert_eq!(dev.as_str(), "postgres://localhost/test_dev");
+        let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
         let config = ConfigBuilder::new().with_file(config_input).resolve()?;
 
         // Verify the loaded configuration
-        assert_eq!(config.databases.dev, "postgres://localhost/test_dev");
         assert_eq!(config.directories.schema, "custom_schema/");
         assert_eq!(config.directories.migrations, "custom_migrations/");
         assert_eq!(config.objects.exclude.schemas, vec!["temp_*", "test_*"]);
@@ -316,7 +321,7 @@ migration:
         assert!(!config.migration.validate_baseline_consistency);
 
         // Verify shadow database configuration
-        match &config.databases.shadow {
+        match &shadow {
             pgmt::config::ShadowDatabase::Url { url, .. } => {
                 assert_eq!(url, "postgres://localhost/test_shadow");
             }
@@ -343,13 +348,14 @@ migration:
             docker: None,
         };
 
-        let config = ConfigBuilder::new().with_file(minimal_config).resolve()?;
-
-        assert_eq!(config.databases.dev, "postgres://localhost/minimal");
+        let dev = DevUrlArgs::default().resolve(&minimal_config)?;
+        assert_eq!(dev.as_str(), "postgres://localhost/minimal");
         assert!(matches!(
-            config.databases.shadow,
+            ShadowUrlArgs::default().resolve(&minimal_config)?,
             pgmt::config::ShadowDatabase::Auto
         ));
+
+        let _config = ConfigBuilder::new().with_file(minimal_config).resolve()?;
 
         Ok(())
     }

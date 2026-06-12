@@ -236,4 +236,53 @@ mod migration_reconstruction_tests {
         })
         .await
     }
+
+    /// Regression: history replay is section-aware. A sectioned migration
+    /// with a non-transactional CREATE INDEX CONCURRENTLY must replay during
+    /// reconstruction — the old whole-file replay ran it inside an implicit
+    /// transaction and failed.
+    #[tokio::test]
+    async fn test_reconstruction_replays_sectioned_concurrent_index() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // Desired state: table + index (schema files use plain CREATE INDEX)
+            helper.write_schema_file(
+                "customers.sql",
+                "CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT);\n\
+                 CREATE INDEX idx_customers_email ON customers (email);",
+            )?;
+
+            // History: a sectioned migration whose index section is
+            // non-transactional, as a real production migration would be
+            helper.write_migration_file(
+                "1700000000_init_customers.sql",
+                r#"-- pgmt:section name="create_table"
+CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT);
+
+-- pgmt:section name="create_index"
+-- pgmt:  mode="non-transactional"
+CREATE INDEX CONCURRENTLY idx_customers_email ON customers (email);
+"#,
+            )?;
+
+            // migrate new replays the migration chain to build its starting
+            // state; with the schema files matching, there is nothing to do.
+            helper
+                .command()
+                .args(["migrate", "new", "noop"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(
+                    "No changes detected - no migration needed",
+                ));
+
+            // Still exactly the one hand-written migration
+            let migrations = helper.list_migration_files()?;
+            assert_eq!(migrations.len(), 1);
+
+            Ok(())
+        })
+        .await
+    }
 }

@@ -1,20 +1,13 @@
 use crate::config::types::{
-    ColumnOrderMode, Databases, Directories, Docker, Migration, ObjectExclude, Schema,
-    ShadowDatabase, ShadowDockerConfig, TrackingTable,
+    ColumnOrderMode, Directories, Docker, Migration, ObjectExclude, Schema, ShadowDockerConfig,
+    TrackingTable,
 };
 use std::collections::HashMap;
 
 // Config now derives Default
-
-impl Default for Databases {
-    fn default() -> Self {
-        Self {
-            dev: "postgres://localhost/pgmt_dev".to_string(),
-            shadow: ShadowDatabase::Auto,
-            target: None,
-        }
-    }
-}
+// Database connections have no defaults: dev/target are required (resolved at
+// the command boundary, see config::connections), shadow defaults to Auto in
+// ShadowUrlArgs::resolve.
 
 impl Default for Directories {
     fn default() -> Self {

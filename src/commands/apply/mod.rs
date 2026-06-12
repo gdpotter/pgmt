@@ -41,7 +41,7 @@ pub enum ApplyOutcome {
 }
 
 use crate::catalog::Catalog;
-use crate::config::{Config, ObjectFilter};
+use crate::config::{Config, DevUrl, ObjectFilter, ShadowDatabase};
 use crate::diff::operations::SqlRenderer;
 use crate::diff::plan;
 use crate::schema_ops::build_desired_state;
@@ -54,6 +54,8 @@ pub async fn cmd_apply(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    dev: &DevUrl,
+    shadow: &ShadowDatabase,
 ) -> Result<ApplyOutcome> {
     let shutdown_signal = ShutdownSignal::new();
     shutdown_signal.wait_for_signal().await;
@@ -64,11 +66,10 @@ pub async fn cmd_apply(
 
     info!("Connecting to development database...");
     let dev_pool =
-        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
-            .await?;
+        crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
 
     info!("Setting up shadow database...");
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     info!("Processing schema to shadow database...");
@@ -180,6 +181,8 @@ pub async fn cmd_apply_watch(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    dev: &DevUrl,
+    shadow: &ShadowDatabase,
 ) -> Result<ApplyOutcome> {
-    watch::cmd_apply_watch_impl(config, root_dir, execution_mode).await
+    watch::cmd_apply_watch_impl(config, root_dir, execution_mode, dev, shadow).await
 }

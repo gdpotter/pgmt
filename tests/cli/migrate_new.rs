@@ -81,6 +81,49 @@ mod migrate_new_tests {
         .await
     }
 
+    /// Regression: omitting --create-baseline must NOT suppress a configured
+    /// `create_baselines_by_default: true`. (The flag used to be merged as
+    /// `Some(false)` when absent, silently overriding the yaml.)
+    #[tokio::test]
+    async fn test_config_create_baselines_default_survives_absent_flag() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // Flip the config default to true
+            let config_path = helper.project_root.join("pgmt.yaml");
+            let config = fs::read_to_string(&config_path)?;
+            fs::write(
+                &config_path,
+                config.replace(
+                    "create_baselines_by_default: false",
+                    "create_baselines_by_default: true",
+                ),
+            )?;
+
+            helper.write_schema_file(
+                "users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL);",
+            )?;
+
+            helper
+                .command()
+                .args(["migrate", "new", "add_users_table"]) // no --create-baseline
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Created baseline:"));
+
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(
+                baselines.len(),
+                1,
+                "config create_baselines_by_default: true must produce a baseline without the flag"
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
     /// Interactive test using expectrl - tests the prompting behavior
     #[cfg(not(windows))]
     #[tokio::test]

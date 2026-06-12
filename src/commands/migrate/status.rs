@@ -11,10 +11,10 @@ use std::path::Path;
 
 use crate::db::connection::connect_to_database;
 
-pub async fn cmd_migrate_status(config: &Config) -> Result<()> {
+pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) -> Result<()> {
     println!("Checking migration status");
 
-    let dev_pool = connect_to_database(&config.databases.dev, "development database").await?;
+    let dev_pool = connect_to_database(dev.as_str(), "development database").await?;
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
@@ -57,6 +57,7 @@ pub async fn cmd_migrate_validate(
     config: &Config,
     root_dir: &Path,
     validation_options: &ValidationOutputOptions,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     if !validation_options.quiet {
         eprintln!("🔍 Validating migration consistency...");
@@ -69,7 +70,7 @@ pub async fn cmd_migrate_validate(
     std::fs::create_dir_all(&baselines_dir)?;
 
     // Connect to shadow database for both reconstructions
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     // Step 1: Reconstruct expected state from baseline + migration files,

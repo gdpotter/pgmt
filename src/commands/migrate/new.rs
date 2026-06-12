@@ -15,6 +15,8 @@ pub async fn cmd_migrate_new(
     config: &Config,
     root_dir: &Path,
     description: Option<&str>,
+    create_baseline: bool,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     let description = prompt_required_string_with_validation(
         description,
@@ -45,7 +47,7 @@ pub async fn cmd_migrate_new(
         .map_err(|e| anyhow::anyhow!("System time is before Unix epoch: {}", e))?
         .as_secs();
 
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     let baseline_config = BaselineConfig {
@@ -91,7 +93,9 @@ pub async fn cmd_migrate_new(
     std::fs::write(&migration_path, &migration_result.migration_sql)?;
     println!("Created migration: {}", migration_path.display());
 
-    let should_create_baseline = config.migration.create_baselines_by_default;
+    // --create-baseline opts in for this run; absence falls back to config
+    // (the flag can only add, never suppress a configured default)
+    let should_create_baseline = create_baseline || config.migration.create_baselines_by_default;
     if should_create_baseline {
         let result = ensure_baseline_for_migration(
             &baselines_dir,

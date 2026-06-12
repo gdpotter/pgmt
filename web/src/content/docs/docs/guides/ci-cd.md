@@ -92,7 +92,7 @@ jobs:
       - name: Validate migrations
         run: pgmt migrate validate
         env:
-          DEV_DATABASE_URL: postgres://postgres:ci_test@localhost/testdb
+          PGMT_DEV_URL: postgres://postgres:ci_test@localhost/testdb
 
   deploy:
     if: github.ref == 'refs/heads/main'
@@ -109,7 +109,7 @@ jobs:
       - name: Apply migrations
         run: pgmt migrate apply
         env:
-          TARGET_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          PGMT_TARGET_URL: ${{ secrets.PROD_DATABASE_URL }}
 ```
 
 ### Drift Detection
@@ -165,8 +165,8 @@ jobs:
             echo "drift_detected=false" >> $GITHUB_OUTPUT
           fi
         env:
-          DEV_DATABASE_URL: postgres://postgres:ci_test@localhost/shadowdb
-          TARGET_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          PGMT_DEV_URL: postgres://postgres:ci_test@localhost/shadowdb
+          PGMT_TARGET_URL: ${{ secrets.PROD_DATABASE_URL }}
 
       - name: Create issue on drift
         if: steps.drift.outputs.drift_detected == 'true'
@@ -225,7 +225,7 @@ validate-schema:
     - postgres:17
   variables:
     POSTGRES_PASSWORD: test
-    DEV_DATABASE_URL: postgres://postgres:test@postgres/postgres
+    PGMT_DEV_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt config validate
@@ -248,7 +248,7 @@ check-drift:
     - postgres:17
   variables:
     POSTGRES_PASSWORD: test
-    DEV_DATABASE_URL: postgres://postgres:test@postgres/postgres
+    PGMT_DEV_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt migrate diff --format summary

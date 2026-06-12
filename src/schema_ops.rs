@@ -112,11 +112,15 @@ pub async fn build_desired_state(
     Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
 }
 
-/// Connect to the configured shadow database, build the desired state on it,
+/// Connect to the given shadow database, build the desired state on it,
 /// and return the managed catalog. Convenience wrapper around
 /// [`build_desired_state`] for commands that don't hold a shadow pool.
-pub async fn apply_current_schema_to_shadow(config: &Config, root_dir: &Path) -> Result<Catalog> {
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+pub async fn apply_current_schema_to_shadow(
+    config: &Config,
+    root_dir: &Path,
+    shadow: &crate::config::ShadowDatabase,
+) -> Result<Catalog> {
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     let catalog = build_desired_state(config, root_dir, &shadow_pool).await?;

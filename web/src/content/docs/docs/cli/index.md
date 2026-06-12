@@ -33,21 +33,12 @@ Available for all commands:
 --debug                       # Debug output
 ```
 
-Database overrides:
-
-```bash
---dev-url <URL>               # Development database
---shadow-url <URL>            # Shadow database
---target-url <URL>            # Target/production database
-```
-
-Directory overrides:
-
-```bash
---schema-dir <PATH>           # Schema directory
---migrations-dir <PATH>       # Migrations directory
---baselines-dir <PATH>        # Baselines directory
-```
+Database connection flags (`--dev-url`, `--shadow-url`, `--target-url`)
+appear only on commands that actually connect to that database — a command's
+`--help` doubles as documentation of which databases it touches. Each flag
+overrides the matching `PGMT_*` environment variable, which overrides
+pgmt.yaml. Everything else (directories, object scoping, migration settings)
+is project configuration and lives in pgmt.yaml only.
 
 ---
 
@@ -154,10 +145,8 @@ pgmt apply [OPTIONS]
 --safe-only                   # Apply only safe changes, skip destructive
 --require-approval            # Fail if destructive changes exist
 --watch                       # Watch for file changes
---schemas <GLOB>...           # Only manage matching schemas
---tables <GLOB>...            # Only manage matching tables
---exclude-schemas <GLOB>...   # Exclude matching schemas
---exclude-tables <GLOB>...    # Exclude matching tables
+--dev-url <URL>               # Development database [env: PGMT_DEV_URL]
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Default behavior:**
@@ -200,6 +189,8 @@ pgmt diff [OPTIONS]
 ```bash
 --format <FORMAT>             # detailed | summary | sql | json
 --output-sql <FILE>           # Save SQL to file
+--dev-url <URL>               # Development database [env: PGMT_DEV_URL]
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -226,6 +217,7 @@ pgmt migrate new [DESCRIPTION] [OPTIONS]
 
 ```bash
 --create-baseline             # Create baseline alongside migration
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -258,6 +250,7 @@ VERSION                       # Migration version (e.g., 1234567890, V1234567890
 ```bash
 --dry-run                     # Preview without updating
 --backup                      # Create .bak file before updating
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -283,7 +276,7 @@ pgmt migrate apply [OPTIONS]
 **Options:**
 
 ```bash
---target-url <URL>            # Target database (required unless configured)
+--target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
 ```
 
 **Examples:**
@@ -297,7 +290,7 @@ pgmt migrate apply            # Uses target_url from pgmt.yaml
 
 ## pgmt migrate status
 
-Show migration status for a target database.
+Show which migrations the development database has applied.
 
 ```bash
 pgmt migrate status [OPTIONS]
@@ -306,7 +299,7 @@ pgmt migrate status [OPTIONS]
 **Options:**
 
 ```bash
---target-url <URL>            # Target database
+--dev-url <URL>               # Development database [env: PGMT_DEV_URL]
 ```
 
 **Example output:**
@@ -336,6 +329,7 @@ pgmt migrate validate [OPTIONS]
 --format <FORMAT>             # human | json
 --verbose                     # Detailed output
 --ignore-migrations <NAMES>   # Comma-separated migrations to skip during validation
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -362,7 +356,8 @@ pgmt migrate diff [OPTIONS]
 ```bash
 --format <FORMAT>             # detailed | summary | sql | json
 --output-sql <FILE>           # Save remediation SQL to file
---target-url <URL>            # Target database
+--target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -390,6 +385,7 @@ pgmt migrate baseline [OPTIONS]
 --force                       # Skip baseline validation
 --keep-migrations             # Don't delete old migrations
 --dry-run                     # Preview what would happen
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -425,6 +421,7 @@ pgmt debug dependencies [OPTIONS]
 ```bash
 --format <FORMAT>             # json | text (default: json)
 --object <NAME>               # Filter to specific object
+--shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
 **Examples:**
@@ -467,9 +464,13 @@ pgmt config list --format json
 
 ## Environment Variables
 
+Connection variables override pgmt.yaml and are themselves overridden by the
+matching CLI flag (flag > env > file):
+
 ```bash
-DEV_DATABASE_URL              # Dev database URL (when not set via config/flag)
-TARGET_DATABASE_URL           # Target database URL (when not set via config/flag)
+PGMT_DEV_URL                  # Development database URL
+PGMT_SHADOW_URL               # Shadow database URL (instead of auto Docker)
+PGMT_TARGET_URL               # Target (production/staging) database URL
 PGMT_KEEP_SHADOW_ON_FAILURE   # Keep the shadow container alive after a startup
                               # failure for debugging (any non-empty value)
 RUST_LOG                      # Log filter (e.g. RUST_LOG=debug)

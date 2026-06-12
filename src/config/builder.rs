@@ -1,5 +1,5 @@
 use crate::config::{merge::Merge, types::*};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 pub struct ConfigBuilder {
     config_input: ConfigInput,
@@ -17,105 +17,21 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn with_cli_args(mut self, cli_input: ConfigInput) -> Self {
-        self.config_input = self.config_input.merge(cli_input);
-        self
-    }
-
+    /// Resolve project configuration against built-in defaults.
+    ///
+    /// Database connections are NOT resolved here — they're typed values
+    /// resolved at the command boundary (see `config::connections`), so the
+    /// resolved Config carries no connection strings.
     pub fn resolve(self) -> Result<Config> {
         let defaults = Config::default();
 
         Ok(Config {
-            databases: self.resolve_databases(&defaults.databases)?,
             directories: self.resolve_directories(&defaults.directories),
             objects: self.resolve_objects(&defaults.objects),
             migration: self.resolve_migration(&defaults.migration),
             schema: self.resolve_schema(&defaults.schema),
             docker: self.resolve_docker(&defaults.docker),
         })
-    }
-
-    fn resolve_databases(&self, defaults: &Databases) -> Result<Databases> {
-        let db_input = self.config_input.databases.as_ref();
-
-        let dev_url = db_input
-            .and_then(|d| d.dev_url.as_ref())
-            .cloned()
-            .or_else(|| std::env::var("DEV_DATABASE_URL").ok())
-            .unwrap_or_else(|| defaults.dev.clone());
-
-        let shadow = self.resolve_shadow_database(db_input, &defaults.shadow)?;
-
-        let target = db_input
-            .and_then(|d| d.target_url.as_ref())
-            .cloned()
-            .or_else(|| std::env::var("TARGET_DATABASE_URL").ok())
-            .or_else(|| defaults.target.clone());
-
-        Ok(Databases {
-            dev: dev_url,
-            shadow,
-            target,
-        })
-    }
-
-    fn resolve_shadow_database(
-        &self,
-        db_input: Option<&DatabasesInput>,
-        _default: &ShadowDatabase,
-    ) -> Result<ShadowDatabase> {
-        // CLI shadow_url takes highest precedence
-        if let Some(url) = db_input.and_then(|d| d.shadow_url.as_ref()) {
-            return Ok(ShadowDatabase::Url {
-                url: url.clone(),
-                reset: ShadowResetMode::default(),
-            });
-        }
-
-        // Check config file shadow configuration
-        if let Some(shadow_input) = db_input.and_then(|d| d.shadow.as_ref()) {
-            // Explicit URL in config
-            if let Some(url) = &shadow_input.url {
-                return Ok(ShadowDatabase::Url {
-                    url: url.clone(),
-                    reset: shadow_input.reset.unwrap_or_default(),
-                });
-            }
-
-            // Docker configuration
-            if let Some(docker_input) = &shadow_input.docker {
-                let defaults = ShadowDockerConfig::default();
-                let docker_config = ShadowDockerConfig {
-                    version: docker_input.version.clone(),
-                    image: docker_input
-                        .image
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_else(|| defaults.image.clone()),
-                    platform: docker_input.platform.clone(),
-                    environment: docker_input
-                        .environment
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_else(|| defaults.environment.clone()),
-                    container_name: docker_input.container_name.clone(),
-                    auto_cleanup: docker_input.auto_cleanup.unwrap_or(defaults.auto_cleanup),
-                    volumes: docker_input.volumes.clone(),
-                    network: docker_input.network.clone(),
-                };
-                return Ok(ShadowDatabase::Docker(docker_config));
-            }
-
-            // Check auto flag
-            if let Some(false) = shadow_input.auto {
-                return Err(anyhow!(
-                    "Shadow database auto mode is disabled but no URL provided. Use --shadow-url or enable auto mode"
-                ));
-            }
-        }
-
-        // Default to auto mode
-        Ok(ShadowDatabase::Auto)
     }
 
     fn resolve_directories(&self, defaults: &Directories) -> Directories {

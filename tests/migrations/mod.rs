@@ -10,6 +10,7 @@ pub mod comments_parameterized;
 pub mod conflict_detection;
 pub mod constraints;
 pub mod custom_types;
+pub mod desired_state;
 pub mod domains;
 pub mod error_cases;
 pub mod extension_ordering;

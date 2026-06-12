@@ -144,12 +144,10 @@ async fn test_shadow_database_config_docker() -> Result<()> {
     };
 
     // Test configuration building (without actually creating containers)
-    let config = pgmt::config::ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()?;
+    let shadow = pgmt::config::ShadowUrlArgs::default().resolve(&config_input)?;
 
     // Verify the Docker configuration was properly resolved
-    match &config.databases.shadow {
+    match &shadow {
         ShadowDatabase::Docker(docker_config) => {
             assert_eq!(docker_config.image, "postgres:14-alpine");
             assert_eq!(

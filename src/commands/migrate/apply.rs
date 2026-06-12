@@ -11,19 +11,11 @@ use std::path::Path;
 use std::time::Instant;
 use tracing::debug;
 
-pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
-    let target_url = config.databases.target.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "No target database specified.\n\n\
-             Migration apply requires an explicit target database:\n\n\
-             • pgmt migrate apply --target-url postgres://prod-host/db\n\
-             • export TARGET_DATABASE_URL=postgres://prod-host/db\n\
-             • Add 'target_url:' to pgmt.yaml\n\n\
-             💡 Don't apply migrations to your dev database.\n\
-                Use 'pgmt apply' to keep dev in sync with schema files."
-        )
-    })?;
-
+pub async fn cmd_migrate_apply(
+    config: &Config,
+    root_dir: &Path,
+    target: &crate::config::TargetUrl,
+) -> Result<()> {
     println!("Applying migrations to target database");
 
     let migrations_dir = root_dir.join(&config.directories.migrations);
@@ -32,7 +24,8 @@ pub async fn cmd_migrate_apply(config: &Config, root_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let pool = crate::db::connection::connect_to_database(target_url, "target database").await?;
+    let pool =
+        crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 

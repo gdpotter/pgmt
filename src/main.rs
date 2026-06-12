@@ -71,13 +71,10 @@ struct ApplyArgs {
     watch: bool,
 
     #[command(flatten)]
-    database_args: config::DatabaseArgs,
+    dev: config::DevUrlArgs,
 
     #[command(flatten)]
-    directory_args: config::DirectoryArgs,
-
-    #[command(flatten)]
-    object_filter_args: config::ObjectFilterArgs,
+    shadow: config::ShadowUrlArgs,
 }
 
 /// Arguments for pgmt diff (schema vs dev)
@@ -92,10 +89,20 @@ pub struct DiffArgs {
     pub output_sql: Option<String>,
 
     #[command(flatten)]
-    pub database_args: config::DatabaseArgs,
+    pub dev: config::DevUrlArgs,
 
     #[command(flatten)]
-    pub directory_args: config::DirectoryArgs,
+    pub shadow: config::ShadowUrlArgs,
+}
+
+/// Arguments for pgmt validate (dev vs schema files)
+#[derive(Parser, Debug)]
+pub struct ValidateArgs {
+    #[command(flatten)]
+    pub dev: config::DevUrlArgs,
+
+    #[command(flatten)]
+    pub shadow: config::ShadowUrlArgs,
 }
 
 /// Arguments for pgmt migrate diff (schema vs target)
@@ -110,10 +117,10 @@ pub struct MigrateDiffArgs {
     pub output_sql: Option<String>,
 
     #[command(flatten)]
-    pub database_args: config::DatabaseArgs,
+    pub target: config::TargetUrlArgs,
 
     #[command(flatten)]
-    pub directory_args: config::DirectoryArgs,
+    pub shadow: config::ShadowUrlArgs,
 }
 
 #[derive(Subcommand)]
@@ -134,7 +141,7 @@ enum Commands {
     Diff(DiffArgs),
 
     /// Validate schema consistency
-    Validate,
+    Validate(ValidateArgs),
 
     /// Manage configuration
     Config {
@@ -164,10 +171,7 @@ enum MigrateCommands {
         create_baseline: bool,
 
         #[command(flatten)]
-        database_args: config::DatabaseArgs,
-
-        #[command(flatten)]
-        directory_args: config::DirectoryArgs,
+        shadow: config::ShadowUrlArgs,
     },
 
     /// Update the latest migration with current changes
@@ -184,34 +188,25 @@ enum MigrateCommands {
         dry_run: bool,
 
         #[command(flatten)]
-        database_args: config::DatabaseArgs,
-
-        #[command(flatten)]
-        directory_args: config::DirectoryArgs,
+        shadow: config::ShadowUrlArgs,
     },
 
     /// Apply explicit migrations
     Apply {
         #[command(flatten)]
-        database_args: config::DatabaseArgs,
-
-        #[command(flatten)]
-        directory_args: config::DirectoryArgs,
+        target: config::TargetUrlArgs,
     },
 
     /// Check migration status
     Status {
         #[command(flatten)]
-        database_args: config::DatabaseArgs,
+        dev: config::DevUrlArgs,
     },
 
     /// Validate migration consistency (for CI)
     Validate {
         #[command(flatten)]
-        database_args: config::DatabaseArgs,
-
-        #[command(flatten)]
-        directory_args: config::DirectoryArgs,
+        shadow: config::ShadowUrlArgs,
 
         /// Output format: human (default), json
         #[arg(long, default_value = "human")]
@@ -252,10 +247,7 @@ struct MigrateBaselineArgs {
     dry_run: bool,
 
     #[command(flatten)]
-    database_args: config::DatabaseArgs,
-
-    #[command(flatten)]
-    directory_args: config::DirectoryArgs,
+    shadow: config::ShadowUrlArgs,
 }
 
 #[derive(Subcommand)]
@@ -277,7 +269,7 @@ enum DebugCommands {
         object: Option<String>,
 
         #[command(flatten)]
-        directory_args: config::DirectoryArgs,
+        shadow: config::ShadowUrlArgs,
     },
 }
 
@@ -368,19 +360,11 @@ async fn run_main(cli: Cli) -> Result<()> {
             match &cli.command {
                 Commands::Init(_) => unreachable!(),
                 Commands::Apply(args) => {
-                    let cli_config = config::ConfigInput {
-                        databases: Some(args.database_args.clone().into()),
-                        directories: Some(args.directory_args.clone().into()),
-                        objects: Some(args.object_filter_args.clone().into()),
-                        migration: None,
-                        schema: None,
-                        docker: None,
-                    };
-
                     let config = config::ConfigBuilder::new()
                         .with_file(file_config.clone())
-                        .with_cli_args(cli_config)
                         .resolve()?;
+                    let dev = args.dev.resolve(&file_config)?;
+                    let shadow = args.shadow.resolve(&file_config)?;
 
                     use commands::apply::ApplyOutcome;
                     use std::io::IsTerminal;
@@ -403,9 +387,11 @@ async fn run_main(cli: Cli) -> Result<()> {
 
                     info!("Applying modular schema to dev");
                     let outcome = if args.watch {
-                        commands::cmd_apply_watch(&config, &root_dir, execution_mode).await?
+                        commands::cmd_apply_watch(&config, &root_dir, execution_mode, &dev, &shadow)
+                            .await?
                     } else {
-                        commands::cmd_apply(&config, &root_dir, execution_mode).await?
+                        commands::cmd_apply(&config, &root_dir, execution_mode, &dev, &shadow)
+                            .await?
                     };
 
                     // Return appropriate exit code based on outcome
@@ -418,19 +404,11 @@ async fn run_main(cli: Cli) -> Result<()> {
                 }
                 Commands::Migrate { command } => match command {
                     MigrateCommands::Diff(args) => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(args.database_args.clone().into()),
-                            directories: Some(args.directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let target = args.target.resolve(&file_config)?;
+                        let shadow = args.shadow.resolve(&file_config)?;
 
                         let diff_args = commands::MigrateDiffArgs {
                             format: args.format.clone(),
@@ -438,131 +416,83 @@ async fn run_main(cli: Cli) -> Result<()> {
                         };
 
                         info!("Checking target database for drift");
-                        commands::cmd_migrate_diff(&config, &root_dir, diff_args).await
+                        commands::cmd_migrate_diff(&config, &root_dir, diff_args, &target, &shadow)
+                            .await
                     }
                     MigrateCommands::New {
                         description,
                         create_baseline,
-                        database_args,
-                        directory_args,
+                        shadow,
                     } => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(database_args.clone().into()),
-                            directories: Some(directory_args.clone().into()),
-                            objects: None,
-                            migration: Some(config::MigrationInput {
-                                default_mode: None,
-                                validate_baseline_consistency: None,
-                                create_baselines_by_default: Some(*create_baseline),
-                                tracking_table: None,
-                                column_order: None,
-                                filename_prefix: None,
-                            }),
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let shadow = shadow.resolve(&file_config)?;
 
                         info!("Generating migration from diff");
-                        commands::cmd_migrate_new(&config, &root_dir, description.as_deref()).await
+                        commands::cmd_migrate_new(
+                            &config,
+                            &root_dir,
+                            description.as_deref(),
+                            *create_baseline,
+                            &shadow,
+                        )
+                        .await
                     }
                     MigrateCommands::Update {
                         migration_version,
                         backup,
                         dry_run,
-                        database_args,
-                        directory_args,
+                        shadow,
                     } => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(database_args.clone().into()),
-                            directories: Some(directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let shadow = shadow.resolve(&file_config)?;
 
                         if let Some(version) = migration_version {
                             info!("Updating migration: {}", version);
                             commands::cmd_migrate_update_specific(
-                                &config, &root_dir, version, *backup, *dry_run,
+                                &config, &root_dir, version, *backup, *dry_run, &shadow,
                             )
                             .await
                         } else {
                             info!("Updating latest migration");
-                            commands::cmd_migrate_update_with_options(&config, &root_dir, *dry_run)
-                                .await
+                            commands::cmd_migrate_update_with_options(
+                                &config, &root_dir, *dry_run, &shadow,
+                            )
+                            .await
                         }
                     }
-                    MigrateCommands::Apply {
-                        database_args,
-                        directory_args,
-                    } => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(database_args.clone().into()),
-                            directories: Some(directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
+                    MigrateCommands::Apply { target } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let target = target.resolve(&file_config)?;
 
                         info!("Applying explicit migrations");
-                        commands::cmd_migrate_apply(&config, &root_dir).await
+                        commands::cmd_migrate_apply(&config, &root_dir, &target).await
                     }
-                    MigrateCommands::Status { database_args } => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(database_args.clone().into()),
-                            directories: None,
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
+                    MigrateCommands::Status { dev } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let dev = dev.resolve(&file_config)?;
 
                         info!("Checking migration status");
-                        commands::cmd_migrate_status(&config).await
+                        commands::cmd_migrate_status(&config, &dev).await
                     }
                     MigrateCommands::Validate {
-                        database_args,
-                        directory_args,
+                        shadow,
                         format,
                         quiet,
                         verbose,
                         ignore_migrations,
                     } => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(database_args.clone().into()),
-                            directories: Some(directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let shadow = shadow.resolve(&file_config)?;
 
                         info!("Validating migration consistency");
 
@@ -573,22 +503,17 @@ async fn run_main(cli: Cli) -> Result<()> {
                             ignore_migrations: ignore_migrations.clone(),
                         };
 
-                        commands::cmd_migrate_validate(&config, &root_dir, &validation_options)
-                            .await
+                        commands::cmd_migrate_validate(
+                            &config,
+                            &root_dir,
+                            &validation_options,
+                            &shadow,
+                        )
+                        .await
                     }
                     MigrateCommands::Baseline(args) => {
-                        let cli_config = config::ConfigInput {
-                            databases: Some(args.database_args.clone().into()),
-                            directories: Some(args.directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
 
                         match &args.command {
@@ -597,6 +522,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                                 commands::cmd_baseline_list(&config, &root_dir).await
                             }
                             None => {
+                                let shadow = args.shadow.resolve(&file_config)?;
                                 info!("Creating baseline");
                                 commands::cmd_migrate_baseline(
                                     &config,
@@ -604,6 +530,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                                     args.force,
                                     args.keep_migrations,
                                     args.dry_run,
+                                    &shadow,
                                 )
                                 .await
                             }
@@ -611,19 +538,11 @@ async fn run_main(cli: Cli) -> Result<()> {
                     }
                 },
                 Commands::Diff(args) => {
-                    let cli_config = config::ConfigInput {
-                        databases: Some(args.database_args.clone().into()),
-                        directories: Some(args.directory_args.clone().into()),
-                        objects: None,
-                        migration: None,
-                        schema: None,
-                        docker: None,
-                    };
-
                     let config = config::ConfigBuilder::new()
                         .with_file(file_config.clone())
-                        .with_cli_args(cli_config)
                         .resolve()?;
+                    let dev = args.dev.resolve(&file_config)?;
+                    let shadow = args.shadow.resolve(&file_config)?;
 
                     let diff_args = commands::diff::DiffArgs {
                         format: args.format.clone(),
@@ -631,15 +550,17 @@ async fn run_main(cli: Cli) -> Result<()> {
                     };
 
                     info!("Comparing schema files with dev database");
-                    commands::cmd_diff(&config, &root_dir, diff_args).await
+                    commands::cmd_diff(&config, &root_dir, diff_args, &dev, &shadow).await
                 }
-                Commands::Validate => {
+                Commands::Validate(args) => {
                     let config = config::ConfigBuilder::new()
                         .with_file(file_config.clone())
                         .resolve()?;
+                    let dev = args.dev.resolve(&file_config)?;
+                    let shadow = args.shadow.resolve(&file_config)?;
 
                     info!("Validating schema consistency");
-                    commands::cmd_validate(&config, &root_dir).await
+                    commands::cmd_validate(&config, &root_dir, &dev, &shadow).await
                 }
                 Commands::Config { command } => {
                     match &command {
@@ -651,14 +572,14 @@ async fn run_main(cli: Cli) -> Result<()> {
                                 .resolve()?;
 
                             info!("Managing configuration");
-                            commands::cmd_config(&config, command.clone()).await
+                            commands::cmd_config(&config, &file_config, command.clone()).await
                         }
                         None => {
                             // Just show help for config command
                             let config = config::ConfigBuilder::new()
                                 .with_file(file_config.clone())
                                 .resolve()?;
-                            commands::cmd_config(&config, None).await
+                            commands::cmd_config(&config, &file_config, None).await
                         }
                     }
                 }
@@ -666,21 +587,12 @@ async fn run_main(cli: Cli) -> Result<()> {
                     DebugCommands::Dependencies {
                         format,
                         object,
-                        directory_args,
+                        shadow,
                     } => {
-                        let cli_config = config::ConfigInput {
-                            databases: None,
-                            directories: Some(directory_args.clone().into()),
-                            objects: None,
-                            migration: None,
-                            schema: None,
-                            docker: None,
-                        };
-
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
-                            .with_cli_args(cli_config)
                             .resolve()?;
+                        let shadow = shadow.resolve(&file_config)?;
 
                         info!("Analyzing dependencies");
                         let output_format = match format {
@@ -692,6 +604,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                             &root_dir,
                             output_format,
                             object.as_deref(),
+                            &shadow,
                         )
                         .await
                     }

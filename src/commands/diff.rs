@@ -35,18 +35,23 @@ impl Default for DiffArgs {
 ///
 /// This shows what `pgmt apply` would do - the differences between
 /// your schema files and the current state of the dev database.
-pub async fn cmd_diff(config: &Config, root_dir: &Path, args: DiffArgs) -> Result<()> {
+pub async fn cmd_diff(
+    config: &Config,
+    root_dir: &Path,
+    args: DiffArgs,
+    dev: &crate::config::DevUrl,
+    shadow: &crate::config::ShadowDatabase,
+) -> Result<()> {
     eprintln!("Comparing schema files with dev database...\n");
 
     // Load schema into shadow database
     eprintln!("Loading schema files...");
-    let schema_catalog = apply_current_schema_to_shadow(config, root_dir).await?;
+    let schema_catalog = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Load dev database catalog
     eprintln!("Loading dev database...");
     let dev_pool =
-        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
-            .await?;
+        crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
     let filter = ObjectFilter::from_config(config);
     let dev_catalog = Catalog::load_managed(&dev_pool, &filter).await?;
 

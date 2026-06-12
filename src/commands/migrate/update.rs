@@ -15,6 +15,7 @@ pub async fn cmd_migrate_update_with_options(
     config: &Config,
     root_dir: &Path,
     dry_run: bool,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     if dry_run {
         println!("🔍 Dry-run mode: previewing changes without applying them");
@@ -40,7 +41,7 @@ pub async fn cmd_migrate_update_with_options(
     println!("Updating migration: {}", latest_migration.path.display());
 
     // Connect to shadow database with retry logic
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     // Step 1: Load the baseline that corresponds to the previous migration
@@ -147,6 +148,7 @@ pub async fn cmd_migrate_update_specific(
     version_str: &str,
     backup: bool,
     dry_run: bool,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     use crate::migration::parsing::find_migration_by_version;
 
@@ -200,7 +202,7 @@ pub async fn cmd_migrate_update_specific(
         .unwrap_or(false);
 
     // Connect to shadow database
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     // Get the baseline state before this migration

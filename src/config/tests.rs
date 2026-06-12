@@ -120,18 +120,19 @@ fn test_config_builder_resolve() {
         docker: None,    // Use defaults
     };
 
+    // Database connections resolve separately from project config
+    let dev = DevUrlArgs::default().resolve(&config_input).unwrap();
+    assert_eq!(dev.as_str(), "postgres://localhost/dev");
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
+        ShadowDatabase::Auto => {} // Expected
+        _ => panic!("Expected auto shadow database"),
+    }
+    assert_eq!(TargetUrlArgs::default().lookup(&config_input), None);
+
     let config = ConfigBuilder::new()
         .with_file(config_input)
         .resolve()
         .unwrap();
-
-    // Check database configuration
-    assert_eq!(config.databases.dev, "postgres://localhost/dev");
-    match config.databases.shadow {
-        ShadowDatabase::Auto => {} // Expected
-        _ => panic!("Expected auto shadow database"),
-    }
-    assert_eq!(config.databases.target, None);
 
     // Check directory defaults
     assert_eq!(config.directories.schema, "schema");
@@ -314,13 +315,8 @@ fn test_config_builder_shadow_docker_version() {
         docker: None,
     };
 
-    let config = ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()
-        .unwrap();
-
     // Verify version was set correctly
-    match config.databases.shadow {
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
         ShadowDatabase::Docker(docker_config) => {
             assert_eq!(docker_config.version, Some("16".to_string()));
             assert_eq!(docker_config.resolved_image(), "postgres:16-alpine");
@@ -360,13 +356,8 @@ fn test_config_builder_shadow_docker_explicit_image() {
         docker: None,
     };
 
-    let config = ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()
-        .unwrap();
-
     // Verify explicit image takes precedence
-    match config.databases.shadow {
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
         ShadowDatabase::Docker(docker_config) => {
             assert_eq!(docker_config.resolved_image(), "postgres:14-bullseye");
         }
@@ -415,12 +406,7 @@ fn test_config_builder_shadow_docker_platform() {
         docker: None,
     };
 
-    let config = ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()
-        .unwrap();
-
-    match config.databases.shadow {
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
         ShadowDatabase::Docker(docker_config) => {
             assert_eq!(docker_config.resolved_image(), "postgis/postgis:16-3.5");
             assert_eq!(docker_config.platform.as_deref(), Some("linux/amd64"));
@@ -572,11 +558,7 @@ fn test_shadow_url_reset_mode_resolution() {
         "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n    reset: branch\n",
     )
     .unwrap();
-    let config = ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()
-        .unwrap();
-    match config.databases.shadow {
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
         ShadowDatabase::Url { url, reset } => {
             assert_eq!(url, "postgres://ci/shadow");
             assert_eq!(reset, ShadowResetMode::Branch);
@@ -589,11 +571,7 @@ fn test_shadow_url_reset_mode_resolution() {
         "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n",
     )
     .unwrap();
-    let config = ConfigBuilder::new()
-        .with_file(config_input)
-        .resolve()
-        .unwrap();
-    match config.databases.shadow {
+    match ShadowUrlArgs::default().resolve(&config_input).unwrap() {
         ShadowDatabase::Url { reset, .. } => assert_eq!(reset, ShadowResetMode::Clean),
         _ => panic!("Expected Url shadow"),
     }

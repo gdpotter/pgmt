@@ -42,12 +42,13 @@ pub async fn validate_database_against_schema_files(
     config: &Config,
     root_dir: &Path,
     validation_config: &ValidationConfig,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<ValidationResult> {
     if validation_config.verbose {
         println!("🔍 Validating database against schema files...");
     }
 
-    let expected_catalog = apply_current_schema_to_shadow(config, root_dir).await?;
+    let expected_catalog = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     validate_catalogs(dev_catalog, &expected_catalog, config, validation_config)
 }

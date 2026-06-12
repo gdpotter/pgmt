@@ -81,6 +81,14 @@ generation are `plan(empty, desired)`, and `migrate validate` checks that
 `plan(history, desired)` is empty. A behavior change in any stage reaches
 every command at once; a command bypassing these entry points is a bug.
 
+Database connections follow the same philosophy (`src/config/connections.rs`):
+each database (dev, shadow, target) has a typed value obtainable only through
+its CLI args struct's `resolve()`, which encodes the flag > `PGMT_*` env >
+pgmt.yaml precedence. The resolved `Config` carries no connection strings, so
+a command that connects to a database must declare the matching flag in its
+clap surface — `--help` is a compile-time-accurate list of which databases
+each command touches.
+
 ## Operation Classification
 
 Migration operations have two separate classifications that are sometimes conflated:

@@ -247,11 +247,12 @@ pub async fn cmd_debug_dependencies(
     root_dir: &Path,
     format: OutputFormat,
     object_filter: Option<&str>,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     debug!("Loading schema files into shadow database for dependency analysis");
 
     // Connect to shadow database
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     // Clean the database first

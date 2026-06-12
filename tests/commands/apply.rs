@@ -3,7 +3,8 @@
 use anyhow::Result;
 use pgmt::commands::apply::{ExecutionMode, cmd_apply};
 use pgmt::config::{
-    ConfigBuilder, ConfigInput, DatabasesInput, DirectoriesInput, ShadowDatabaseInput,
+    ConfigBuilder, ConfigInput, DatabasesInput, DevUrlArgs, DirectoriesInput, ShadowDatabaseInput,
+    ShadowUrlArgs,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -61,12 +62,14 @@ fn test_apply_command_signature() {
             docker: None,
         };
 
-        let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+        let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+        let dev = DevUrlArgs::default().resolve(&config_input)?;
+        let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
 
         let root_dir = Path::new("/tmp");
 
         // This won't succeed due to invalid config, but proves the signature is correct
-        let _result = cmd_apply(&config, root_dir, ExecutionMode::DryRun).await;
+        let _result = cmd_apply(&config, root_dir, ExecutionMode::DryRun, &dev, &shadow).await;
 
         Ok(())
     }
@@ -110,10 +113,12 @@ async fn test_apply_command_error_handling() -> Result<()> {
         docker: None,
     };
 
-    let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+    let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+    let dev = DevUrlArgs::default().resolve(&config_input)?;
+    let shadow = ShadowUrlArgs::default().resolve(&config_input)?;
 
     // Test that apply command fails gracefully with invalid config
-    let result = cmd_apply(&config, root_dir, ExecutionMode::DryRun).await;
+    let result = cmd_apply(&config, root_dir, ExecutionMode::DryRun, &dev, &shadow).await;
     assert!(
         result.is_err(),
         "Apply command should fail with invalid database URL"
@@ -157,11 +162,12 @@ fn test_apply_command_configuration_requirements() -> Result<()> {
         docker: None,
     };
 
-    // Verify config can be built successfully
-    let config = ConfigBuilder::new().with_file(config_input).resolve()?;
+    // Verify config and connections can be resolved successfully
+    let config = ConfigBuilder::new().with_file(config_input.clone()).resolve()?;
+    let dev = DevUrlArgs::default().resolve(&config_input)?;
 
     // Basic validation that required fields exist
-    assert!(!config.databases.dev.is_empty());
+    assert!(!dev.as_str().is_empty());
     assert!(!config.directories.schema.to_string().is_empty());
 
     Ok(())

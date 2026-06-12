@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, ConfigInput, DevUrlArgs, TargetUrlArgs};
 use anyhow::{Result, anyhow};
 use serde_json;
 use serde_yaml;
@@ -53,10 +53,18 @@ pub enum OutputFormat {
 }
 
 /// Execute config command
-pub async fn cmd_config(config: &Config, subcommand: Option<ConfigCommands>) -> Result<()> {
+///
+/// `file_input` is the raw pgmt.yaml content: database URLs are not part of
+/// the resolved Config (they're typed values resolved per command), so display
+/// resolves them here from env + file.
+pub async fn cmd_config(
+    config: &Config,
+    file_input: &ConfigInput,
+    subcommand: Option<ConfigCommands>,
+) -> Result<()> {
     match subcommand {
         Some(ConfigCommands::Get { key, format }) => {
-            let value = get_config_value(config, &key)?;
+            let value = get_config_value(config, file_input, &key)?;
             print_value(&value, &format);
             Ok(())
         }
@@ -72,7 +80,7 @@ pub async fn cmd_config(config: &Config, subcommand: Option<ConfigCommands>) -> 
         }
 
         Some(ConfigCommands::List { format }) => {
-            list_config_values(config, &format)?;
+            list_config_values(config, file_input, &format)?;
             Ok(())
         }
 
@@ -102,15 +110,15 @@ pub async fn cmd_config(config: &Config, subcommand: Option<ConfigCommands>) -> 
 }
 
 /// Get a configuration value by key
-fn get_config_value(config: &Config, key: &str) -> Result<String> {
+fn get_config_value(config: &Config, file_input: &ConfigInput, key: &str) -> Result<String> {
     let parts: Vec<&str> = key.split('.').collect();
 
     match parts.as_slice() {
-        ["databases", "dev"] => Ok(config.databases.dev.clone()),
-        ["databases", "target"] => Ok(config
-            .databases
-            .target
-            .clone()
+        ["databases", "dev"] => Ok(DevUrlArgs::default()
+            .lookup(file_input)
+            .unwrap_or_else(|| "(not set)".to_string())),
+        ["databases", "target"] => Ok(TargetUrlArgs::default()
+            .lookup(file_input)
             .unwrap_or_else(|| "(not set)".to_string())),
 
         ["directories", "schema"] => Ok(config.directories.schema.clone()),
@@ -263,12 +271,16 @@ fn set_config_value(config_file: &str, key: &str, value: &str) -> Result<()> {
 }
 
 /// List all configuration values
-fn list_config_values(config: &Config, format: &OutputFormat) -> Result<()> {
+fn list_config_values(
+    config: &Config,
+    file_input: &ConfigInput,
+    format: &OutputFormat,
+) -> Result<()> {
     // Create a structured representation of the config
     let config_map = serde_json::json!({
         "databases": {
-            "dev": config.databases.dev,
-            "target": config.databases.target,
+            "dev": DevUrlArgs::default().lookup(file_input),
+            "target": TargetUrlArgs::default().lookup(file_input),
         },
         "directories": {
             "schema": config.directories.schema,

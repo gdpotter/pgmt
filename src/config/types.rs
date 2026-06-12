@@ -1,4 +1,3 @@
-use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,10 +18,14 @@ pub struct ConfigInput {
     pub docker: Option<DockerInput>,
 }
 
-/// Resolved configuration with all defaults applied
+/// Resolved configuration with all defaults applied.
+///
+/// Deliberately carries NO database connection values — those are typed
+/// values (`DevUrl`, `ShadowDatabase`, `TargetUrl`) resolved at the command
+/// boundary from CLI args + `PGMT_*` env + pgmt.yaml; see
+/// `config::connections`.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    pub databases: Databases,
     pub directories: Directories,
     pub objects: Objects,
     pub migration: Migration,
@@ -94,13 +97,6 @@ pub struct ShadowDockerInput {
     pub volumes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Databases {
-    pub dev: String,
-    pub shadow: ShadowDatabase,
-    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -334,138 +330,4 @@ pub struct Schema {
     pub augment_dependencies_from_files: bool,
     pub validate_file_dependencies: bool,
     pub verbose_file_processing: bool,
-}
-
-// CLI argument groups for command-specific options
-#[derive(Debug, Clone, Default, Args)]
-pub struct DatabaseArgs {
-    #[arg(long, help = "Development database URL")]
-    pub dev_url: Option<String>,
-
-    #[arg(long, help = "Shadow database URL (overrides auto mode)")]
-    pub shadow_url: Option<String>,
-
-    #[arg(long, help = "Production/target database URL")]
-    pub target_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Args)]
-pub struct DirectoryArgs {
-    #[arg(long, help = "Schema directory path")]
-    pub schema_dir: Option<String>,
-
-    #[arg(long, help = "Migrations directory path")]
-    pub migrations_dir: Option<String>,
-
-    #[arg(long, help = "Baselines directory path")]
-    pub baselines_dir: Option<String>,
-
-    #[arg(long, help = "Roles SQL file path")]
-    pub roles_file: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Args)]
-pub struct SchemaArgs {
-    #[arg(long, help = "Enable file-based dependency augmentation")]
-    pub augment_file_dependencies: bool,
-
-    #[arg(long, help = "Disable file-based dependency augmentation")]
-    pub no_augment_file_dependencies: bool,
-
-    #[arg(long, help = "Enable validation of file dependencies")]
-    pub validate_file_dependencies: bool,
-
-    #[arg(long, help = "Disable validation of file dependencies")]
-    pub no_validate_file_dependencies: bool,
-
-    #[arg(long, help = "Enable verbose file processing output")]
-    pub verbose_file_processing: bool,
-}
-
-#[derive(Debug, Clone, Default, Args)]
-pub struct ObjectFilterArgs {
-    #[arg(long, help = "Include only these schemas (glob patterns)")]
-    pub schemas: Option<Vec<String>>,
-
-    #[arg(long, help = "Include only these tables (glob patterns)")]
-    pub tables: Option<Vec<String>>,
-
-    #[arg(long, help = "Exclude these schemas (glob patterns)")]
-    pub exclude_schemas: Option<Vec<String>>,
-
-    #[arg(long, help = "Exclude these tables (glob patterns)")]
-    pub exclude_tables: Option<Vec<String>>,
-}
-
-// Conversion functions from CLI args to config input
-impl From<DatabaseArgs> for DatabasesInput {
-    fn from(args: DatabaseArgs) -> Self {
-        Self {
-            dev_url: args.dev_url,
-            shadow_url: args.shadow_url,
-            target_url: args.target_url,
-            shadow: None, // Shadow config comes from file only
-        }
-    }
-}
-
-impl From<DirectoryArgs> for DirectoriesInput {
-    fn from(args: DirectoryArgs) -> Self {
-        Self {
-            schema_dir: args.schema_dir,
-            migrations_dir: args.migrations_dir,
-            baselines_dir: args.baselines_dir,
-            roles_file: args.roles_file,
-        }
-    }
-}
-
-impl From<ObjectFilterArgs> for ObjectsInput {
-    fn from(args: ObjectFilterArgs) -> Self {
-        let include = if args.schemas.is_some() || args.tables.is_some() {
-            Some(ObjectIncludeInput {
-                schemas: args.schemas,
-                tables: args.tables,
-            })
-        } else {
-            None
-        };
-
-        let exclude = if args.exclude_schemas.is_some() || args.exclude_tables.is_some() {
-            Some(ObjectExcludeInput {
-                schemas: args.exclude_schemas,
-                tables: args.exclude_tables,
-            })
-        } else {
-            None
-        };
-
-        Self { include, exclude }
-    }
-}
-
-impl From<SchemaArgs> for SchemaInput {
-    fn from(args: SchemaArgs) -> Self {
-        Self {
-            augment_dependencies_from_files: if args.no_augment_file_dependencies {
-                Some(false)
-            } else if args.augment_file_dependencies {
-                Some(true)
-            } else {
-                None
-            },
-            validate_file_dependencies: if args.no_validate_file_dependencies {
-                Some(false)
-            } else if args.validate_file_dependencies {
-                Some(true)
-            } else {
-                None
-            },
-            verbose_file_processing: if args.verbose_file_processing {
-                Some(true)
-            } else {
-                None
-            },
-        }
-    }
 }

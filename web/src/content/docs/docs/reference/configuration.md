@@ -3,7 +3,12 @@ title: Configuration
 description: Complete pgmt.yaml configuration reference.
 ---
 
-pgmt uses `pgmt.yaml` for project configuration. CLI arguments override config file values.
+pgmt uses `pgmt.yaml` for project configuration. Database connections resolve
+with the conventional precedence — **CLI flag > `PGMT_*` environment variable >
+pgmt.yaml** — so the committed file is the shared team default and the env var
+is the per-machine or per-environment override. Everything else (directories,
+object scoping, migration settings) is project configuration and comes from
+pgmt.yaml alone.
 
 ## Minimal Config
 
@@ -20,8 +25,8 @@ databases:
 
 ```yaml
 databases:
-  dev_url: postgres://localhost/myapp_dev # Development database (required)
-  target_url: postgres://prod/myapp # Target for migrate apply (optional)
+  dev_url: postgres://localhost/myapp_dev # Development database (required here or via PGMT_DEV_URL/--dev-url)
+  target_url: postgres://prod/myapp # Target for migrate apply/diff (or PGMT_TARGET_URL)
 
   shadow:
     auto: true # Auto-create shadow database (recommended)
@@ -129,26 +134,33 @@ docker:
 
 ## Environment Variables
 
+Each connection variable sits between the CLI flag and pgmt.yaml in
+precedence (flag > env > file):
+
 ```bash
-DEV_DATABASE_URL              # Dev database URL (when not set via config/flag)
-TARGET_DATABASE_URL           # Target database URL (when not set via config/flag)
+PGMT_DEV_URL                  # Development database URL
+PGMT_SHADOW_URL               # Shadow database URL (instead of auto Docker)
+PGMT_TARGET_URL               # Target (production/staging) database URL
 PGMT_KEEP_SHADOW_ON_FAILURE   # Keep shadow container alive on startup failure (for debugging)
 ```
 
-Use `${VAR}` syntax in config files to reference environment variables:
+The target URL is the common one to supply via environment — CI typically sets
+`PGMT_TARGET_URL` from a secret rather than committing it:
 
 ```yaml
-databases:
-  dev_url: ${DEV_DATABASE_URL}
-  target_url: ${PROD_DATABASE_URL}
+# GitHub Actions
+env:
+  PGMT_TARGET_URL: ${{ secrets.PROD_DATABASE_URL }}
 ```
 
 ## CLI Overrides
 
+Connection flags exist on exactly the commands that connect to that database
+(see each command's `--help`):
+
 ```bash
 pgmt apply --dev-url postgres://localhost/other_db
-pgmt apply --schema-dir custom_schema/
-pgmt apply --exclude-schemas "temp_*" --exclude-schemas "cache_*"
+pgmt migrate apply --target-url postgres://staging-host/db
 ```
 
 ## Defaults

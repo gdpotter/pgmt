@@ -10,7 +10,7 @@ use crate::commands::diff_output::{DiffContext, DiffFormat, has_differences, out
 use crate::config::{Config, ObjectFilter};
 use crate::diff::plan;
 use crate::schema_ops::apply_current_schema_to_shadow;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::path::Path;
 
 /// Arguments for migrate diff command
@@ -41,25 +41,19 @@ pub async fn cmd_migrate_diff(
     config: &Config,
     root_dir: &Path,
     args: MigrateDiffArgs,
+    target: &crate::config::TargetUrl,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
-    // Ensure target database is configured
-    let target_url = config.databases.target.as_ref().ok_or_else(|| {
-        anyhow!(
-            "Target database URL not configured.\n\
-            Set TARGET_DATABASE_URL environment variable or databases.target_url in pgmt.yaml"
-        )
-    })?;
-
     eprintln!("Checking target database for drift...\n");
 
     // Load schema into shadow database
     eprintln!("Loading schema files...");
-    let schema_catalog = apply_current_schema_to_shadow(config, root_dir).await?;
+    let schema_catalog = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Load target database catalog
     eprintln!("Loading target database...");
     let target_pool =
-        crate::db::connection::connect_to_database(target_url, "target database").await?;
+        crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
     let filter = ObjectFilter::from_config(config);
     let target_catalog = Catalog::load_managed(&target_pool, &filter).await?;
 

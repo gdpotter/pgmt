@@ -27,6 +27,8 @@ pub async fn cmd_apply_watch_impl(
     config: &Config,
     root_dir: &Path,
     execution_mode: ExecutionMode,
+    dev: &crate::config::DevUrl,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<ApplyOutcome> {
     println!("👁️  Starting pgmt in watch mode...");
     println!("💡 Press Ctrl+C to stop watching");
@@ -43,11 +45,10 @@ pub async fn cmd_apply_watch_impl(
     // Set up persistent database connections
     info!("Connecting to development database...");
     let dev_pool =
-        crate::db::connection::connect_to_database(&config.databases.dev, "development database")
-            .await?;
+        crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
 
     info!("Setting up shadow database...");
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
 
     // Perform initial apply

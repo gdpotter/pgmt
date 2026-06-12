@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod connections;
 pub mod defaults;
 pub mod filter;
 pub mod merge;
@@ -8,6 +9,7 @@ pub mod types;
 mod tests;
 
 pub use builder::ConfigBuilder;
+pub use connections::{DevUrl, DevUrlArgs, ShadowUrlArgs, TargetUrl, TargetUrlArgs};
 pub use filter::ObjectFilter;
 pub use types::*;
 

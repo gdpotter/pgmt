@@ -20,6 +20,7 @@ pub async fn cmd_migrate_baseline(
     force: bool,
     keep_migrations: bool,
     dry_run: bool,
+    shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
@@ -74,7 +75,7 @@ pub async fn cmd_migrate_baseline(
 
     // Create the baseline from current schema files
     debug!("Loading schema files into shadow database");
-    let shadow_url = config.databases.shadow.get_connection_string().await?;
+    let shadow_url = shadow.get_connection_string().await?;
     let shadow_pool = connect_with_retry(&shadow_url).await?;
     let catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
 
