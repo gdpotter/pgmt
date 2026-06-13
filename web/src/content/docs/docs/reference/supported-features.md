@@ -15,30 +15,30 @@ Requires PostgreSQL 13 or later.
 
 ## Object Coverage
 
-| Object                  | Status | Notes                                                                                                      |
-| ----------------------- | ------ | ---------------------------------------------------------------------------------------------------------- |
-| Schemas                 | ✅     |                                                                                                            |
-| Tables                  | ✅     | Columns, defaults, identity columns (`GENERATED ... AS IDENTITY`), type changes, RLS settings              |
-| Views                   | ✅     | Including `security_barrier` / `security_invoker`                                                          |
-| Materialized views      | ❌     | Planned                                                                                                    |
-| Partitioned tables      | ❌     | Planned                                                                                                    |
-| Enum types              | ✅     | Adding values only — PostgreSQL can't reorder or remove enum values                                        |
-| Composite types         | 🚧     | Create/drop and attribute comments; `ALTER TYPE ADD/DROP/ALTER ATTRIBUTE` not supported                    |
-| Domains                 | 🚧     | Create/drop; some `ALTER DOMAIN` constraint operations missing                                             |
-| Range types             | ✅     |                                                                                                            |
-| Functions & procedures  | ✅     | Overloading; volatility, `STRICT`, `SECURITY`, `PARALLEL` attributes. `OUT`/`INOUT`/`VARIADIC` parameters and parameter defaults not supported |
-| Aggregates              | ✅     |                                                                                                            |
-| Operators               | ✅     | All clauses (`COMMUTATOR`, `NEGATOR`, `RESTRICT`, `JOIN`, `HASHES`, `MERGES`), prefix operators            |
-| Casts                   | ✅     | `WITH FUNCTION`, `WITH INOUT`, `WITHOUT FUNCTION`; see known issues for views using I/O casts              |
-| Sequences               | 🚧     | Create/drop, `OWNED BY` (SERIAL integration); identity-owned sequences are part of their column, not standalone objects; some `ALTER SEQUENCE` options missing |
-| Indexes                 | ✅     | All access methods; partial, expression, and covering indexes; operator classes, collations, storage parameters, tablespaces |
-| Constraints             | ✅     | Primary key, unique, foreign key (actions, deferrable), check, exclusion                                   |
-| Triggers                | ✅     | All timings and events, `WHEN` conditions, transition tables, column-specific `UPDATE OF`                  |
-| Extensions              | ✅     | Extension-owned objects are excluded from management automatically                                         |
-| Comments                | ✅     | On all supported objects, including columns and composite attributes                                       |
-| Grants                  | ✅     | Tables, views, schemas, functions, sequences, types; column-level grants; `WITH GRANT OPTION`; only privilege deltas are emitted |
-| RLS policies            | ✅     | All command types, permissive/restrictive, role targeting, `USING`/`WITH CHECK`                            |
-| Roles                   | ❌     | By design — see [Roles and Permissions](/docs/guides/roles-and-permissions)                                |
+| Object                 | Status | Notes                                                                                                                                                          |
+| ---------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schemas                | ✅     |                                                                                                                                                                |
+| Tables                 | ✅     | Columns, defaults, identity columns (`GENERATED ... AS IDENTITY`), type changes, RLS settings                                                                  |
+| Views                  | ✅     | Including `security_barrier` / `security_invoker`                                                                                                              |
+| Materialized views     | ❌     | Planned                                                                                                                                                        |
+| Partitioned tables     | ❌     | Planned                                                                                                                                                        |
+| Enum types             | ✅     | Adding values only — PostgreSQL can't reorder or remove enum values                                                                                            |
+| Composite types        | 🚧     | Create/drop and attribute comments; `ALTER TYPE ADD/DROP/ALTER ATTRIBUTE` not supported                                                                        |
+| Domains                | 🚧     | Create/drop; some `ALTER DOMAIN` constraint operations missing                                                                                                 |
+| Range types            | ✅     |                                                                                                                                                                |
+| Functions & procedures | ✅     | Overloading; volatility, `STRICT`, `SECURITY`, `PARALLEL` attributes. `OUT`/`INOUT`/`VARIADIC` parameters and parameter defaults not supported                 |
+| Aggregates             | ✅     |                                                                                                                                                                |
+| Operators              | ✅     | All clauses (`COMMUTATOR`, `NEGATOR`, `RESTRICT`, `JOIN`, `HASHES`, `MERGES`), prefix operators                                                                |
+| Casts                  | ✅     | `WITH FUNCTION`, `WITH INOUT`, `WITHOUT FUNCTION`; see known issues for views using I/O casts                                                                  |
+| Sequences              | 🚧     | Create/drop, `OWNED BY` (SERIAL integration); identity-owned sequences are part of their column, not standalone objects; some `ALTER SEQUENCE` options missing |
+| Indexes                | ✅     | All access methods; partial, expression, and covering indexes; operator classes, collations, storage parameters, tablespaces                                   |
+| Constraints            | ✅     | Primary key, unique, foreign key (actions, deferrable), check, exclusion                                                                                       |
+| Triggers               | ✅     | All timings and events, `WHEN` conditions, transition tables, column-specific `UPDATE OF`                                                                      |
+| Extensions             | ✅     | Extension-owned objects are excluded from management automatically                                                                                             |
+| Comments               | ✅     | On all supported objects, including columns and composite attributes                                                                                           |
+| Grants                 | ✅     | Tables, views, schemas, functions, sequences, types; column-level grants; `WITH GRANT OPTION`; only privilege deltas are emitted                               |
+| RLS policies           | ✅     | All command types, permissive/restrictive, role targeting, `USING`/`WITH CHECK`                                                                                |
+| Roles                  | ❌     | By design — see [Roles and Permissions](/docs/guides/roles-and-permissions)                                                                                    |
 
 ## Dependency Tracking
 
@@ -48,7 +48,7 @@ function signatures, view references, foreign keys, sequence ownership, and
 extension-provided types, functions, and operator classes (an index using
 `gin_trgm_ops` is ordered after `CREATE EXTENSION pg_trgm`).
 
-The one gap PostgreSQL itself has: it records no dependencies for the *bodies*
+The one gap PostgreSQL itself has: it records no dependencies for the _bodies_
 of SQL functions. When a function body references another object, add an
 explicit [`-- require:` header](/docs/concepts/dependency-tracking) to the
 file.

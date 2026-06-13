@@ -44,7 +44,10 @@ export default defineConfig({
         {
           label: 'Getting Started',
           items: [
-            { label: 'Installation', link: '/docs/getting-started/installation' },
+            {
+              label: 'Installation',
+              link: '/docs/getting-started/installation',
+            },
             { label: 'Quick Start', link: '/docs/getting-started/quick-start' },
           ],
         },

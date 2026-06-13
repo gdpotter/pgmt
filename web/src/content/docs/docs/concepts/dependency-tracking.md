@@ -90,7 +90,7 @@ pgmt automatically detects:
 ### Casts Inside Views and Functions
 
 When a view or function body applies a **custom cast** (e.g. `value::target_type`),
-PostgreSQL records a dependency on the cast's *implementing function*, not on the
+PostgreSQL records a dependency on the cast's _implementing function_, not on the
 `pg_cast` entry itself. pgmt uses that to order things correctly: anything depending
 on a cast's function is automatically ordered after the cast, so a view using a
 function-based cast is created after the cast it needs.

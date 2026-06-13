@@ -68,12 +68,12 @@ the steps. To keep commands from drifting apart, each stage of that sentence
 has exactly one implementation, and commands compose them rather than
 re-implementing any part:
 
-| Stage | Single entry point |
-| ----- | ------------------ |
-| What counts as "managed" | `ObjectFilter::from_config` (`src/config/filter.rs`) |
-| What the schema files describe | `schema_ops::build_desired_state` |
+| Stage                                         | Single entry point                                                         |
+| --------------------------------------------- | -------------------------------------------------------------------------- |
+| What counts as "managed"                      | `ObjectFilter::from_config` (`src/config/filter.rs`)                       |
+| What the schema files describe                | `schema_ops::build_desired_state`                                          |
 | What history (baseline + migrations) produces | `migration::baseline::get_migration_starting_state` (section-aware replay) |
-| The diff itself | `diff::plan` (diff → cascade expansion → topological order) |
+| The diff itself                               | `diff::plan` (diff → cascade expansion → topological order)                |
 
 So `apply` is `plan(dev, desired)`, `migrate diff` is `plan(target, desired)`,
 `migrate new` is `plan(history, desired)`, `migrate baseline` and schema-file
