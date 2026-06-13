@@ -80,43 +80,41 @@ pub fn diff(old: Option<&Table>, new: Option<&Table>) -> Vec<MigrationStep> {
             })]
         }
         (Some(o), Some(n)) => {
-            let mut actions: Vec<ColumnAction> =
-                diff_list(&o.columns, &n.columns, |c| c.name.clone(), columns::diff);
-
-            match (&o.primary_key, &n.primary_key) {
-                (None, None) => {}
-                (Some(o_pk), Some(n_pk)) if o_pk == n_pk => {
-                    // Primary keys are identical (including comment)
-                }
-
-                (None, Some(pk)) => {
-                    actions.push(ColumnAction::AddPrimaryKey {
-                        constraint: pk.clone(),
-                    });
-                }
-
-                (Some(pk), None) => {
-                    actions.push(ColumnAction::DropPrimaryKey {
-                        name: pk.name.clone(),
-                    });
-                }
-
+            // The old PK must drop before any column action: PostgreSQL silently
+            // drops a constraint when one of its columns is dropped, so an explicit
+            // DROP CONSTRAINT emitted afterwards fails. The new PK goes after the
+            // column actions so it can reference freshly added columns.
+            let (drop_pk, add_pk) = match (&o.primary_key, &n.primary_key) {
+                (None, None) => (None, None),
+                (Some(o_pk), Some(n_pk)) if o_pk == n_pk => (None, None),
+                (None, Some(pk)) => (None, Some(pk.clone())),
+                (Some(pk), None) => (Some(pk.name.clone()), None),
                 (Some(o_pk), Some(n_pk)) => {
-                    // Check if only the comment changed
                     let structure_same = o_pk.name == n_pk.name && o_pk.columns == n_pk.columns;
-
                     if structure_same && o_pk.comment != n_pk.comment {
                         // Only comment changed - handle separately below
+                        (None, None)
                     } else {
-                        // Structure changed - drop and recreate
-                        actions.push(ColumnAction::DropPrimaryKey {
-                            name: o_pk.name.clone(),
-                        });
-                        actions.push(ColumnAction::AddPrimaryKey {
-                            constraint: n_pk.clone(),
-                        });
+                        (Some(o_pk.name.clone()), Some(n_pk.clone()))
                     }
                 }
+            };
+
+            let mut actions: Vec<ColumnAction> = Vec::new();
+
+            if let Some(name) = drop_pk {
+                actions.push(ColumnAction::DropPrimaryKey { name });
+            }
+
+            actions.extend(diff_list(
+                &o.columns,
+                &n.columns,
+                |c| c.name.clone(),
+                columns::diff,
+            ));
+
+            if let Some(constraint) = add_pk {
+                actions.push(ColumnAction::AddPrimaryKey { constraint });
             }
 
             // Check RLS settings changes

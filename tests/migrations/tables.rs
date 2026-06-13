@@ -803,6 +803,56 @@ async fn test_drop_primary_key_comment_migration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_primary_key_change_with_dropped_pk_column() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &["CREATE TABLE test (
+                source uuid NOT NULL,
+                metadata_id uuid NOT NULL,
+                alternate_name text NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (source, alternate_name),
+                UNIQUE (metadata_id, alternate_name)
+            )"],
+            &["CREATE TABLE test (
+                source uuid NOT NULL,
+                target uuid NOT NULL,
+                alternate_names text[] NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (source, target)
+            )"],
+            |_steps, final_catalog| {
+                let table = final_catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name == "test")
+                    .expect("Table should exist");
+
+                let pk = table
+                    .primary_key
+                    .as_ref()
+                    .expect("Table should still have a primary key");
+                assert_eq!(pk.columns, vec!["source", "target"]);
+
+                let column_names: Vec<&str> =
+                    table.columns.iter().map(|c| c.name.as_str()).collect();
+                assert!(column_names.contains(&"target"));
+                assert!(column_names.contains(&"alternate_names"));
+                assert!(!column_names.contains(&"metadata_id"));
+                assert!(!column_names.contains(&"alternate_name"));
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_primary_key_comment_ordering() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
