@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::db::connection::connect_with_retry;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
     BaselineConfig, ensure_baseline_for_migration, get_migration_starting_state,
@@ -47,16 +46,19 @@ pub async fn cmd_migrate_new(
         .map_err(|e| anyhow::anyhow!("System time is before Unix epoch: {}", e))?
         .as_secs();
 
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     let baseline_config = BaselineConfig {
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
     let roles_file = root_dir.join(&config.directories.roles);
+
+    // Each phase needs its own pristine shadow: the replay below leaves the
+    // shadow populated, and `clean_shadow_db` is a no-op on branch shadows, so
+    // reusing one branch would make the schema-file apply collide ("already
+    // exists"). `drop_branch` reclaims the ephemeral branch right after.
+    let starting_pool = shadow.connect_fresh().await?;
     let old_catalog = get_migration_starting_state(
-        &shadow_pool,
+        &starting_pool,
         &baselines_dir,
         &migrations_dir,
         &roles_file,
@@ -64,10 +66,11 @@ pub async fn cmd_migrate_new(
         config,
     )
     .await?;
+    crate::db::branch::drop_branch(starting_pool).await?;
 
     debug!("Applying current schema to shadow database");
     let new_catalog =
-        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -108,8 +111,9 @@ pub async fn cmd_migrate_new(
         println!("Created baseline: {}", result.path.display());
 
         if baseline_config.validate_consistency {
+            let validate_pool = shadow.connect_fresh().await?;
             validate_baseline_against_catalog(
-                &shadow_pool,
+                &validate_pool,
                 &result.path,
                 &new_catalog,
                 &baseline_config,
@@ -117,6 +121,7 @@ pub async fn cmd_migrate_new(
                 config,
             )
             .await?;
+            crate::db::branch::drop_branch(validate_pool).await?;
         }
     } else {
         println!("Skipping baseline creation (use --create-baseline to create one)");

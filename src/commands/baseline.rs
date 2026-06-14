@@ -2,7 +2,6 @@ use crate::baseline::operations::{
     BaselineCreationRequest, create_baseline, display_baseline_summary, display_baseline_usage_info,
 };
 use crate::config::Config;
-use crate::db::connection::connect_with_retry;
 use crate::diff::operations::SqlRenderer;
 use crate::migration::{discover_baselines, discover_migrations};
 use anyhow::{Result, anyhow};
@@ -75,9 +74,8 @@ pub async fn cmd_migrate_baseline(
 
     // Create the baseline from current schema files
     debug!("Loading schema files into shadow database");
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-    let catalog = crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+    let catalog =
+        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     let request = BaselineCreationRequest {
         catalog: catalog.clone(),
@@ -150,16 +148,20 @@ pub async fn cmd_migrate_baseline(
         };
 
         let roles_file = root_dir.join(&config.directories.roles);
-        if let Err(validation_error) = validate_baseline_against_catalog(
-            &shadow_pool,
+        // Baseline validation replays into a pristine shadow, so it needs its
+        // own fresh branch — the desired-state build above dirtied its own.
+        let validate_pool = shadow.connect_fresh().await?;
+        let validation_result = validate_baseline_against_catalog(
+            &validate_pool,
             &result.path,
             &catalog,
             &baseline_config,
             &roles_file,
             config,
         )
-        .await
-        {
+        .await;
+        crate::db::branch::drop_branch(validate_pool).await?;
+        if let Err(validation_error) = validation_result {
             eprintln!("Baseline validation failed\n");
             eprintln!("{:#}", validation_error);
             eprintln!();

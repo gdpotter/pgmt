@@ -14,7 +14,6 @@ use crate::render::{RenderedSql, Safety};
 
 use super::ApplyOutcome;
 use super::ExecutionMode;
-use super::connect_with_retry;
 use super::execution;
 use super::execution_helpers;
 use super::lock::ApplyLock;
@@ -47,20 +46,9 @@ pub async fn cmd_apply_watch_impl(
     let dev_pool =
         crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
 
-    info!("Setting up shadow database...");
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     // Perform initial apply
     println!("\n🚀 Performing initial schema apply...");
-    perform_single_apply(
-        config,
-        root_dir,
-        &dev_pool,
-        &shadow_pool,
-        execution_mode.clone(),
-    )
-    .await?;
+    perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await?;
 
     // Set up file watching
     let schema_dir = root_dir.join(&config.directories.schema);
@@ -116,7 +104,7 @@ pub async fn cmd_apply_watch_impl(
                         config,
                         root_dir,
                         &dev_pool,
-                        &shadow_pool,
+                        shadow,
                         execution_mode.clone(),
                     )
                     .await
@@ -191,11 +179,13 @@ async fn perform_single_apply(
     config: &Config,
     root_dir: &Path,
     dev_pool: &PgPool,
-    shadow_pool: &PgPool,
+    shadow: &crate::config::ShadowDatabase,
     execution_mode: ExecutionMode,
 ) -> Result<ApplyOutcome> {
-    // Process schema to shadow database
-    let new = crate::schema_ops::build_desired_state(config, root_dir, shadow_pool).await?;
+    // Process schema to shadow database. Each apply provisions and reclaims its
+    // own fresh branch — reusing one across watch iterations would collide
+    // (branch cleans are no-ops) and leak a branch per file-save.
+    let new = crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Analyze differences
     let filter = ObjectFilter::from_config(config);

@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::db::connection::connect_with_retry;
 use crate::migration::{
     BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
 };
@@ -69,10 +68,6 @@ pub async fn cmd_migrate_validate(
     std::fs::create_dir_all(&migrations_dir)?;
     std::fs::create_dir_all(&baselines_dir)?;
 
-    // Connect to shadow database for both reconstructions
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     // Step 1: Reconstruct expected state from baseline + migration files,
     // through the same replay path migrate new/update use for their starting
     // state — both commands must see the same history.
@@ -84,8 +79,12 @@ pub async fn cmd_migrate_validate(
         validate_consistency: false,
         verbose: !validation_options.quiet,
     };
+    // Reconstruction and desired-state each need their own pristine branch:
+    // the replay dirties the shadow and branch cleans are no-ops, so sharing
+    // one branch would make the schema-file apply collide. See `migrate new`.
+    let starting_pool = shadow.connect_fresh().await?;
     let expected_catalog = get_migration_starting_state(
-        &shadow_pool,
+        &starting_pool,
         &baselines_dir,
         &migrations_dir,
         &roles_file,
@@ -93,13 +92,14 @@ pub async fn cmd_migrate_validate(
         config,
     )
     .await?;
+    crate::db::branch::drop_branch(starting_pool).await?;
 
     // Step 2: Get desired state from current schema files
     if !validation_options.quiet {
         eprintln!("🔍 Loading desired state from current schema files...");
     }
     let desired_catalog =
-        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Step 3: Compare expected state (baseline + migrations) vs desired state (schema files)
     if !validation_options.quiet {

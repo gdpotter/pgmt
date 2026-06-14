@@ -123,6 +123,20 @@ impl ShadowDatabase {
         }
     }
 
+    /// Connect to a fresh, pristine shadow database scoped to a single apply.
+    ///
+    /// Branch/Docker shadows return a brand-new branch of the untouched source;
+    /// a `reset: clean` URL returns the configured database (which the apply
+    /// scoped-cleans itself). Every pristine-start phase MUST take its own
+    /// connection: `clean_shadow_db` is a no-op on branches, so a branch reused
+    /// across phases still holds the previous phase's objects and the next
+    /// apply fails with "already exists". Pair with [`crate::db::branch::drop_branch`]
+    /// to reclaim the branch when the phase is done.
+    pub async fn connect_fresh(&self) -> anyhow::Result<sqlx::PgPool> {
+        let url = self.get_connection_string().await?;
+        crate::db::connection::connect_with_retry(&url).await
+    }
+
     /// Generate a shadow database URL for Docker mode
     async fn generate_docker_shadow_url(config: &ShadowDockerConfig) -> anyhow::Result<String> {
         use crate::docker::DockerManager;

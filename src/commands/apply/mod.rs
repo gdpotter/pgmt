@@ -6,7 +6,6 @@ pub mod user_interaction;
 pub mod verification;
 pub mod watch;
 
-pub use crate::db::connection::connect_with_retry;
 pub use lock::ApplyLock;
 pub use shutdown::ShutdownSignal;
 
@@ -44,7 +43,7 @@ use crate::catalog::Catalog;
 use crate::config::{Config, DevUrl, ObjectFilter, ShadowDatabase};
 use crate::diff::operations::SqlRenderer;
 use crate::diff::plan;
-use crate::schema_ops::build_desired_state;
+use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
@@ -68,12 +67,8 @@ pub async fn cmd_apply(
     let dev_pool =
         crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
 
-    info!("Setting up shadow database...");
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     info!("Processing schema to shadow database...");
-    let new = build_desired_state(config, root_dir, &shadow_pool).await?;
+    let new = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     info!("Analyzing database catalogs...");
     let filter = ObjectFilter::from_config(config);
@@ -114,7 +109,7 @@ pub async fn cmd_apply(
                 println!("🔄 Refreshing schema analysis...");
 
                 info!("Re-processing schema to shadow database...");
-                let new_filtered = build_desired_state(config, root_dir, &shadow_pool).await?;
+                let new_filtered = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
                 info!("Re-analyzing database catalogs...");
                 let old_filtered = Catalog::load_managed(&dev_pool, &filter).await?;

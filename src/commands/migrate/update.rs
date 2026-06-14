@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::db::connection::connect_with_retry;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
     BaselineConfig, ensure_baseline_for_migration, find_latest_migration,
@@ -40,18 +39,19 @@ pub async fn cmd_migrate_update_with_options(
     let latest_migration = latest_migration.unwrap();
     println!("Updating migration: {}", latest_migration.path.display());
 
-    // Connect to shadow database with retry logic
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     // Step 1: Load the baseline that corresponds to the previous migration
     let baseline_config = BaselineConfig {
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
     let roles_file = root_dir.join(&config.directories.roles);
+
+    // Each pristine-start phase gets its own fresh branch — the replay dirties
+    // the shadow and `clean_shadow_db` is a no-op on branches, so a shared
+    // branch would make the schema-file apply collide. See `migrate new`.
+    let starting_pool = shadow.connect_fresh().await?;
     let old_catalog = get_migration_update_starting_state(
-        &shadow_pool,
+        &starting_pool,
         &baselines_dir,
         &migrations_dir,
         latest_migration.version,
@@ -60,11 +60,12 @@ pub async fn cmd_migrate_update_with_options(
         config,
     )
     .await?;
+    crate::db::branch::drop_branch(starting_pool).await?;
 
     // Step 2: Reset shadow database and apply current schema
     debug!("Applying current schema to shadow database");
     let new_catalog =
-        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -122,8 +123,9 @@ pub async fn cmd_migrate_update_with_options(
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
         if baseline_config.validate_consistency {
+            let validate_pool = shadow.connect_fresh().await?;
             validate_baseline_against_catalog(
-                &shadow_pool,
+                &validate_pool,
                 &result.path,
                 &new_catalog,
                 &baseline_config,
@@ -131,6 +133,7 @@ pub async fn cmd_migrate_update_with_options(
                 config,
             )
             .await?;
+            crate::db::branch::drop_branch(validate_pool).await?;
         }
     } else {
         println!(
@@ -202,18 +205,18 @@ pub async fn cmd_migrate_update_specific(
         .map(|latest| latest.version == target_migration.version)
         .unwrap_or(false);
 
-    // Connect to shadow database
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
-
     // Get the baseline state before this migration
     let baseline_config = BaselineConfig {
         validate_consistency: config.migration.validate_baseline_consistency,
         verbose: true,
     };
     let roles_file = root_dir.join(&config.directories.roles);
+
+    // Fresh branch per pristine-start phase (see `migrate new`): the replay
+    // dirties the shadow and branch cleans are no-ops, so reuse would collide.
+    let starting_pool = shadow.connect_fresh().await?;
     let old_catalog = get_migration_update_starting_state(
-        &shadow_pool,
+        &starting_pool,
         &baselines_dir,
         &migrations_dir,
         target_migration.version,
@@ -222,11 +225,12 @@ pub async fn cmd_migrate_update_specific(
         config,
     )
     .await?;
+    crate::db::branch::drop_branch(starting_pool).await?;
 
     // Apply current schema to shadow database
     debug!("Applying current schema to shadow database");
     let new_catalog =
-        crate::schema_ops::build_desired_state(config, root_dir, &shadow_pool).await?;
+        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -384,8 +388,9 @@ pub async fn cmd_migrate_update_specific(
         }
 
         if baseline_config.validate_consistency {
+            let validate_pool = shadow.connect_fresh().await?;
             validate_baseline_against_catalog(
-                &shadow_pool,
+                &validate_pool,
                 &result.path,
                 &new_catalog,
                 &baseline_config,
@@ -393,6 +398,7 @@ pub async fn cmd_migrate_update_specific(
                 config,
             )
             .await?;
+            crate::db::branch::drop_branch(validate_pool).await?;
         }
     } else if is_latest {
         println!(

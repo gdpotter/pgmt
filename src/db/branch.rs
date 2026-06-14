@@ -113,6 +113,48 @@ pub async fn branch_url(url: &str) -> Result<String> {
     rewrite_database(url, &source_db, &branch)
 }
 
+/// Drop the ephemeral branch a pool is connected to, reclaiming it as soon as
+/// a phase finishes instead of holding every branch until process exit.
+///
+/// No-op for non-branch shadows (an external `reset: clean` URL): those are not
+/// in the branch registry, so their lifecycle belongs to whoever provisioned
+/// them and we never drop them. The pool is always closed.
+pub async fn drop_branch(pool: PgPool) -> Result<()> {
+    let options = (*pool.connect_options()).clone();
+    let host = options.get_host().to_string();
+    let port = options.get_port();
+    let database = options.get_database().unwrap_or_default().to_string();
+
+    // Close our connections first — DROP DATABASE requires no active sessions.
+    pool.close().await;
+
+    if !super::cleaner::take_branch_provisioned(&host, port, &database) {
+        // Not an ephemeral branch we own; leave the external database alone.
+        return Ok(());
+    }
+
+    let admin = admin_pool(options.database(admin_db_name(&database))).await?;
+    let result = admin
+        .execute(
+            format!(
+                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                quote_ident(&database)
+            )
+            .as_str(),
+        )
+        .await;
+    admin.close().await;
+    result.map_err(|e| anyhow!("Failed to drop shadow branch {}: {}", database, e))?;
+
+    // Forget it so the process-exit sweep doesn't try to drop it again.
+    BRANCH_REGISTRY
+        .lock()
+        .unwrap()
+        .retain(|(_, branch)| branch != &database);
+    debug!("Dropped shadow branch {}", database);
+    Ok(())
+}
+
 async fn admin_pool(options: PgConnectOptions) -> Result<PgPool> {
     PgPoolOptions::new()
         .max_connections(1)

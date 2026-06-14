@@ -2,7 +2,6 @@ use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
-use crate::db::connection::connect_with_retry;
 use crate::db::error_context::SqlErrorContext;
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
 use anyhow::{Context, Result};
@@ -120,12 +119,13 @@ pub async fn apply_current_schema_to_shadow(
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<Catalog> {
-    let shadow_url = shadow.get_connection_string().await?;
-    let shadow_pool = connect_with_retry(&shadow_url).await?;
+    let shadow_pool = shadow.connect_fresh().await?;
 
     let catalog = build_desired_state(config, root_dir, &shadow_pool).await?;
 
-    shadow_pool.close().await;
+    // Reclaim the ephemeral branch now rather than leaking one per call (matters
+    // for long-running callers like `apply --watch`); no-op for external URLs.
+    crate::db::branch::drop_branch(shadow_pool).await?;
     Ok(catalog)
 }
 

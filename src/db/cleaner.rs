@@ -36,6 +36,17 @@ fn is_branch_provisioned(pool: &PgPool) -> bool {
     BRANCH_PROVISIONED.lock().unwrap().contains(&key)
 }
 
+/// Remove host:port/database from the branch registry, reporting whether it was
+/// registered. Used by `db::branch::drop_branch` to decide whether a shadow is
+/// an ephemeral branch we own (safe to drop) or an external database we must
+/// leave untouched.
+pub fn take_branch_provisioned(host: &str, port: u16, database: &str) -> bool {
+    BRANCH_PROVISIONED
+        .lock()
+        .unwrap()
+        .remove(&(host.to_string(), port, database.to_string()))
+}
+
 /// Clean the shadow database by dropping managed schemas.
 ///
 /// Only schemas that pgmt manages (as determined by the object filter config)
