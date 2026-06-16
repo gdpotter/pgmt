@@ -1,9 +1,10 @@
 use crate::catalog::constraint::ConstraintType;
 use crate::catalog::{Catalog, id::DbObjectId};
+use crate::diff::grants::{desired_acl_steps, grant_target_object};
 use crate::diff::operations::{
     ColumnAction, MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
 /// Also filters out redundant steps (e.g., DROP SEQUENCE for owned sequences when the owning
@@ -134,7 +135,57 @@ pub fn expand(
     let filtered = filter_owned_sequence_drops(all, old_catalog);
 
     // Filter out redundant policy drops when table is being dropped
-    filter_policy_drops(filtered, old_catalog)
+    let filtered = filter_policy_drops(filtered, old_catalog);
+
+    // A DROP discards all privileges, so re-state full ACL for recreated objects.
+    reapply_acl_for_recreated_objects(filtered, new_catalog)
+}
+
+/// Re-state the full ACL of every object recreated via DROP+CREATE in this plan.
+///
+/// The global grant diff compares each grant against the pre-drop object and sees
+/// no change — but a DROP discards every privilege and the CREATE resets the
+/// object to PostgreSQL's default ACL. So for any object being recreated we strip
+/// whatever grant steps the diff produced for it (typically none, sometimes a
+/// stale delta) and re-emit the full desired ACL: every GRANT plus any
+/// REVOKE … FROM PUBLIC. Brand-new objects are already handled correctly by the
+/// global grant diff and are intentionally left untouched.
+fn reapply_acl_for_recreated_objects(
+    steps: Vec<MigrationStep>,
+    new_catalog: &Catalog,
+) -> Vec<MigrationStep> {
+    // An object with a structural DROP step that still exists in the desired
+    // catalog is being recreated, not removed. Grant steps are excluded: their
+    // id() is a synthetic Grant id, never an object being recreated.
+    let recreated: BTreeSet<DbObjectId> = steps
+        .iter()
+        .filter(|step| {
+            !step.is_grant()
+                && step.operation_kind() == OperationKind::Drop
+                && new_catalog.contains_id(&step.id())
+        })
+        .map(|step| step.id())
+        .collect();
+
+    if recreated.is_empty() {
+        return steps;
+    }
+
+    // Drop any grant steps the diff produced for these objects; desired_acl_steps
+    // re-emits their ACL in full below.
+    let mut result: Vec<MigrationStep> = steps
+        .into_iter()
+        .filter(|step| match step {
+            MigrationStep::Grant(op) => !recreated.contains(&grant_target_object(op)),
+            _ => true,
+        })
+        .collect();
+
+    for id in &recreated {
+        result.extend(desired_acl_steps(id, new_catalog));
+    }
+
+    result
 }
 
 /// Recursively collect all dependents of a given object

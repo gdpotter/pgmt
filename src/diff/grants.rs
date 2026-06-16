@@ -1,7 +1,9 @@
 //! Diff grants between catalogs
 
+use crate::catalog::Catalog;
 use crate::catalog::grant::{Grant, GranteeType, target_key};
 use crate::catalog::id::DbObjectId;
+use crate::catalog::target::AttrTarget;
 use crate::diff::operations::{ColumnGrants, GrantOperation, MigrationStep};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,6 +13,94 @@ pub fn is_owner_grant(grant: &Grant) -> bool {
         GranteeType::Role(role_name) => role_name == &grant.object_owner,
         GranteeType::Public => false, // PUBLIC grants are never owner grants
     }
+}
+
+/// The object a grant operation applies to — the `GRANT … ON <object>` target,
+/// not the grant's own synthetic identity. Used to match grant steps against the
+/// set of objects being recreated (column grants resolve to their relation).
+pub fn grant_target_object(op: &GrantOperation) -> DbObjectId {
+    match op {
+        GrantOperation::Grant { grant } | GrantOperation::Revoke { grant } => {
+            grant.target.db_object_id()
+        }
+        GrantOperation::GrantColumns(cg) | GrantOperation::RevokeColumns(cg) => cg.relation.clone(),
+    }
+}
+
+/// The full desired ACL for an object created from scratch in this migration —
+/// brand-new, or recreated via DROP+CREATE. A DROP discards every privilege and
+/// the CREATE resets the object to PostgreSQL's default ACL, so a delta computed
+/// against the pre-drop object (typically empty) silently loses privileges that
+/// were already in effect. We therefore emit the whole desired state:
+///   - one GRANT per explicit, non-owner grant on the object (owner grants are
+///     implicit in PostgreSQL), and
+///   - one REVOKE … FROM PUBLIC for each default PUBLIC privilege the desired
+///     state drops (e.g. EXECUTE on a function whose schema revokes it).
+///
+/// Column grants are included: a column grant's target resolves to its owning
+/// relation, so filtering by `id` spans them, and `coalesce_column_grants` folds
+/// them into per-relation statements later.
+pub fn desired_acl_steps(id: &DbObjectId, new_catalog: &Catalog) -> Vec<MigrationStep> {
+    let object_grants: Vec<&Grant> = new_catalog
+        .grants
+        .iter()
+        .filter(|g| &g.target.db_object_id() == id)
+        .collect();
+
+    // When the object has no explicit ACL, the freshly CREATEd object already
+    // reproduces the exact desired state (PostgreSQL's default ACL) — emitting
+    // the default grants would be redundant and would flip the object's ACL from
+    // default to explicit. Column ACLs are always explicit (attacl is never the
+    // default), so a relation with column grants still qualifies as explicit.
+    if !object_grants.iter().any(|g| !g.is_default_acl) {
+        return Vec::new();
+    }
+
+    let mut steps: Vec<MigrationStep> = object_grants
+        .iter()
+        .filter(|g| !is_owner_grant(g))
+        .map(|g| {
+            MigrationStep::Grant(GrantOperation::Grant {
+                grant: (*g).clone(),
+            })
+        })
+        .collect();
+
+    steps.extend(revoke_missing_default_public(id, &object_grants));
+
+    steps
+}
+
+/// REVOKE steps for the default PUBLIC privileges of `id` that are absent from
+/// `object_grants` (the object's grants in the desired catalog). Empty when the
+/// object keeps its defaults, or when it has no ACL rows at all (default ACL —
+/// the defaults ARE the desired state, so nothing to revoke).
+fn revoke_missing_default_public(id: &DbObjectId, object_grants: &[&Grant]) -> Vec<MigrationStep> {
+    let Some(sample) = object_grants.first() else {
+        return Vec::new();
+    };
+
+    get_default_public_privileges(id)
+        .into_iter()
+        .filter(|privilege| {
+            !object_grants.iter().any(|g| {
+                matches!(&g.grantee, GranteeType::Public) && g.privileges.contains(privilege)
+            })
+        })
+        .map(|privilege| {
+            MigrationStep::Grant(GrantOperation::Revoke {
+                grant: Grant {
+                    grantee: GranteeType::Public,
+                    target: AttrTarget::object(id.clone()),
+                    privileges: vec![privilege],
+                    with_grant_option: false,
+                    depends_on: vec![id.clone()],
+                    object_owner: sample.object_owner.clone(),
+                    is_default_acl: false,
+                },
+            })
+        })
+        .collect()
 }
 
 pub fn diff(old_grant: Option<&Grant>, new_grant: Option<&Grant>) -> Vec<MigrationStep> {
@@ -339,34 +429,10 @@ fn generate_revoke_for_new_explicit_acls(
             continue;
         }
 
-        // Object either didn't exist or had default ACL before, now has explicit ACL
-        // Generate REVOKEs for missing PUBLIC privileges
-        let sample_grant = new_object_grants[0];
-        let expected_public_privileges = get_default_public_privileges(&sample_grant.target.object);
-
-        for privilege in expected_public_privileges {
-            // Check if this default PUBLIC grant exists in new state
-            let public_grant_exists = new_object_grants.iter().any(|g| {
-                matches!(&g.grantee, GranteeType::Public) && g.privileges.contains(&privilege)
-            });
-
-            if !public_grant_exists {
-                // Default was revoked - generate REVOKE statement
-                let revoke_grant = Grant {
-                    grantee: GranteeType::Public,
-                    target: sample_grant.target.clone(),
-                    privileges: vec![privilege],
-                    with_grant_option: false,
-                    depends_on: vec![sample_grant.target.db_object_id()],
-                    object_owner: sample_grant.object_owner.clone(),
-                    is_default_acl: false,
-                };
-
-                steps.push(MigrationStep::Grant(GrantOperation::Revoke {
-                    grant: revoke_grant,
-                }));
-            }
-        }
+        // Object either didn't exist or had default ACL before, now has explicit
+        // ACL: REVOKE any default PUBLIC privileges it no longer keeps.
+        let object = new_object_grants[0].target.db_object_id();
+        steps.extend(revoke_missing_default_public(&object, new_object_grants));
     }
 
     steps

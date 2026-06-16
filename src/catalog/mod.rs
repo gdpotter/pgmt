@@ -1,7 +1,6 @@
 use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
-use crate::diff::grants::is_owner_grant;
-use crate::diff::operations::{GrantOperation, MigrationStep};
+use crate::diff::operations::MigrationStep;
 use crate::diff::{
     aggregates as aggregates_diff, casts as casts_diff, constraints as constraints_diff,
     custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
@@ -393,7 +392,10 @@ impl Catalog {
     /// Synthesize DROP + CREATE steps for cascading a dependent object.
     ///
     /// Returns `None` if the object type doesn't support cascading or doesn't
-    /// exist in both catalogs. Grants are re-applied since DROP revokes them.
+    /// exist in both catalogs. Only the structural DROP/CREATE (and comments) are
+    /// emitted here — the object's ACL is reapplied centrally for every recreated
+    /// object by `crate::diff::cascade::reapply_acl_for_recreated_objects`, since
+    /// a DROP discards all privileges regardless of what triggered the recreate.
     pub fn synthesize_drop_create(
         &self,
         id: &DbObjectId,
@@ -540,17 +542,8 @@ impl Catalog {
             | DbObjectId::Column { .. } => return None,
         }
 
-        // Re-grant permissions for the cascaded object.
-        // DROP implicitly revokes all grants, so we need to re-apply them.
-        // Filter to grants on this specific object, skipping owner grants (implicit in PostgreSQL).
-        for grant in &new_catalog.grants {
-            if &grant.target.db_object_id() == id && !is_owner_grant(grant) {
-                steps.push(MigrationStep::Grant(GrantOperation::Grant {
-                    grant: grant.clone(),
-                }));
-            }
-        }
-
+        // No ACL here — it's re-stated centrally for every recreated object; see
+        // the method doc and `cascade::reapply_acl_for_recreated_objects`.
         Some(steps)
     }
 
