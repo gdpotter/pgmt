@@ -18,10 +18,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        image: mirror.gcr.io/library/postgres:18-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -79,10 +76,7 @@ jobs:
     
     services:
       postgres:
-        image: postgres:${{ matrix.pg_version }}
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        image: mirror.gcr.io/library/postgres:${{ matrix.pg_version }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -98,11 +92,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # pgmt's shadow-database tests pull postgres images via bollard using the
+      # bare Docker Hub names (postgres:18-alpine, postgres:14-alpine). Pre-pull
+      # those tags from Google's Docker Hub mirror (mirror.gcr.io, no auth and no
+      # rate limits) and retag them locally so the tests find them via
+      # inspect_image and never hit Docker Hub. This keeps CI working on fork
+      # PRs, which can't authenticate to Docker Hub.
+      # Keep this tag list in sync with the images used in tests/component/docker.rs.
+      - name: Pre-pull shadow-DB images
+        run: |
+          for tag in 18-alpine 14-alpine; do
+            docker pull mirror.gcr.io/library/postgres:$tag
+            docker tag mirror.gcr.io/library/postgres:$tag postgres:$tag
+          done
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
