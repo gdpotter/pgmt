@@ -169,9 +169,11 @@ async fn fetch_all_constraints(conn: &mut PgConnection) -> Result<Vec<Constraint
                     ARRAY(
                         SELECT opc.opcname
                         FROM pg_index idx
-                        JOIN pg_opclass opc ON opc.oid = ANY(idx.indclass)
+                        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos
+                        -- oidvectors are 0-based
+                        LEFT JOIN pg_opclass opc ON opc.oid = idx.indclass[col_pos - 1]
                         WHERE idx.indexrelid = c.conindid
-                        ORDER BY opc.opcname
+                        ORDER BY col_pos
                     )
                 ELSE NULL
             END AS "exclusion_opcnames?",
@@ -181,9 +183,10 @@ async fn fetch_all_constraints(conn: &mut PgConnection) -> Result<Vec<Constraint
                     ARRAY(
                         SELECT po.oprname
                         FROM pg_constraint exc
-                        JOIN pg_operator po ON po.oid = ANY(exc.conexclop)
+                        CROSS JOIN generate_series(1, cardinality(exc.conexclop)) AS col_pos
+                        JOIN pg_operator po ON po.oid = exc.conexclop[col_pos]
                         WHERE exc.oid = c.oid
-                        ORDER BY po.oprname
+                        ORDER BY col_pos
                     )
                 ELSE NULL
             END AS "exclusion_operators?",
