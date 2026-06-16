@@ -4,7 +4,6 @@ use sqlx::postgres::types::Oid;
 use std::collections::HashMap;
 use tracing::info;
 
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{DependencyBuilder, is_system_schema, resolve_type_dependency};
 
@@ -65,12 +64,6 @@ impl DependsOn for Function {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Function {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

@@ -1,8 +1,6 @@
 //! Domain diff logic for schema migrations
 
 use crate::catalog::domain::Domain;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{DomainOperation, MigrationStep};
 
 /// Build the CREATE DOMAIN definition string
@@ -37,20 +35,11 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
     match (old, new) {
         // CREATE new domain
         (None, Some(n)) => {
-            let mut steps = vec![MigrationStep::Domain(DomainOperation::Create {
+            vec![MigrationStep::Domain(DomainOperation::Create {
                 schema: n.schema.clone(),
                 name: n.name.clone(),
                 definition: build_domain_definition(n),
-            })];
-
-            // Add domain comment if present
-            if let Some(comment_op) =
-                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
-            {
-                steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
-            }
-
-            steps
+            })]
         }
 
         // DROP removed domain
@@ -77,13 +66,6 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
                     name: n.name.clone(),
                     definition: build_domain_definition(n),
                 }));
-
-                // Add domain comment if present
-                if let Some(comment_op) =
-                    comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
-                {
-                    steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
-                }
 
                 return steps;
             }
@@ -188,13 +170,6 @@ pub fn diff(old: Option<&Domain>, new: Option<&Domain>) -> Vec<MigrationStep> {
                     }
                     _ => {}
                 }
-            }
-
-            // Handle comment changes
-            let comment_ops =
-                comment_utils::handle_comment_diff(Some(o), Some(n), || AttrTarget::object(n.id()));
-            for comment_op in comment_ops {
-                steps.push(MigrationStep::Domain(DomainOperation::Comment(comment_op)));
             }
 
             steps

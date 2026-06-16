@@ -13,7 +13,6 @@ impl SqlRenderer for IndexOperation {
                 sql: format!("DROP INDEX {}.{};", quote_ident(schema), quote_ident(name)),
                 safety: Safety::Safe,
             }],
-            IndexOperation::Comment(comment_op) => comment_op.to_sql(),
             IndexOperation::Cluster {
                 table_schema,
                 table_name,
@@ -60,7 +59,6 @@ impl SqlRenderer for IndexOperation {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            IndexOperation::Comment(comment_op) => comment_op.db_object_id(),
             IndexOperation::Cluster {
                 index_schema,
                 index_name,

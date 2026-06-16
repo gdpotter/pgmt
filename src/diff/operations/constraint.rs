@@ -1,7 +1,7 @@
 //! Constraint operations for migrations
 use crate::catalog::constraint::Constraint;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{CommentOperation, OperationKind};
+use crate::diff::operations::OperationKind;
 
 #[derive(Debug, Clone)]
 pub struct ConstraintIdentifier {
@@ -32,7 +32,6 @@ impl ConstraintIdentifier {
 pub enum ConstraintOperation {
     Create(Constraint),
     Drop(ConstraintIdentifier),
-    Comment(CommentOperation),
 }
 
 impl ConstraintOperation {
@@ -40,7 +39,6 @@ impl ConstraintOperation {
         match self {
             Self::Create(_) => OperationKind::Create,
             Self::Drop(_) => OperationKind::Drop,
-            Self::Comment(_) => OperationKind::Alter,
         }
     }
 }

@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::extension::Extension;
 
 /// Identifier for an extension
@@ -18,7 +18,6 @@ impl ExtensionIdentifier {
 pub enum ExtensionOperation {
     Create { extension: Extension },
     Drop { identifier: ExtensionIdentifier },
-    Comment(CommentOperation),
 }
 
 impl ExtensionOperation {
@@ -26,7 +25,6 @@ impl ExtensionOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Comment(_) => OperationKind::Alter,
         }
     }
 }

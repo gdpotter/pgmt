@@ -2,7 +2,7 @@
 
 use crate::catalog::id::DbObjectId;
 use crate::catalog::triggers::Trigger;
-use crate::diff::operations::{CommentOperation, TriggerIdentifier, TriggerOperation};
+use crate::diff::operations::{TriggerIdentifier, TriggerOperation};
 use crate::render::{RenderedSql, SqlRenderer};
 
 impl SqlRenderer for TriggerOperation {
@@ -21,7 +21,6 @@ impl SqlRenderer for TriggerOperation {
                     render_create_trigger(new_trigger),
                 ]
             }
-            TriggerOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -41,11 +40,6 @@ impl SqlRenderer for TriggerOperation {
                 schema: new_trigger.schema.clone(),
                 table: new_trigger.table_name.clone(),
                 name: new_trigger.name.clone(),
-            },
-            TriggerOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
             },
         }
     }

@@ -101,8 +101,6 @@ impl SqlRenderer for ViewOperation {
                     safety: Safety::Safe,
                 }]
             }
-            ViewOperation::Comment(op) => op.to_sql(),
-            ViewOperation::ColumnComment(op) => op.to_sql(),
         }
     }
 
@@ -115,8 +113,6 @@ impl SqlRenderer for ViewOperation {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            ViewOperation::Comment(op) => op.db_object_id(),
-            ViewOperation::ColumnComment(op) => op.db_object_id(),
         }
     }
 }

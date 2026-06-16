@@ -3,7 +3,6 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{is_system_schema, resolve_type_dependency};
 use crate::render::quote_ident;
@@ -138,12 +137,6 @@ impl DependsOn for Table {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.all_dependencies
-    }
-}
-
-impl Commentable for Table {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

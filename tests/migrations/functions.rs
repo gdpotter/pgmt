@@ -506,12 +506,12 @@ async fn test_function_comment_migration() -> Result<()> {
             // Should have SET FUNCTION COMMENT step
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Set { target, comment }))
+                matches!(s, MigrationStep::Comment(CommentOperation::Set { target, comment })
                     if target.schema() == "test_schema" && target.name() == "calculate_total" && comment == "Calculates total price including tax")
             }).expect("Should have SetFunctionComment step");
 
             match comment_step {
-                MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Set { target, comment })) => {
+                MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
                     assert_eq!(target.schema(), "test_schema");
                     assert_eq!(target.name(), "calculate_total");
                     assert_eq!(comment, "Calculates total price including tax");
@@ -559,9 +559,7 @@ async fn test_procedure_comment_migration() -> Result<()> {
                     .find(|s| {
                         matches!(
                             s,
-                            MigrationStep::Function(FunctionOperation::Comment(
-                                CommentOperation::Set { target, .. }
-                            )) if target.name() == "do_thing"
+                            MigrationStep::Comment(CommentOperation::Set { target, .. }) if target.name() == "do_thing"
                         )
                     })
                     .expect("Should have a procedure comment step");
@@ -608,12 +606,12 @@ async fn test_drop_function_comment_migration() -> Result<()> {
             // Should have DROP FUNCTION COMMENT step
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Drop { target }))
+                matches!(s, MigrationStep::Comment(CommentOperation::Drop { target })
                     if target.schema() == "test_schema" && target.name() == "calculate_total")
             }).expect("Should have DropFunctionComment step");
 
             match comment_step {
-                MigrationStep::Function(FunctionOperation::Comment(CommentOperation::Drop { target })) => {
+                MigrationStep::Comment(CommentOperation::Drop { target }) => {
                     assert_eq!(target.schema(), "test_schema");
                     assert_eq!(target.name(), "calculate_total");
                 }

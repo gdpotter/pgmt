@@ -2,7 +2,7 @@
 
 use crate::catalog::cast::Cast;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{CastIdentifier, CastOperation, CommentOperation};
+use crate::diff::operations::{CastIdentifier, CastOperation};
 use crate::render::{RenderedSql, SqlRenderer};
 
 impl SqlRenderer for CastOperation {
@@ -14,7 +14,6 @@ impl SqlRenderer for CastOperation {
                 render_drop_cast(&CastIdentifier::from_cast(new_cast)),
                 render_create_cast(new_cast),
             ],
-            CastOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -26,11 +25,6 @@ impl SqlRenderer for CastOperation {
                 target: identifier.target.clone(),
             },
             CastOperation::Replace { new_cast, .. } => new_cast.id(),
-            CastOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
-            },
         }
     }
 }

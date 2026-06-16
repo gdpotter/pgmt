@@ -1,6 +1,4 @@
 use crate::catalog::aggregate::Aggregate;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{AggregateIdentifier, AggregateOperation, MigrationStep};
 
 /// Diff a single aggregate function
@@ -35,18 +33,6 @@ pub fn diff(old: Option<&Aggregate>, new: Option<&Aggregate>) -> Vec<MigrationSt
                     old_aggregate: Box::new(old_aggregate.clone()),
                     new_aggregate: Box::new(new_aggregate.clone()),
                 }));
-            } else {
-                // Only comments might have changed
-                let comment_ops = comment_utils::handle_comment_diff(
-                    Some(old_aggregate),
-                    Some(new_aggregate),
-                    || AttrTarget::object(new_aggregate.id()),
-                );
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Aggregate(AggregateOperation::Comment(
-                        comment_op,
-                    )));
-                }
             }
 
             steps
@@ -158,23 +144,6 @@ mod tests {
                 assert_ne!(old_aggregate.definition, new_aggregate.definition);
             }
             _ => panic!("Expected AggregateOperation::Replace"),
-        }
-    }
-
-    #[test]
-    fn test_diff_comment_change_only() {
-        let old_aggregate = create_test_aggregate("test_agg");
-        let mut new_aggregate = create_test_aggregate("test_agg");
-        new_aggregate.comment = Some("New comment".to_string());
-
-        let steps = diff(Some(&old_aggregate), Some(&new_aggregate));
-        assert_eq!(steps.len(), 1);
-
-        match &steps[0] {
-            MigrationStep::Aggregate(AggregateOperation::Comment(_)) => {
-                // Expected comment operation
-            }
-            _ => panic!("Expected AggregateOperation::Comment"),
         }
     }
 

@@ -3,7 +3,6 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 
 /* ---------- Data structures ---------- */
@@ -91,12 +90,6 @@ impl DependsOn for Index {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Index {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

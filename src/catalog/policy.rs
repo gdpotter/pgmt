@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 use crate::catalog::utils::is_system_schema;
-use crate::catalog::{DependsOn, comments::Commentable, id::DbObjectId};
+use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Command type for RLS policies
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,12 +57,6 @@ impl DependsOn for Policy {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Policy {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

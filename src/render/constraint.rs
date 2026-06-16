@@ -21,7 +21,6 @@ impl SqlRenderer for ConstraintOperation {
                     ),
                 )]
             }
-            ConstraintOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -29,7 +28,6 @@ impl SqlRenderer for ConstraintOperation {
         match self {
             ConstraintOperation::Create(constraint) => constraint.id(),
             ConstraintOperation::Drop(identifier) => identifier.to_db_object_id(),
-            ConstraintOperation::Comment(comment_op) => comment_op.db_object_id(),
         }
     }
 }

@@ -1,10 +1,8 @@
 use crate::catalog::extension::Extension;
-use crate::catalog::id::DependsOn;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{ExtensionIdentifier, ExtensionOperation, MigrationStep};
 
-/// Diff a single extension
+/// Diff a single extension's structure. Comments are handled centrally by
+/// [`crate::diff::comments`].
 pub fn diff(old: Option<&Extension>, new: Option<&Extension>) -> Vec<MigrationStep> {
     match (old, new) {
         // CREATE new extension
@@ -22,29 +20,8 @@ pub fn diff(old: Option<&Extension>, new: Option<&Extension>) -> Vec<MigrationSt
             })]
         }
 
-        // Extensions don't support modification - they're either present or not
-        // If anything differs (version, schema), we treat it as a comment-only change
-        // since extensions can't be "altered" - you have to drop and recreate
-        (Some(old_extension), Some(new_extension)) => {
-            let mut steps = Vec::new();
-
-            // Only comments can change for existing extensions
-            let comment_ops = comment_utils::handle_comment_diff(
-                Some(old_extension),
-                Some(new_extension),
-                || AttrTarget::object(new_extension.id()),
-            );
-            for comment_op in comment_ops {
-                steps.push(MigrationStep::Extension(ExtensionOperation::Comment(
-                    comment_op,
-                )));
-            }
-
-            steps
-        }
-
-        // No change
-        (None, None) => vec![],
+        // Extensions can't be altered in place; nothing structural changes here.
+        (Some(_), Some(_)) | (None, None) => vec![],
     }
 }
 
@@ -95,23 +72,6 @@ mod tests {
                 assert_eq!(identifier.name, "uuid-ossp");
             }
             _ => panic!("Expected ExtensionOperation::Drop"),
-        }
-    }
-
-    #[test]
-    fn test_diff_comment_change_only() {
-        let old_extension = create_test_extension("uuid-ossp");
-        let mut new_extension = create_test_extension("uuid-ossp");
-        new_extension.comment = Some("UUID generation functions".to_string());
-
-        let steps = diff(Some(&old_extension), Some(&new_extension));
-        assert_eq!(steps.len(), 1);
-
-        match &steps[0] {
-            MigrationStep::Extension(ExtensionOperation::Comment(_)) => {
-                // Expected comment operation
-            }
-            _ => panic!("Expected ExtensionOperation::Comment"),
         }
     }
 }

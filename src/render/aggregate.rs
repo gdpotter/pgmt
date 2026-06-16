@@ -2,7 +2,7 @@
 
 use crate::catalog::aggregate::Aggregate;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{AggregateIdentifier, AggregateOperation, CommentOperation};
+use crate::diff::operations::{AggregateIdentifier, AggregateOperation};
 use crate::render::{RenderedSql, SqlRenderer};
 
 impl SqlRenderer for AggregateOperation {
@@ -21,7 +21,6 @@ impl SqlRenderer for AggregateOperation {
                     render_create_aggregate(new_aggregate),
                 ]
             }
-            AggregateOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -41,11 +40,6 @@ impl SqlRenderer for AggregateOperation {
                 schema: new_aggregate.schema.clone(),
                 name: new_aggregate.name.clone(),
                 arguments: new_aggregate.arguments.clone(),
-            },
-            AggregateOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
             },
         }
     }

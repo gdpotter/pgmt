@@ -1,6 +1,4 @@
 use crate::catalog::function::{Function, FunctionKind, FunctionParam};
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{FunctionOperation, MigrationStep};
 
 /// Check if two functions have the same signature
@@ -96,7 +94,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             let returns = format_return_clause(n);
             let attributes = format_attributes(n);
 
-            let mut steps = vec![MigrationStep::Function(FunctionOperation::Create {
+            vec![MigrationStep::Function(FunctionOperation::Create {
                 schema: n.schema.clone(),
                 name: n.name.clone(),
                 arguments: n.arguments.clone(),
@@ -105,18 +103,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 returns,
                 attributes,
                 definition: n.definition.clone(),
-            })];
-
-            // Add function comment if present
-            if let Some(comment_op) =
-                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
-            {
-                steps.push(MigrationStep::Function(FunctionOperation::Comment(
-                    comment_op,
-                )));
-            }
-
-            steps
+            })]
         }
 
         // DROP removed function
@@ -166,7 +153,7 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 let returns = format_return_clause(n);
                 let attributes = n_attributes;
 
-                let mut steps = vec![MigrationStep::Function(FunctionOperation::Replace {
+                vec![MigrationStep::Function(FunctionOperation::Replace {
                     schema: n.schema.clone(),
                     name: n.name.clone(),
                     arguments: n.arguments.clone(),
@@ -175,31 +162,10 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                     returns,
                     attributes,
                     definition: n.definition.clone(),
-                })];
-
-                // Handle comment changes for replaced functions
-                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                    AttrTarget::object(n.id())
-                });
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Function(FunctionOperation::Comment(
-                        comment_op,
-                    )));
-                }
-
-                steps
+                })]
             } else {
-                // No function definition/attributes changes, check for comment changes
-                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                    AttrTarget::object(n.id())
-                });
-                let mut steps = Vec::new();
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Function(FunctionOperation::Comment(
-                        comment_op,
-                    )));
-                }
-                steps
+                // Definition and attributes unchanged — nothing structural to do.
+                Vec::new()
             }
         }
 

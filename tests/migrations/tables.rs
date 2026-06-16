@@ -2,8 +2,7 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::diff::operations::{
-    ColumnAction, CommentOperation, ConstraintOperation, MigrationStep, TableOperation,
-    TypeOperation, ViewOperation,
+    ColumnAction, CommentOperation, MigrationStep, TableOperation, TypeOperation, ViewOperation,
 };
 
 #[tokio::test]
@@ -420,12 +419,12 @@ async fn test_table_comment_migration() -> Result<()> {
             // Should have SET TABLE COMMENT step
             assert!(!steps.is_empty());
             let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Table(TableOperation::Comment(CommentOperation::Set { target, comment }))
+                matches!(s, MigrationStep::Comment(CommentOperation::Set { target, comment })
                     if target.schema() == "test_schema" && target.name() == "users" && comment == "User information table")
             }).expect("Should have SetTableComment step");
 
             match comment_step {
-                MigrationStep::Table(TableOperation::Comment(CommentOperation::Set { target, comment })) => {
+                MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
                     assert_eq!(target.schema(), "test_schema");
                     assert_eq!(target.name(), "users");
                     assert_eq!(comment, "User information table");
@@ -461,34 +460,22 @@ async fn test_column_comment_migration() -> Result<()> {
             &["COMMENT ON COLUMN test_schema.users.name IS 'Full name of the user'"],
             // Verification closure
             |steps, final_catalog| {
-                // Should have ALTER TABLE step with SET COLUMN COMMENT
+                // Should have a SET COLUMN COMMENT step targeting the column
                 assert!(!steps.is_empty());
-                let alter_step = steps
+                let comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Table(TableOperation::Alter { schema, name, .. })
-                    if schema == "test_schema" && name == "users")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
+                            if target.column_name() == Some("name"))
                     })
-                    .expect("Should have AlterTable step");
+                    .expect("Should have a SET COLUMN COMMENT step");
 
-                match alter_step {
-                    MigrationStep::Table(TableOperation::Alter {
-                        schema,
-                        name,
-                        actions,
-                    }) => {
-                        assert_eq!(schema, "test_schema");
-                        assert_eq!(name, "users");
-                        assert_eq!(actions.len(), 1);
-                        match &actions[0] {
-                            ColumnAction::Comment(CommentOperation::Set { target, comment }) => {
-                                assert_eq!(target.column_name(), Some("name"));
-                                assert_eq!(comment, "Full name of the user");
-                            }
-                            _ => panic!("Expected SetColumnComment action"),
-                        }
+                match comment_step {
+                    MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
+                        assert_eq!(target.column_name(), Some("name"));
+                        assert_eq!(comment, "Full name of the user");
                     }
-                    _ => panic!("Expected AlterTable step"),
+                    _ => panic!("Expected column comment step"),
                 }
 
                 // Verify final state has comment
@@ -511,65 +498,67 @@ async fn test_column_comment_migration() -> Result<()> {
 async fn test_drop_comment_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
-    helper.run_migration_test(
-        // Both DBs: schema and table
-        &[
-            "CREATE SCHEMA test_schema",
-            "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
-        ],
-        // Initial DB only: has comments
-        &[
-            "COMMENT ON TABLE test_schema.users IS 'User information table'",
-            "COMMENT ON COLUMN test_schema.users.name IS 'Full name of the user'",
-        ],
-        // Target DB only: nothing extra (no comments)
-        &[],
-        // Verification closure
-        |steps, final_catalog| {
-            // Should have both DROP TABLE COMMENT and DROP COLUMN COMMENT steps
-            assert!(!steps.is_empty());
+    helper
+        .run_migration_test(
+            // Both DBs: schema and table
+            &[
+                "CREATE SCHEMA test_schema",
+                "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
+            ],
+            // Initial DB only: has comments
+            &[
+                "COMMENT ON TABLE test_schema.users IS 'User information table'",
+                "COMMENT ON COLUMN test_schema.users.name IS 'Full name of the user'",
+            ],
+            // Target DB only: nothing extra (no comments)
+            &[],
+            // Verification closure
+            |steps, final_catalog| {
+                // Should have both DROP TABLE COMMENT and DROP COLUMN COMMENT steps
+                assert!(!steps.is_empty());
 
-            let table_comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Table(TableOperation::Comment(CommentOperation::Drop { target }))
+                let table_comment_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Drop { target })
                     if target.schema() == "test_schema" && target.name() == "users")
-            }).expect("Should have DropTableComment step");
+                    })
+                    .expect("Should have DropTableComment step");
 
-            // Verify the table comment step details
-            match table_comment_step {
-                MigrationStep::Table(TableOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema(), "test_schema");
-                    assert_eq!(target.name(), "users");
-                }
-                _ => panic!("Expected DropTableComment step"),
-            }
-
-            let alter_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Table(TableOperation::Alter { schema, name, .. })
-                    if schema == "test_schema" && name == "users")
-            }).expect("Should have AlterTable step");
-
-            match alter_step {
-                MigrationStep::Table(TableOperation::Alter { actions, .. }) => {
-                    assert_eq!(actions.len(), 1);
-                    match &actions[0] {
-                        ColumnAction::Comment(CommentOperation::Drop { target }) => {
-                            assert_eq!(target.column_name(), Some("name"));
-                        }
-                        _ => panic!("Expected DropColumnComment action"),
+                // Verify the table comment step details
+                match table_comment_step {
+                    MigrationStep::Comment(CommentOperation::Drop { target }) => {
+                        assert_eq!(target.schema(), "test_schema");
+                        assert_eq!(target.name(), "users");
                     }
+                    _ => panic!("Expected DropTableComment step"),
                 }
-                _ => panic!("Expected AlterTable step"),
-            }
 
-            // Verify final state has no comments
-            let table = &final_catalog.tables[0];
-            assert_eq!(table.comment, None);
-            let name_column = table.columns.iter().find(|c| c.name == "name").unwrap();
-            assert_eq!(name_column.comment, None);
+                let column_comment_drop = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Drop { target })
+                    if target.column_name() == Some("name"))
+                    })
+                    .expect("Should have a DROP COLUMN COMMENT step");
 
-            Ok(())
-        }
-    ).await?;
+                match column_comment_drop {
+                    MigrationStep::Comment(CommentOperation::Drop { target }) => {
+                        assert_eq!(target.column_name(), Some("name"));
+                    }
+                    _ => panic!("Expected column comment drop step"),
+                }
+
+                // Verify final state has no comments
+                let table = &final_catalog.tables[0];
+                assert_eq!(table.comment, None);
+                let name_column = table.columns.iter().find(|c| c.name == "name").unwrap();
+                assert_eq!(name_column.comment, None);
+
+                Ok(())
+            },
+        )
+        .await?;
 
     Ok(())
 }
@@ -578,65 +567,53 @@ async fn test_drop_comment_migration() -> Result<()> {
 async fn test_create_table_with_column_comments_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
-    helper.run_migration_test(
-        // Both DBs: just the schema
-        &["CREATE SCHEMA test_schema"],
-        // Initial DB only: nothing extra
-        &[],
-        // Target DB only: create table with column comments
-        &[
-            "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
-            "COMMENT ON COLUMN test_schema.users.id IS 'Primary key'",
-            "COMMENT ON COLUMN test_schema.users.name IS 'User full name'",
-        ],
-        // Verification closure
-        |steps, final_catalog| {
-            // Verify we have a CREATE TABLE step
-            assert!(steps.iter().any(|s| {
+    helper
+        .run_migration_test(
+            // Both DBs: just the schema
+            &["CREATE SCHEMA test_schema"],
+            // Initial DB only: nothing extra
+            &[],
+            // Target DB only: create table with column comments
+            &[
+                "CREATE TABLE test_schema.users (id INTEGER, name TEXT)",
+                "COMMENT ON COLUMN test_schema.users.id IS 'Primary key'",
+                "COMMENT ON COLUMN test_schema.users.name IS 'User full name'",
+            ],
+            // Verification closure
+            |steps, final_catalog| {
+                // Verify we have a CREATE TABLE step
+                assert!(steps.iter().any(|s| {
                 matches!(s, MigrationStep::Table(TableOperation::Create { schema, name, .. })
                     if schema == "test_schema" && name == "users")
             }), "Should have CreateTable step");
 
-            // Check if we have column comment steps
-            let column_comment_steps: Vec<_> = steps.iter().filter(|s| {
-                match s {
-                    MigrationStep::Table(TableOperation::Alter { schema, name, actions })
-                        if schema == "test_schema" && name == "users" => {
-                        actions.iter().any(|action| matches!(action, ColumnAction::Comment(_)))
-                    }
-                    _ => false
-                }
-            }).collect();
+                // Column comments are emitted as flat comment steps targeting columns.
+                let column_comment_count = steps
+                    .iter()
+                    .filter(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
+                        if target.column_name().is_some())
+                    })
+                    .count();
 
-            // Should now have column comment steps with our fix
-            assert!(!column_comment_steps.is_empty(),
-                "Expected column comment migration steps for newly created table, but found none");
+                assert_eq!(
+                    column_comment_count, 2,
+                    "Expected 2 column comment steps (one for 'id', one for 'name'), but found {}",
+                    column_comment_count
+                );
 
-            // Verify we have 2 column comment operations
-            let total_comment_actions: usize = column_comment_steps.iter().map(|s| {
-                match s {
-                    MigrationStep::Table(TableOperation::Alter { actions, .. }) => {
-                        actions.iter().filter(|action| matches!(action, ColumnAction::Comment(_))).count()
-                    }
-                    _ => 0
-                }
-            }).sum();
+                // Verify final catalog has the comments
+                let table = &final_catalog.tables[0];
+                let id_column = table.columns.iter().find(|c| c.name == "id").unwrap();
+                let name_column = table.columns.iter().find(|c| c.name == "name").unwrap();
 
-            assert_eq!(total_comment_actions, 2,
-                "Expected 2 column comment actions (one for 'id', one for 'name'), but found {}",
-                total_comment_actions);
+                assert_eq!(id_column.comment, Some("Primary key".to_string()));
+                assert_eq!(name_column.comment, Some("User full name".to_string()));
 
-            // Verify final catalog has the comments
-            let table = &final_catalog.tables[0];
-            let id_column = table.columns.iter().find(|c| c.name == "id").unwrap();
-            let name_column = table.columns.iter().find(|c| c.name == "name").unwrap();
-
-            assert_eq!(id_column.comment, Some("Primary key".to_string()));
-            assert_eq!(name_column.comment, Some("User full name".to_string()));
-
-            Ok(())
-        }
-    ).await?;
+                Ok(())
+            },
+        )
+        .await?;
 
     Ok(())
 }
@@ -730,12 +707,7 @@ async fn test_primary_key_comment_migration() -> Result<()> {
                 assert!(!steps.is_empty());
                 let _comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have primary key comment step");
 
                 // Verify final state
@@ -775,12 +747,7 @@ async fn test_drop_primary_key_comment_migration() -> Result<()> {
                 assert!(!steps.is_empty());
                 let _comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have primary key comment drop step");
 
                 // Verify final state
@@ -884,7 +851,7 @@ async fn test_primary_key_comment_ordering() -> Result<()> {
                     .position(|s| {
                         matches!(
                             s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                            MigrationStep::Comment(_)
                         )
                     })
                     .expect("Should have primary key comment step");

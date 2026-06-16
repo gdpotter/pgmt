@@ -40,7 +40,6 @@ impl SqlRenderer for TableOperation {
                 .iter()
                 .map(|action| render_column_action(action, schema, name))
                 .collect(),
-            TableOperation::Comment(op) => op.to_sql(),
         }
     }
 
@@ -52,7 +51,6 @@ impl SqlRenderer for TableOperation {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            TableOperation::Comment(op) => op.db_object_id(),
         }
     }
 }
@@ -250,7 +248,6 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
             ),
             safety: Safety::Safe,
         },
-        ColumnAction::Comment(op) => op.to_sql()[0].clone(),
     }
 }
 

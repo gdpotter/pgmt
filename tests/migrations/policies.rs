@@ -440,7 +440,7 @@ async fn test_policy_comment_migration() -> Result<()> {
             |steps, final_catalog| -> Result<()> {
                 // Should have a Comment step
                 let comment_step = steps.iter().find(|s| {
-                    matches!(s, MigrationStep::Policy(PolicyOperation::Comment(CommentOperation::Set { target, .. }))
+                    matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
                         if target.name() == "task_policy")
                 });
 
@@ -479,7 +479,7 @@ async fn test_drop_policy_comment_migration() -> Result<()> {
             |steps, final_catalog| -> Result<()> {
                 // Should have a Comment drop step
                 let comment_step = steps.iter().find(|s| {
-                    matches!(s, MigrationStep::Policy(PolicyOperation::Comment(CommentOperation::Drop { target }))
+                    matches!(s, MigrationStep::Comment(CommentOperation::Drop { target })
                         if target.name() == "item_policy")
                 });
 

@@ -1,4 +1,3 @@
-use crate::catalog::comments::Commentable;
 use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::catalog::utils::DependencyBuilder;
 use anyhow::Result;
@@ -37,12 +36,6 @@ impl DependsOn for Sequence {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Sequence {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

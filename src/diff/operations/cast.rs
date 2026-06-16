@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::cast::Cast;
 
 /// Identifier for a cast, used by DROP. A cast is keyed by its (source, target)
@@ -34,7 +34,6 @@ pub enum CastOperation {
         old_cast: Box<Cast>,
         new_cast: Box<Cast>,
     },
-    Comment(CommentOperation),
 }
 
 impl CastOperation {
@@ -42,7 +41,7 @@ impl CastOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

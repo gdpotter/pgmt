@@ -1,6 +1,4 @@
 use crate::catalog::operator::Operator;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, OperatorIdentifier, OperatorOperation};
 
 /// Diff a single operator.
@@ -8,22 +6,9 @@ pub fn diff(old: Option<&Operator>, new: Option<&Operator>) -> Vec<MigrationStep
     match (old, new) {
         // CREATE new operator
         (None, Some(new_operator)) => {
-            let mut steps = vec![MigrationStep::Operator(OperatorOperation::Create {
+            vec![MigrationStep::Operator(OperatorOperation::Create {
                 operator: Box::new(new_operator.clone()),
-            })];
-
-            // A CREATE OPERATOR statement cannot embed a comment, so emit it as a
-            // follow-up step.
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &new_operator.comment,
-                AttrTarget::object(new_operator.id()),
-            ) {
-                steps.push(MigrationStep::Operator(OperatorOperation::Comment(
-                    comment_op,
-                )));
-            }
-
-            steps
+            })]
         }
 
         // DROP removed operator
@@ -42,18 +27,6 @@ pub fn diff(old: Option<&Operator>, new: Option<&Operator>) -> Vec<MigrationStep
                     old_operator: Box::new(old_operator.clone()),
                     new_operator: Box::new(new_operator.clone()),
                 }));
-            } else {
-                // Only the comment might have changed.
-                let comment_ops = comment_utils::handle_comment_diff(
-                    Some(old_operator),
-                    Some(new_operator),
-                    || AttrTarget::object(new_operator.id()),
-                );
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Operator(OperatorOperation::Comment(
-                        comment_op,
-                    )));
-                }
             }
 
             steps
@@ -116,22 +89,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_create_with_comment() {
-        let mut op = test_operator("===");
-        op.comment = Some("custom equality".to_string());
-        let steps = diff(None, Some(&op));
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(
-            &steps[0],
-            MigrationStep::Operator(OperatorOperation::Create { .. })
-        ));
-        assert!(matches!(
-            &steps[1],
-            MigrationStep::Operator(OperatorOperation::Comment(_))
-        ));
-    }
-
-    #[test]
     fn test_diff_drop() {
         let op = test_operator("===");
         let steps = diff(Some(&op), None);
@@ -155,19 +112,6 @@ mod tests {
         assert!(matches!(
             &steps[0],
             MigrationStep::Operator(OperatorOperation::Replace { .. })
-        ));
-    }
-
-    #[test]
-    fn test_diff_comment_only_change() {
-        let old = test_operator("===");
-        let mut new = test_operator("===");
-        new.comment = Some("now documented".to_string());
-        let steps = diff(Some(&old), Some(&new));
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(
-            &steps[0],
-            MigrationStep::Operator(OperatorOperation::Comment(_))
         ));
     }
 }

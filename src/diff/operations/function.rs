@@ -1,5 +1,4 @@
 use super::OperationKind;
-use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum FunctionOperation {
@@ -38,7 +37,6 @@ pub enum FunctionOperation {
         kind: String,
         parameter_types: String,
     },
-    Comment(CommentOperation),
 }
 
 impl FunctionOperation {
@@ -46,7 +44,7 @@ impl FunctionOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

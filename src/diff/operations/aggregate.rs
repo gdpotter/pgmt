@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::aggregate::Aggregate;
 
 /// Identifier for an aggregate function
@@ -40,7 +40,6 @@ pub enum AggregateOperation {
         old_aggregate: Box<Aggregate>,
         new_aggregate: Box<Aggregate>,
     },
-    Comment(CommentOperation),
 }
 
 impl AggregateOperation {
@@ -48,7 +47,7 @@ impl AggregateOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

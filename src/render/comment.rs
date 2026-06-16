@@ -3,7 +3,26 @@
 use crate::catalog::id::DbObjectId;
 use crate::catalog::target::{AttrTarget, SubObject};
 use crate::diff::operations::CommentOperation;
-use crate::render::{RenderedSql, SqlRenderer, quote_ident, render_comment_sql};
+use crate::render::{RenderedSql, Safety, SqlRenderer, escape_string, quote_ident};
+
+/// Render a `COMMENT ON <keyword> <reference> IS …` statement (or `IS NULL` to
+/// drop the comment).
+fn render_comment_sql(object_type: &str, identifier: &str, comment: Option<&str>) -> RenderedSql {
+    let sql = match comment {
+        Some(comment_text) => format!(
+            "COMMENT ON {} {} IS {};",
+            object_type,
+            identifier,
+            escape_string(comment_text)
+        ),
+        None => format!("COMMENT ON {} {} IS NULL;", object_type, identifier),
+    };
+
+    RenderedSql {
+        sql,
+        safety: Safety::Safe,
+    }
+}
 
 impl SqlRenderer for CommentOperation {
     fn to_sql(&self) -> Vec<RenderedSql> {
@@ -158,7 +177,6 @@ fn relation_parts(object: &DbObjectId) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::Safety;
 
     fn schema_target(name: &str) -> AttrTarget {
         AttrTarget::object(DbObjectId::Schema {

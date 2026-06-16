@@ -92,15 +92,13 @@ async fn test_extension_comment_migration() -> Result<()> {
                 // Filter only comment operation steps
                 let comment_steps: Vec<_> = steps
                     .iter()
-                    .filter(|s| {
-                        matches!(s, MigrationStep::Extension(ExtensionOperation::Comment(_)))
-                    })
+                    .filter(|s| matches!(s, MigrationStep::Comment(_)))
                     .collect();
 
                 assert_eq!(comment_steps.len(), 1);
 
                 match &comment_steps[0] {
-                    MigrationStep::Extension(ExtensionOperation::Comment(_)) => {
+                    MigrationStep::Comment(_) => {
                         // Expected comment operation
                     }
                     _ => panic!(
@@ -141,15 +139,13 @@ async fn test_drop_extension_comment_migration() -> Result<()> {
                 // Filter only comment operation steps
                 let comment_steps: Vec<_> = steps
                     .iter()
-                    .filter(|s| {
-                        matches!(s, MigrationStep::Extension(ExtensionOperation::Comment(_)))
-                    })
+                    .filter(|s| matches!(s, MigrationStep::Comment(_)))
                     .collect();
 
                 assert_eq!(comment_steps.len(), 1);
 
                 match &comment_steps[0] {
-                    MigrationStep::Extension(ExtensionOperation::Comment(_)) => {
+                    MigrationStep::Comment(_) => {
                         // Expected comment operation
                     }
                     _ => panic!(

@@ -84,10 +84,7 @@ async fn test_operator_comment_migration() -> Result<()> {
             &["COMMENT ON OPERATOR === (integer, integer) IS 'custom equality'"],
             |steps, final_catalog| {
                 assert!(
-                    steps.iter().any(|s| matches!(
-                        s,
-                        MigrationStep::Operator(OperatorOperation::Comment(_))
-                    )),
+                    steps.iter().any(|s| matches!(s, MigrationStep::Comment(_))),
                     "should have an operator Comment step"
                 );
                 assert_eq!(
@@ -111,10 +108,7 @@ async fn test_drop_operator_comment_migration() -> Result<()> {
             &[],
             |steps, final_catalog| {
                 assert!(
-                    steps.iter().any(|s| matches!(
-                        s,
-                        MigrationStep::Operator(OperatorOperation::Comment(_))
-                    )),
+                    steps.iter().any(|s| matches!(s, MigrationStep::Comment(_))),
                     "should have an operator Comment (drop) step"
                 );
                 assert_eq!(final_catalog.operators[0].comment, None);

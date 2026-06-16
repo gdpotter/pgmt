@@ -18,7 +18,6 @@ impl SqlRenderer for SchemaOperation {
                 sql: format!("DROP SCHEMA {};", quote_ident(name)),
                 safety: Safety::Safe,
             }],
-            SchemaOperation::Comment(op) => op.to_sql(),
         }
     }
 
@@ -27,7 +26,6 @@ impl SqlRenderer for SchemaOperation {
             SchemaOperation::Create { name } | SchemaOperation::Drop { name } => {
                 DbObjectId::Schema { name: name.clone() }
             }
-            SchemaOperation::Comment(op) => op.db_object_id(),
         }
     }
 }

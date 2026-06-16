@@ -901,3 +901,120 @@ async fn test_folded_column_revoke_ordered_before_table_drop() -> Result<()> {
 
     Ok(())
 }
+
+/// When an object is recreated via DROP+CREATE (here a view whose column set
+/// changes), its ACL must be re-stated in full. The grant exists identically in
+/// both catalogs, so the global grant diff computes an empty delta — but the DROP
+/// discards it. Pre-fix the recreated view lost `GRANT SELECT … TO test_app_user`
+/// entirely; the round-trip (apply migration to the initial DB, re-fetch) catches it.
+#[tokio::test]
+async fn test_recreated_view_reapplies_grant() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            // Both DBs: the base table.
+            &["CREATE TABLE t (id int, a int, b int)"],
+            // Initial: a two-column view with a grant on it.
+            &[
+                "CREATE VIEW v AS SELECT id, a FROM t",
+                "GRANT SELECT ON v TO test_app_user",
+            ],
+            // Target: the view gains a column (forces DROP+CREATE), same grant.
+            &[
+                "CREATE VIEW v AS SELECT id, a, b FROM t",
+                "GRANT SELECT ON v TO test_app_user",
+            ],
+            |_steps, final_catalog| {
+                let grant = final_catalog.grants.iter().find(|g| {
+                    matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Role(n) if n == "test_app_user")
+                        && matches!(&g.target.object, pgmt::catalog::id::DbObjectId::View { schema, name }
+                            if schema == "public" && name == "v")
+                });
+
+                let grant = grant.expect(
+                    "recreated view must keep its GRANT SELECT TO test_app_user after the migration",
+                );
+                assert!(
+                    grant.privileges.contains(&"SELECT".to_string()),
+                    "expected SELECT privilege, got {:?}",
+                    grant.privileges
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A recreated function must re-state its *whole* desired ACL — both the explicit
+/// GRANT and the `REVOKE … FROM PUBLIC` of the default EXECUTE privilege. The
+/// function is dropped+recreated because its return type changes (same signature
+/// otherwise). Pre-fix the recreate lost the app-user GRANT (empty delta) and
+/// never re-emitted the PUBLIC revoke, so the fresh function silently regained
+/// the default `EXECUTE TO PUBLIC`.
+#[tokio::test]
+async fn test_recreated_function_reapplies_grant_and_public_revoke() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            // Initial: function returning int, PUBLIC execute revoked, app user granted.
+            &[
+                "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+                "REVOKE EXECUTE ON FUNCTION f() FROM PUBLIC",
+                "GRANT EXECUTE ON FUNCTION f() TO test_app_user",
+            ],
+            // Target: same function but returning bigint -> DROP+CREATE, same ACL.
+            &[
+                "CREATE FUNCTION f() RETURNS bigint LANGUAGE sql AS 'SELECT 1'",
+                "REVOKE EXECUTE ON FUNCTION f() FROM PUBLIC",
+                "GRANT EXECUTE ON FUNCTION f() TO test_app_user",
+            ],
+            |steps, final_catalog| {
+                let is_func_f = |g: &&pgmt::catalog::grant::Grant| {
+                    matches!(&g.target.object, pgmt::catalog::id::DbObjectId::Function { name, .. }
+                        if name == "f")
+                };
+
+                // The explicit GRANT survives the recreate.
+                let has_app_user_execute = final_catalog.grants.iter().filter(is_func_f).any(|g| {
+                    matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Role(n) if n == "test_app_user")
+                        && g.privileges.contains(&"EXECUTE".to_string())
+                });
+                assert!(
+                    has_app_user_execute,
+                    "recreated function must keep its GRANT EXECUTE TO test_app_user"
+                );
+
+                // The default PUBLIC EXECUTE stays revoked: a fresh CREATE would
+                // hand it back, so the migration must re-emit the REVOKE.
+                let public_has_execute = final_catalog.grants.iter().filter(is_func_f).any(|g| {
+                    matches!(&g.grantee, pgmt::catalog::grant::GranteeType::Public)
+                        && g.privileges.contains(&"EXECUTE".to_string())
+                });
+                assert!(
+                    !public_has_execute,
+                    "recreated function must NOT regain default EXECUTE TO PUBLIC"
+                );
+
+                // And the plan should contain that REVOKE explicitly.
+                let has_public_revoke = steps.iter().any(|s| {
+                    matches!(s, MigrationStep::Grant(GrantOperation::Revoke { grant })
+                        if matches!(&grant.grantee, pgmt::catalog::grant::GranteeType::Public))
+                });
+                assert!(
+                    has_public_revoke,
+                    "plan must re-emit REVOKE EXECUTE … FROM PUBLIC for the recreated function"
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

@@ -1,9 +1,13 @@
+use crate::catalog::attached::Attached;
 use crate::catalog::constraint::ConstraintType;
+use crate::catalog::target::AttrTarget;
 use crate::catalog::{Catalog, id::DbObjectId};
+use crate::diff::comments::desired_comment_steps;
+use crate::diff::grants::{desired_acl_steps, grant_target_object};
 use crate::diff::operations::{
     ColumnAction, MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
 /// Also filters out redundant steps (e.g., DROP SEQUENCE for owned sequences when the owning
@@ -134,7 +138,81 @@ pub fn expand(
     let filtered = filter_owned_sequence_drops(all, old_catalog);
 
     // Filter out redundant policy drops when table is being dropped
-    filter_policy_drops(filtered, old_catalog)
+    let filtered = filter_policy_drops(filtered, old_catalog);
+
+    // A DROP discards attached state, so re-state it for recreated objects.
+    reapply_attached_state_for_recreated_objects(filtered, new_catalog)
+}
+
+/// Re-state the attached state (ACL, comments) of every object recreated via
+/// DROP+CREATE in this plan.
+///
+/// The global grant/comment diffs compare against the pre-drop object and see no
+/// change — but a DROP discards every privilege and comment and the CREATE resets
+/// the object to PostgreSQL's defaults. So for any object being recreated we strip
+/// whatever attached-state steps the diff produced for it (typically none) and
+/// re-emit it in full: every GRANT plus any REVOKE … FROM PUBLIC, and every
+/// comment. Brand-new objects are already handled correctly by the global diffs
+/// and are intentionally left untouched.
+///
+/// Comments are only re-stated for objects routed through the central comment
+/// pass ([`Attached`]); the rest still carry their comments in their per-object
+/// diff (via [`Catalog::synthesize_drop_create`]) and are left untouched here.
+fn reapply_attached_state_for_recreated_objects(
+    steps: Vec<MigrationStep>,
+    new_catalog: &Catalog,
+) -> Vec<MigrationStep> {
+    // An object with a structural DROP step that still exists in the desired
+    // catalog is being recreated, not removed. Grant/comment steps are excluded:
+    // their id() is synthetic, never an object being recreated.
+    let recreated: BTreeSet<DbObjectId> = steps
+        .iter()
+        .filter(|step| {
+            !step.is_grant()
+                && step.operation_kind() == OperationKind::Drop
+                && new_catalog.contains_id(&step.id())
+        })
+        .map(|step| step.id())
+        .collect();
+
+    if recreated.is_empty() {
+        return steps;
+    }
+
+    // The recreated objects whose comments are centrally managed.
+    let recreated_attached: Vec<&dyn Attached> = new_catalog
+        .attached_objects()
+        .into_iter()
+        .filter(|o| recreated.contains(&o.object_id()))
+        .collect();
+
+    // Their comment targets. We strip by exact target, not object id, because a
+    // sub-object's target can be a different id than the object — e.g. a table's
+    // primary-key comment targets the PK constraint, not the table.
+    let recreated_comment_targets: BTreeSet<AttrTarget> = recreated_attached
+        .iter()
+        .flat_map(|o| o.comment_targets().into_iter().map(|(t, _)| t))
+        .collect();
+
+    // Drop the attached-state steps the diff produced for these objects; we
+    // re-emit them in full below.
+    let mut result: Vec<MigrationStep> = steps
+        .into_iter()
+        .filter(|step| match step {
+            MigrationStep::Grant(op) => !recreated.contains(&grant_target_object(op)),
+            MigrationStep::Comment(op) => !recreated_comment_targets.contains(op.target()),
+            _ => true,
+        })
+        .collect();
+
+    for id in &recreated {
+        result.extend(desired_acl_steps(id, new_catalog));
+    }
+    for obj in &recreated_attached {
+        result.extend(desired_comment_steps(*obj));
+    }
+
+    result
 }
 
 /// Recursively collect all dependents of a given object

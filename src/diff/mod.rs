@@ -2,7 +2,7 @@ pub mod aggregates;
 pub mod cascade;
 pub mod casts;
 pub mod columns;
-pub mod comment_utils;
+pub mod comments;
 pub mod constraints;
 pub mod custom_types;
 pub mod domains;
@@ -145,6 +145,10 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
     out.extend(diff_list(&old.casts, &new.casts, Cast::id, casts::diff));
 
     out.extend(grants::diff_grants(&old.grants, &new.grants));
+
+    // Comments for every attached object, in one place (the analog of
+    // diff_grants). Per-object diffs no longer emit their own comments.
+    out.extend(comments::diff_comments(old, new));
 
     info!("Diff complete");
     out
@@ -562,6 +566,7 @@ fn order_steps_by_dependencies(
                     MigrationStep::Policy(_) => "Policy",
                     MigrationStep::Extension(_) => "Extension",
                     MigrationStep::Grant(_) => "Grant",
+                    MigrationStep::Comment(_) => "Comment",
                 };
                 anyhow::anyhow!(
                     "Dependency cycle detected involving {} operation on {:?}. This usually indicates circular dependencies between database objects. Check for circular references in your schema.",

@@ -1,7 +1,4 @@
-use crate::catalog::id::DependsOn;
 use crate::catalog::policy::Policy;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, PolicyIdentifier, PolicyOperation};
 
 /// Diff a single policy
@@ -65,15 +62,6 @@ pub fn diff(old: Option<&Policy>, new: Option<&Policy>) -> Vec<MigrationStep> {
                     new_using,
                     new_with_check,
                 }));
-            } else {
-                // Only comments might have changed
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(old_policy), Some(new_policy), || {
-                        AttrTarget::object(new_policy.id())
-                    });
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Policy(PolicyOperation::Comment(comment_op)));
-                }
             }
 
             steps
@@ -296,23 +284,6 @@ mod tests {
                 assert!(new_with_check.is_some());
             }
             _ => panic!("Expected PolicyOperation::Alter"),
-        }
-    }
-
-    #[test]
-    fn test_diff_comment_change_only() {
-        let old_policy = create_test_policy("test_policy");
-        let mut new_policy = create_test_policy("test_policy");
-        new_policy.comment = Some("New comment".to_string());
-
-        let steps = diff(Some(&old_policy), Some(&new_policy));
-        assert_eq!(steps.len(), 1);
-
-        match &steps[0] {
-            MigrationStep::Policy(PolicyOperation::Comment(_)) => {
-                // Expected comment operation
-            }
-            _ => panic!("Expected PolicyOperation::Comment"),
         }
     }
 

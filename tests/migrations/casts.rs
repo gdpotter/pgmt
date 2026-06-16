@@ -85,9 +85,7 @@ async fn test_cast_comment_migration() -> Result<()> {
             &["COMMENT ON CAST (celsius AS fahrenheit) IS 'temperature conversion'"],
             |steps, final_catalog| {
                 assert!(
-                    steps
-                        .iter()
-                        .any(|s| matches!(s, MigrationStep::Cast(CastOperation::Comment(_)))),
+                    steps.iter().any(|s| matches!(s, MigrationStep::Comment(_))),
                     "should have a cast Comment step"
                 );
                 assert_eq!(
@@ -111,9 +109,7 @@ async fn test_drop_cast_comment_migration() -> Result<()> {
             &[],
             |steps, final_catalog| {
                 assert!(
-                    steps
-                        .iter()
-                        .any(|s| matches!(s, MigrationStep::Cast(CastOperation::Comment(_)))),
+                    steps.iter().any(|s| matches!(s, MigrationStep::Comment(_))),
                     "should have a cast Comment (drop) step"
                 );
                 assert_eq!(final_catalog.casts[0].comment, None);

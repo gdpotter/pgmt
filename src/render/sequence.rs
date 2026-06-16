@@ -71,7 +71,6 @@ impl SqlRenderer for SequenceOperation {
                 },
                 safety: Safety::Safe,
             }],
-            SequenceOperation::Comment(op) => op.to_sql(),
         }
     }
 
@@ -83,7 +82,6 @@ impl SqlRenderer for SequenceOperation {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            SequenceOperation::Comment(op) => op.db_object_id(),
         }
     }
 }

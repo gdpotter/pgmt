@@ -1,7 +1,6 @@
 use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
-use crate::diff::grants::is_owner_grant;
-use crate::diff::operations::{GrantOperation, MigrationStep};
+use crate::diff::operations::MigrationStep;
 use crate::diff::{
     aggregates as aggregates_diff, casts as casts_diff, constraints as constraints_diff,
     custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
@@ -13,8 +12,8 @@ use sqlx::PgPool;
 use std::collections::BTreeMap;
 
 pub mod aggregate;
+pub mod attached;
 pub mod cast;
-pub mod comments;
 pub mod constraint;
 pub mod custom_type;
 pub mod domain;
@@ -390,10 +389,60 @@ impl Catalog {
             .find(|c| c.source == source && c.target == target)
     }
 
+    /// Every object that carries attached state (comments). Enumerated in ONE
+    /// place via an exhaustive destructure: adding a field to `Catalog` fails to
+    /// compile here until you decide whether the new object type is `Attached`.
+    pub fn attached_objects(&self) -> Vec<&dyn crate::catalog::attached::Attached> {
+        use crate::catalog::attached::Attached;
+        let Catalog {
+            schemas,
+            tables,
+            views,
+            types,
+            domains,
+            functions,
+            aggregates,
+            operators,
+            casts,
+            sequences,
+            indexes,
+            constraints,
+            triggers,
+            policies,
+            extensions,
+            // Not object-attached comment state: grants are their own diff, and
+            // the dep maps are derived. A new object field belongs above, not here.
+            grants: _,
+            forward_deps: _,
+            reverse_deps: _,
+        } = self;
+
+        let mut out: Vec<&dyn Attached> = Vec::new();
+        out.extend(schemas.iter().map(|x| x as &dyn Attached));
+        out.extend(tables.iter().map(|x| x as &dyn Attached));
+        out.extend(views.iter().map(|x| x as &dyn Attached));
+        out.extend(types.iter().map(|x| x as &dyn Attached));
+        out.extend(domains.iter().map(|x| x as &dyn Attached));
+        out.extend(functions.iter().map(|x| x as &dyn Attached));
+        out.extend(aggregates.iter().map(|x| x as &dyn Attached));
+        out.extend(operators.iter().map(|x| x as &dyn Attached));
+        out.extend(casts.iter().map(|x| x as &dyn Attached));
+        out.extend(sequences.iter().map(|x| x as &dyn Attached));
+        out.extend(indexes.iter().map(|x| x as &dyn Attached));
+        out.extend(constraints.iter().map(|x| x as &dyn Attached));
+        out.extend(triggers.iter().map(|x| x as &dyn Attached));
+        out.extend(policies.iter().map(|x| x as &dyn Attached));
+        out.extend(extensions.iter().map(|x| x as &dyn Attached));
+        out
+    }
+
     /// Synthesize DROP + CREATE steps for cascading a dependent object.
     ///
     /// Returns `None` if the object type doesn't support cascading or doesn't
-    /// exist in both catalogs. Grants are re-applied since DROP revokes them.
+    /// exist in both catalogs. Only the structural DROP/CREATE (and comments) are
+    /// emitted here — the object's ACL is reapplied centrally for every recreated
+    /// object by `crate::diff::cascade::reapply_acl_for_recreated_objects`, since
+    /// a DROP discards all privileges regardless of what triggered the recreate.
     pub fn synthesize_drop_create(
         &self,
         id: &DbObjectId,
@@ -540,17 +589,8 @@ impl Catalog {
             | DbObjectId::Column { .. } => return None,
         }
 
-        // Re-grant permissions for the cascaded object.
-        // DROP implicitly revokes all grants, so we need to re-apply them.
-        // Filter to grants on this specific object, skipping owner grants (implicit in PostgreSQL).
-        for grant in &new_catalog.grants {
-            if &grant.target.db_object_id() == id && !is_owner_grant(grant) {
-                steps.push(MigrationStep::Grant(GrantOperation::Grant {
-                    grant: grant.clone(),
-                }));
-            }
-        }
-
+        // No ACL here — it's re-stated centrally for every recreated object; see
+        // the method doc and `cascade::reapply_acl_for_recreated_objects`.
         Some(steps)
     }
 

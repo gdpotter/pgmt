@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::triggers::Trigger;
 
 /// Identifier for a trigger
@@ -40,7 +40,6 @@ pub enum TriggerOperation {
         old_trigger: Box<Trigger>,
         new_trigger: Box<Trigger>,
     },
-    Comment(CommentOperation),
 }
 
 impl TriggerOperation {
@@ -48,7 +47,7 @@ impl TriggerOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

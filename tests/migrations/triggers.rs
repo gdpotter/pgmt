@@ -219,11 +219,11 @@ async fn test_trigger_comment_migration() -> Result<()> {
         |steps, final_catalog| -> Result<()> {
             // Should have a CommentTrigger step
             let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Trigger(TriggerOperation::Comment(_)))
+                matches!(s, MigrationStep::Comment(_))
             }).expect("Should have CommentTrigger step");
 
             match comment_step {
-                MigrationStep::Trigger(TriggerOperation::Comment(CommentOperation::Set { target, comment })) => {
+                MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
                     assert_eq!(target.name(), "audit_users");
                     assert_eq!(target.schema(), "test_schema");
                     assert_eq!(target.table(), Some("users"));

@@ -1,203 +1,71 @@
 use crate::catalog::custom_type::{CustomType, TypeKind};
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
-use crate::diff::operations::{CommentOperation, MigrationStep, TypeOperation};
+use crate::diff::operations::{MigrationStep, TypeOperation};
 
-/// Emit SET steps for all non-empty attribute comments on a (newly created or recreated) composite type.
-fn emit_initial_attribute_comments(ty: &CustomType) -> Vec<MigrationStep> {
-    ty.composite_attributes
-        .iter()
-        .filter_map(|attr| {
-            attr.comment.as_ref().map(|c| {
-                MigrationStep::Type(TypeOperation::AttributeComment(CommentOperation::Set {
-                    target: AttrTarget::column(ty.id(), attr.name.clone()),
-                    comment: c.clone(),
-                }))
-            })
-        })
-        .collect()
-}
-
-/// Diff per-attribute comments between two composite types whose attributes are otherwise identical.
-fn diff_attribute_comments(old: &CustomType, new: &CustomType) -> Vec<MigrationStep> {
-    let mut steps = Vec::new();
-    let by_name_old: std::collections::HashMap<
-        &str,
-        &crate::catalog::custom_type::CompositeAttribute,
-    > = old
-        .composite_attributes
-        .iter()
-        .map(|a| (a.name.as_str(), a))
-        .collect();
-
-    for new_attr in &new.composite_attributes {
-        let Some(old_attr) = by_name_old.get(new_attr.name.as_str()) else {
-            continue;
-        };
-        let target = || AttrTarget::column(new.id(), new_attr.name.clone());
-        match (&old_attr.comment, &new_attr.comment) {
-            (None, Some(c)) => {
-                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
-                    CommentOperation::Set {
-                        target: target(),
-                        comment: c.clone(),
-                    },
-                )));
-            }
-            (Some(old_c), Some(new_c)) if old_c != new_c => {
-                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
-                    CommentOperation::Set {
-                        target: target(),
-                        comment: new_c.clone(),
-                    },
-                )));
-            }
-            (Some(_), None) => {
-                steps.push(MigrationStep::Type(TypeOperation::AttributeComment(
-                    CommentOperation::Drop { target: target() },
-                )));
-            }
-            _ => {}
+/// Build the `CREATE TYPE` step for a custom type. Comments (on the type and its
+/// composite attributes) are handled centrally by [`crate::diff::comments`].
+fn create_step(n: &CustomType) -> MigrationStep {
+    let (kind, definition) = match &n.kind {
+        TypeKind::Enum => {
+            let values: Vec<String> = n
+                .enum_values
+                .iter()
+                .map(|v| format!("'{}'", v.name))
+                .collect();
+            ("ENUM".to_string(), format!("({})", values.join(", ")))
         }
-    }
-    steps
+        TypeKind::Composite => {
+            let attributes: Vec<String> = n
+                .composite_attributes
+                .iter()
+                .map(|attr| format!("{} {}", attr.name, attr.type_name))
+                .collect();
+            (
+                "COMPOSITE".to_string(),
+                format!("({})", attributes.join(", ")),
+            )
+        }
+        // Range types would need more info from the catalog.
+        TypeKind::Range => ("RANGE".to_string(), String::new()),
+        TypeKind::Other(t) => (format!("TYPE ({})", t), String::new()),
+    };
+
+    MigrationStep::Type(TypeOperation::Create {
+        schema: n.schema.clone(),
+        name: n.name.clone(),
+        kind,
+        definition,
+    })
 }
 
-/// Diff a single custom type
+fn drop_step(o: &CustomType) -> MigrationStep {
+    MigrationStep::Type(TypeOperation::Drop {
+        schema: o.schema.clone(),
+        name: o.name.clone(),
+    })
+}
+
+/// Diff a single custom type's structure.
 pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<MigrationStep> {
     match (old, new) {
-        // CREATE new type
-        (None, Some(n)) => {
-            match n.kind {
-                TypeKind::Enum => {
-                    let values: Vec<String> = n
-                        .enum_values
-                        .iter()
-                        .map(|v| format!("'{}'", v.name))
-                        .collect();
-
-                    let mut steps = vec![MigrationStep::Type(TypeOperation::Create {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        kind: "ENUM".to_string(),
-                        definition: format!("({})", values.join(", ")),
-                    })];
-
-                    // Add type comment if present
-                    if let Some(comment_op) = comment_utils::handle_comment_creation(
-                        &n.comment,
-                        AttrTarget::object(n.id()),
-                    ) {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-
-                    steps
-                }
-                TypeKind::Composite => {
-                    let attributes: Vec<String> = n
-                        .composite_attributes
-                        .iter()
-                        .map(|attr| format!("{} {}", attr.name, attr.type_name))
-                        .collect();
-
-                    let mut steps = vec![MigrationStep::Type(TypeOperation::Create {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        kind: "COMPOSITE".to_string(),
-                        definition: format!("({})", attributes.join(", ")),
-                    })];
-
-                    // Add type comment if present
-                    if let Some(comment_op) = comment_utils::handle_comment_creation(
-                        &n.comment,
-                        AttrTarget::object(n.id()),
-                    ) {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-
-                    steps.extend(emit_initial_attribute_comments(n));
-
-                    steps
-                }
-                TypeKind::Range => {
-                    // Range types generally require more complex handling
-                    let mut steps = vec![MigrationStep::Type(TypeOperation::Create {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        kind: "RANGE".to_string(),
-                        definition: "".to_string(), // Would need more info from the catalog
-                    })];
-
-                    // Add type comment if present
-                    if let Some(comment_op) = comment_utils::handle_comment_creation(
-                        &n.comment,
-                        AttrTarget::object(n.id()),
-                    ) {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-
-                    steps
-                }
-                TypeKind::Other(ref t) => {
-                    let mut steps = vec![MigrationStep::Type(TypeOperation::Create {
-                        schema: n.schema.clone(),
-                        name: n.name.clone(),
-                        kind: format!("TYPE ({})", t),
-                        definition: "".to_string(),
-                    })];
-
-                    // Add type comment if present
-                    if let Some(comment_op) = comment_utils::handle_comment_creation(
-                        &n.comment,
-                        AttrTarget::object(n.id()),
-                    ) {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-
-                    steps
-                }
-            }
-        }
-        // DROP removed type
-        (Some(o), None) => {
-            vec![MigrationStep::Type(TypeOperation::Drop {
-                schema: o.schema.clone(),
-                name: o.name.clone(),
-            })]
-        }
-        // ALTER existing type
+        (None, Some(n)) => vec![create_step(n)],
+        (Some(o), None) => vec![drop_step(o)],
         (Some(o), Some(n)) => {
+            // A change of kind (very unusual) requires drop + recreate.
             if o.kind != n.kind {
-                // Type kind changed (very unusual) - need to drop and recreate
-                return vec![
-                    MigrationStep::Type(TypeOperation::Drop {
-                        schema: o.schema.clone(),
-                        name: o.name.clone(),
-                    }),
-                    diff(None, Some(n))[0].clone(),
-                ];
+                return vec![drop_step(o), create_step(n)];
             }
 
             match n.kind {
                 TypeKind::Enum => {
-                    // For enums, Postgres allows adding values but not removing them
-                    // Let's check if values were added, removed, or reordered
                     let old_values: Vec<&String> = o.enum_values.iter().map(|v| &v.name).collect();
                     let new_values: Vec<&String> = n.enum_values.iter().map(|v| &v.name).collect();
 
                     if old_values == new_values {
-                        // No enum value changes, check for comment changes
-                        let comment_ops =
-                            comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                                AttrTarget::object(n.id())
-                            });
-                        let mut steps = Vec::new();
-                        for comment_op in comment_ops {
-                            steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                        }
-                        steps
+                        // Only comments could have changed — handled centrally.
+                        Vec::new()
                     } else if old_values.iter().all(|v| new_values.contains(v)) {
-                        // Only added values - generate a single ALTER TYPE statement with all new values
+                        // Only added values: emit one ALTER TYPE ADD VALUE per new value
+                        // (PostgreSQL can't add several in one statement).
                         let added_values: Vec<String> = n
                             .enum_values
                             .iter()
@@ -206,19 +74,13 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                             .collect();
 
                         if added_values.is_empty() {
-                            // No new values, but order changed, requires drop and recreate
-                            return vec![
-                                MigrationStep::Type(TypeOperation::Drop {
-                                    schema: o.schema.clone(),
-                                    name: o.name.clone(),
-                                }),
-                                diff(None, Some(n))[0].clone(),
-                            ];
+                            // No new values, but order changed: requires drop + recreate.
+                            return vec![drop_step(o), create_step(n)];
                         }
 
-                        // If there are existing values, find the last one to add our new values after
+                        // Add the first new value after the last existing value (by sort
+                        // order); each subsequent value after the previous new one.
                         let after_clause = if !old_values.is_empty() {
-                            // Find the last enum value from the old list according to sort order
                             let last_enum_value = o
                                 .enum_values
                                 .iter()
@@ -228,57 +90,37 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                                         .unwrap_or(std::cmp::Ordering::Equal)
                                 })
                                 .map(|v| &v.name)
-                                .unwrap_or(old_values[0]); // Fallback to first value if we can't determine sort order
-
+                                .unwrap_or(old_values[0]);
                             format!(" AFTER '{}'", last_enum_value)
                         } else {
-                            "".to_string()
+                            String::new()
                         };
 
-                        // Generate separate ALTER TYPE statements for each new value
-                        // PostgreSQL doesn't support adding multiple values in one statement
-                        let mut steps = Vec::new();
-
-                        for (i, value) in added_values.iter().enumerate() {
-                            // For the first value, use the after_clause from the existing values
-                            // For subsequent values, add after the previous new value
-                            let after = if i == 0 {
-                                after_clause.clone()
-                            } else {
-                                format!(" AFTER '{}'", added_values[i - 1])
-                            };
-
-                            steps.push(MigrationStep::Type(TypeOperation::Alter {
-                                schema: n.schema.clone(),
-                                name: n.name.clone(),
-                                action: "ADD VALUE".to_string(),
-                                definition: format!("'{}'{}", value, after),
-                            }));
-                        }
-
-                        // Handle comment changes after adding enum values
-                        let comment_ops =
-                            comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                                AttrTarget::object(n.id())
-                            });
-                        for comment_op in comment_ops {
-                            steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                        }
-
-                        steps
+                        added_values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, value)| {
+                                let after = if i == 0 {
+                                    after_clause.clone()
+                                } else {
+                                    format!(" AFTER '{}'", added_values[i - 1])
+                                };
+                                MigrationStep::Type(TypeOperation::Alter {
+                                    schema: n.schema.clone(),
+                                    name: n.name.clone(),
+                                    action: "ADD VALUE".to_string(),
+                                    definition: format!("'{}'{}", value, after),
+                                })
+                            })
+                            .collect()
                     } else {
-                        // Values were removed or both added and removed - requires drop and recreate
-                        vec![
-                            MigrationStep::Type(TypeOperation::Drop {
-                                schema: o.schema.clone(),
-                                name: o.name.clone(),
-                            }),
-                            diff(None, Some(n))[0].clone(),
-                        ]
+                        // Values were removed (or added and removed): drop + recreate.
+                        vec![drop_step(o), create_step(n)]
                     }
                 }
                 TypeKind::Composite => {
-                    // For composite types, we'll check if attributes changed (structurally — name + type)
+                    // Compare attribute structure (name + type); comments are diffed
+                    // centrally, so a comment-only change never lands here.
                     let old_attrs: Vec<(&String, &String)> = o
                         .composite_attributes
                         .iter()
@@ -291,43 +133,15 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                         .collect();
 
                     if old_attrs != new_attrs {
-                        // Attributes changed - drop and recreate. diff(None, Some(n)) re-emits
-                        // attribute comments along with the create.
-                        let mut steps = vec![MigrationStep::Type(TypeOperation::Drop {
-                            schema: o.schema.clone(),
-                            name: o.name.clone(),
-                        })];
-                        steps.extend(diff(None, Some(n)));
-                        return steps;
+                        vec![drop_step(o), create_step(n)]
+                    } else {
+                        Vec::new()
                     }
-
-                    // No composite attribute structure changes — diff type and attribute comments
-                    let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                        AttrTarget::object(n.id())
-                    });
-                    let mut steps = Vec::new();
-                    for comment_op in comment_ops {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-                    steps.extend(diff_attribute_comments(o, n));
-                    steps
                 }
-                _ => {
-                    // For other types, generally require a drop and recreate if changed
-                    // Check for comment changes only
-                    let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                        AttrTarget::object(n.id())
-                    });
-                    let mut steps = Vec::new();
-                    for comment_op in comment_ops {
-                        steps.push(MigrationStep::Type(TypeOperation::Comment(comment_op)));
-                    }
-                    steps
-                }
+                // Other type kinds: nothing structural to do in place.
+                _ => Vec::new(),
             }
         }
-        (None, None) => {
-            Vec::new() // Impossible case
-        }
+        (None, None) => Vec::new(),
     }
 }
