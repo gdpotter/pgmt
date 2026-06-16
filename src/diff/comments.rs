@@ -79,3 +79,127 @@ fn diff_targets(
     }
     steps
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::id::DbObjectId;
+
+    fn obj(name: &str) -> AttrTarget {
+        AttrTarget::object(DbObjectId::Table {
+            schema: "s".into(),
+            name: name.into(),
+        })
+    }
+
+    fn col(table: &str, c: &str) -> AttrTarget {
+        AttrTarget::column(
+            DbObjectId::Table {
+                schema: "s".into(),
+                name: table.into(),
+            },
+            c,
+        )
+    }
+
+    fn some(c: &str) -> Option<String> {
+        Some(c.to_string())
+    }
+
+    /// Summarize steps as ("set"|"drop", comment) for compact assertions.
+    fn kinds(steps: &[MigrationStep]) -> Vec<(&'static str, Option<String>)> {
+        steps
+            .iter()
+            .map(|s| match s {
+                MigrationStep::Comment(CommentOperation::Set { comment, .. }) => {
+                    ("set", Some(comment.clone()))
+                }
+                MigrationStep::Comment(CommentOperation::Drop { .. }) => ("drop", None),
+                other => panic!("unexpected step: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn in_place_add_change_keep_drop() {
+        // None -> Some  => SET
+        assert_eq!(
+            kinds(&diff_targets(
+                &[(obj("t"), None)],
+                &[(obj("t"), some("hi"))]
+            )),
+            vec![("set", some("hi"))]
+        );
+        // Some -> same  => nothing
+        assert!(diff_targets(&[(obj("t"), some("hi"))], &[(obj("t"), some("hi"))]).is_empty());
+        // Some -> different => SET
+        assert_eq!(
+            kinds(&diff_targets(
+                &[(obj("t"), some("old"))],
+                &[(obj("t"), some("new"))]
+            )),
+            vec![("set", some("new"))]
+        );
+        // Some -> None  => DROP
+        assert_eq!(
+            kinds(&diff_targets(
+                &[(obj("t"), some("hi"))],
+                &[(obj("t"), None)]
+            )),
+            vec![("drop", None)]
+        );
+    }
+
+    #[test]
+    fn added_sub_object_with_comment_emits_set() {
+        // A new column (present only in `new`) with a comment is treated as
+        // previously-absent → SET.
+        let steps = diff_targets(
+            &[(obj("t"), None)],
+            &[(obj("t"), None), (col("t", "c"), some("col"))],
+        );
+        assert_eq!(kinds(&steps), vec![("set", some("col"))]);
+    }
+
+    #[test]
+    fn dropped_sub_object_emits_no_drop() {
+        // A column present only in `old` is being dropped; its comment dies with
+        // the column, so no explicit COMMENT … IS NULL is emitted.
+        let steps = diff_targets(
+            &[(obj("t"), None), (col("t", "c"), some("col"))],
+            &[(obj("t"), None)],
+        );
+        assert!(steps.is_empty());
+    }
+
+    #[test]
+    fn desired_comment_steps_emits_present_skips_empty() {
+        // The "created/recreated" path: a SET for every present comment, none for
+        // the empty ones.
+        struct Fixture(Vec<(AttrTarget, Option<String>)>);
+        impl Attached for Fixture {
+            fn object_id(&self) -> DbObjectId {
+                DbObjectId::Table {
+                    schema: "s".into(),
+                    name: "f".into(),
+                }
+            }
+            fn own_comment(&self) -> Option<String> {
+                None
+            }
+            fn comment_targets(&self) -> Vec<(AttrTarget, Option<String>)> {
+                self.0.clone()
+            }
+        }
+
+        let fixture = Fixture(vec![
+            (obj("t"), some("a")),
+            (col("t", "c"), None),
+            (col("t", "d"), some("b")),
+        ]);
+        assert_eq!(
+            kinds(&desired_comment_steps(&fixture)),
+            vec![("set", some("a")), ("set", some("b"))]
+        );
+    }
+}
