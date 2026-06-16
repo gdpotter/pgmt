@@ -57,7 +57,11 @@ services:
   postgres-18:
     image: postgres:18-alpine
     container_name: pgmt-test-pg18
-    environment: *pg-env
+    environment:
+      # PG18 moved PGDATA to /var/lib/postgresql/18/docker; pin it back to the
+      # old path so the tmpfs mount (see *pg-volumes) is actually used.
+      <<: *pg-env
+      PGDATA: /var/lib/postgresql/data
     ports: ["5432"]
     healthcheck: *pg-healthcheck
     volumes: *pg-volumes
