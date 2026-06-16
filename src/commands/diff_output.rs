@@ -119,6 +119,7 @@ fn output_summary_format(steps: &[MigrationStep]) {
             MigrationStep::Domain(_) => "Domains",
             MigrationStep::Grant(_) => "Grants",
             MigrationStep::Constraint(_) => "Constraints",
+            MigrationStep::Comment(_) => "Comments",
         };
 
         *counts.entry(type_name).or_insert(0) += 1;

@@ -113,6 +113,7 @@ pub fn display_baseline_summary(result: &BaselineCreationResult) {
                 MigrationStep::Policy(_) => "Policy",
                 MigrationStep::Extension(_) => "Extension",
                 MigrationStep::Grant(_) => "Grant",
+                MigrationStep::Comment(_) => "Comment",
             };
             *object_counts.entry(step_type).or_insert(0) += 1;
         }

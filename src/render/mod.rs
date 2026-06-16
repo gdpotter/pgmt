@@ -96,6 +96,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Policy(op) => op.to_sql(),
             MigrationStep::Extension(op) => op.to_sql(),
             MigrationStep::Grant(op) => op.to_sql(),
+            MigrationStep::Comment(op) => op.to_sql(),
         }
     }
 
@@ -117,6 +118,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::Policy(op) => op.db_object_id(),
             MigrationStep::Extension(op) => op.db_object_id(),
             MigrationStep::Grant(op) => op.db_object_id(),
+            MigrationStep::Comment(op) => op.db_object_id(),
         }
     }
 }

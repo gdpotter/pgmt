@@ -85,7 +85,7 @@ async fn test_view_comment_ordering() -> Result<()> {
 
                 let comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::View(ViewOperation::Comment(_))))
+                    .position(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have view comment step");
 
                 // Comment should come AFTER view creation
@@ -154,7 +154,7 @@ async fn test_multiple_object_comment_ordering() -> Result<()> {
 
                 let view_comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::View(ViewOperation::Comment(_))))
+                    .position(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have view comment step");
 
                 // Verify ordering constraints:
@@ -298,7 +298,7 @@ async fn test_complex_dependency_chain_with_comments() -> Result<()> {
                             }
                         }
                         MigrationStep::Table(TableOperation::Comment(_)) => Some(i),
-                        MigrationStep::View(ViewOperation::Comment(_)) => Some(i),
+                        MigrationStep::Comment(_) => Some(i),
                         _ => None,
                     })
                     .collect();

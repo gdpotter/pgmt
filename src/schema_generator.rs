@@ -250,6 +250,20 @@ impl SchemaGenerator {
                 format!("{}tables/{}.sql", prefix, table_name)
             }
 
+            // A comment routes to the same file as the object it annotates; the
+            // object kind is carried in the target, exactly like a grant. Only
+            // views are flattened to `MigrationStep::Comment` so far — other
+            // object types still emit their nested `*::Comment` and route above.
+            MigrationStep::Comment(op) => match &op.target().object {
+                DbObjectId::View { schema, name } => {
+                    let prefix = self.schema_path_prefix(schema);
+                    format!("{}views/{}.sql", prefix, name)
+                }
+                other => unreachable!(
+                    "only view comments are flattened to MigrationStep::Comment so far; got {other:?}"
+                ),
+            },
+
             MigrationStep::Grant(op) => match self.extract_grant_target(op) {
                 GrantTarget::Table { schema, name } => {
                     let prefix = self.schema_path_prefix(&schema);
@@ -431,22 +445,6 @@ impl SchemaGenerator {
             ViewOperation::Drop { schema, name } => (schema.clone(), name.clone()),
             ViewOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
             ViewOperation::SetOption { schema, name, .. } => (schema.clone(), name.clone()),
-            ViewOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
-            ViewOperation::ColumnComment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 

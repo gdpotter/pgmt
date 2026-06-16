@@ -114,6 +114,7 @@ pub async fn cmd_migrate_baseline(
                     crate::diff::operations::MigrationStep::Policy(_) => "Policy",
                     crate::diff::operations::MigrationStep::Extension(_) => "Extension",
                     crate::diff::operations::MigrationStep::Grant(_) => "Grant",
+                    crate::diff::operations::MigrationStep::Comment(_) => "Comment",
                 };
 
                 let dependencies = catalog

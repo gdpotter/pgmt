@@ -77,6 +77,10 @@ pub enum MigrationStep {
     Policy(PolicyOperation),
     Extension(ExtensionOperation),
     Grant(GrantOperation),
+    /// A comment on any object or sub-object. Flat (not nested under each object
+    /// type) because a comment renders and routes purely from its `AttrTarget` —
+    /// the object kind is carried in the target, exactly like a grant.
+    Comment(CommentOperation),
 }
 
 impl MigrationStep {
@@ -105,6 +109,7 @@ impl MigrationStep {
             Self::Policy(op) => op.operation_kind(),
             Self::Extension(op) => op.operation_kind(),
             Self::Grant(op) => op.operation_kind(),
+            Self::Comment(op) => op.operation_kind(),
         }
     }
 

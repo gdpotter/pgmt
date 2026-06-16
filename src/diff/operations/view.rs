@@ -1,7 +1,6 @@
 //! View operations for schema migrations
 
 use super::OperationKind;
-use super::comments::CommentOperation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewOption {
@@ -44,8 +43,6 @@ pub enum ViewOperation {
         option: ViewOption,
         enabled: bool,
     },
-    Comment(CommentOperation),
-    ColumnComment(CommentOperation),
 }
 
 impl ViewOperation {
@@ -55,8 +52,6 @@ impl ViewOperation {
             Self::Drop { .. } => OperationKind::Drop,
             Self::Replace { .. } => OperationKind::Alter,
             Self::SetOption { .. } => OperationKind::Alter,
-            Self::Comment(_) => OperationKind::Alter,
-            Self::ColumnComment(_) => OperationKind::Alter,
         }
     }
 }

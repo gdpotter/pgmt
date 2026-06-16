@@ -12,6 +12,7 @@ use sqlx::PgPool;
 use std::collections::BTreeMap;
 
 pub mod aggregate;
+pub mod attached;
 pub mod cast;
 pub mod comments;
 pub mod constraint;
@@ -387,6 +388,40 @@ impl Catalog {
         self.casts
             .iter()
             .find(|c| c.source == source && c.target == target)
+    }
+
+    /// Every object that carries attached state (comments). Enumerated in ONE
+    /// place via an exhaustive destructure: adding a field to `Catalog` fails to
+    /// compile here until you decide whether the new object type is `Attached`.
+    pub fn attached_objects(&self) -> Vec<&dyn crate::catalog::attached::Attached> {
+        use crate::catalog::attached::Attached;
+        let Catalog {
+            views,
+            // Not yet routed through the central comment pass — these still emit
+            // comments from their per-object diff. Move each out of `_` as it is
+            // converted.
+            schemas: _,
+            tables: _,
+            types: _,
+            domains: _,
+            functions: _,
+            aggregates: _,
+            operators: _,
+            casts: _,
+            sequences: _,
+            indexes: _,
+            constraints: _,
+            triggers: _,
+            policies: _,
+            extensions: _,
+            grants: _,
+            forward_deps: _,
+            reverse_deps: _,
+        } = self;
+
+        let mut out: Vec<&dyn Attached> = Vec::new();
+        out.extend(views.iter().map(|v| v as &dyn Attached));
+        out
     }
 
     /// Synthesize DROP + CREATE steps for cascading a dependent object.

@@ -26,7 +26,9 @@ use rstest::rstest;
     "VIEW",
     "CREATE VIEW test_schema.v AS SELECT 1 AS x",
     "COMMENT ON VIEW test_schema.v IS 'Test comment'",
-    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::View(_)))
+    // View comments are emitted as the flat `MigrationStep::Comment` (others are
+    // still nested under their object op until they're flattened too).
+    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Comment(_)))
 )]
 #[case::schema(
     "SCHEMA",

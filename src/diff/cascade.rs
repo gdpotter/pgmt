@@ -1,10 +1,12 @@
+use crate::catalog::attached::Attached;
 use crate::catalog::constraint::ConstraintType;
 use crate::catalog::{Catalog, id::DbObjectId};
+use crate::diff::comments::desired_comment_steps;
 use crate::diff::grants::{desired_acl_steps, grant_target_object};
 use crate::diff::operations::{
     ColumnAction, MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation,
 };
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
 /// Also filters out redundant steps (e.g., DROP SEQUENCE for owned sequences when the owning
@@ -137,26 +139,31 @@ pub fn expand(
     // Filter out redundant policy drops when table is being dropped
     let filtered = filter_policy_drops(filtered, old_catalog);
 
-    // A DROP discards all privileges, so re-state full ACL for recreated objects.
-    reapply_acl_for_recreated_objects(filtered, new_catalog)
+    // A DROP discards attached state, so re-state it for recreated objects.
+    reapply_attached_state_for_recreated_objects(filtered, new_catalog)
 }
 
-/// Re-state the full ACL of every object recreated via DROP+CREATE in this plan.
+/// Re-state the attached state (ACL, comments) of every object recreated via
+/// DROP+CREATE in this plan.
 ///
-/// The global grant diff compares each grant against the pre-drop object and sees
-/// no change — but a DROP discards every privilege and the CREATE resets the
-/// object to PostgreSQL's default ACL. So for any object being recreated we strip
-/// whatever grant steps the diff produced for it (typically none, sometimes a
-/// stale delta) and re-emit the full desired ACL: every GRANT plus any
-/// REVOKE … FROM PUBLIC. Brand-new objects are already handled correctly by the
-/// global grant diff and are intentionally left untouched.
-fn reapply_acl_for_recreated_objects(
+/// The global grant/comment diffs compare against the pre-drop object and see no
+/// change — but a DROP discards every privilege and comment and the CREATE resets
+/// the object to PostgreSQL's defaults. So for any object being recreated we strip
+/// whatever attached-state steps the diff produced for it (typically none) and
+/// re-emit it in full: every GRANT plus any REVOKE … FROM PUBLIC, and every
+/// comment. Brand-new objects are already handled correctly by the global diffs
+/// and are intentionally left untouched.
+///
+/// Comments are only re-stated for objects routed through the central comment
+/// pass ([`Attached`]); the rest still carry their comments in their per-object
+/// diff (via [`Catalog::synthesize_drop_create`]) and are left untouched here.
+fn reapply_attached_state_for_recreated_objects(
     steps: Vec<MigrationStep>,
     new_catalog: &Catalog,
 ) -> Vec<MigrationStep> {
     // An object with a structural DROP step that still exists in the desired
-    // catalog is being recreated, not removed. Grant steps are excluded: their
-    // id() is a synthetic Grant id, never an object being recreated.
+    // catalog is being recreated, not removed. Grant/comment steps are excluded:
+    // their id() is synthetic, never an object being recreated.
     let recreated: BTreeSet<DbObjectId> = steps
         .iter()
         .filter(|step| {
@@ -171,18 +178,30 @@ fn reapply_acl_for_recreated_objects(
         return steps;
     }
 
-    // Drop any grant steps the diff produced for these objects; desired_acl_steps
-    // re-emits their ACL in full below.
+    // The recreated objects that carry comments centrally, by id.
+    let attached: BTreeMap<DbObjectId, &dyn Attached> = new_catalog
+        .attached_objects()
+        .into_iter()
+        .map(|o| (o.object_id(), o))
+        .filter(|(id, _)| recreated.contains(id))
+        .collect();
+
+    // Drop the attached-state steps the diff produced for these objects; we
+    // re-emit them in full below.
     let mut result: Vec<MigrationStep> = steps
         .into_iter()
         .filter(|step| match step {
             MigrationStep::Grant(op) => !recreated.contains(&grant_target_object(op)),
+            MigrationStep::Comment(op) => !attached.contains_key(&op.target().object),
             _ => true,
         })
         .collect();
 
     for id in &recreated {
         result.extend(desired_acl_steps(id, new_catalog));
+    }
+    for obj in attached.values() {
+        result.extend(desired_comment_steps(*obj));
     }
 
     result
