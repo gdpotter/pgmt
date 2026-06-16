@@ -1,12 +1,11 @@
 //! Schema operations
 
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 
 #[derive(Debug, Clone)]
 pub enum SchemaOperation {
     Create { name: String },
     Drop { name: String },
-    Comment(CommentOperation),
 }
 
 impl SchemaOperation {
@@ -14,7 +13,6 @@ impl SchemaOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Comment(_) => OperationKind::Alter,
         }
     }
 }

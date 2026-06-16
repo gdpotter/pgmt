@@ -484,12 +484,12 @@ async fn test_type_comment_migration() -> Result<()> {
             assert!(!steps.is_empty());
 
             let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Type(TypeOperation::Comment(CommentOperation::Set { target, comment }))
+                matches!(s, MigrationStep::Comment(CommentOperation::Set { target, comment })
                     if target.schema() == "test_schema" && target.name() == "priority" && comment == "Priority levels for tasks")
             }).expect("Should have SetTypeComment step");
 
             match comment_step {
-                MigrationStep::Type(TypeOperation::Comment(CommentOperation::Set { target, comment })) => {
+                MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
                     assert_eq!(target.schema(), "test_schema");
                     assert_eq!(target.name(), "priority");
                     assert_eq!(comment, "Priority levels for tasks");
@@ -516,45 +516,50 @@ async fn test_type_comment_migration() -> Result<()> {
 async fn test_drop_type_comment_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
-    helper.run_migration_test(
-        // Both DBs: schema and enum type
-        &[
-            "CREATE SCHEMA test_schema",
-            "CREATE TYPE test_schema.priority AS ENUM ('low', 'medium', 'high')"
-        ],
-        // Initial DB only: has comment
-        &["COMMENT ON TYPE test_schema.priority IS 'Priority levels for tasks'"],
-        // Target DB only: nothing extra (no comment)
-        &[],
-        // Verification closure
-        |steps, final_catalog| {
-            // Should have DROP TYPE COMMENT step
-            assert!(!steps.is_empty());
+    helper
+        .run_migration_test(
+            // Both DBs: schema and enum type
+            &[
+                "CREATE SCHEMA test_schema",
+                "CREATE TYPE test_schema.priority AS ENUM ('low', 'medium', 'high')",
+            ],
+            // Initial DB only: has comment
+            &["COMMENT ON TYPE test_schema.priority IS 'Priority levels for tasks'"],
+            // Target DB only: nothing extra (no comment)
+            &[],
+            // Verification closure
+            |steps, final_catalog| {
+                // Should have DROP TYPE COMMENT step
+                assert!(!steps.is_empty());
 
-            let comment_step = steps.iter().find(|s| {
-                matches!(s, MigrationStep::Type(TypeOperation::Comment(CommentOperation::Drop { target }))
+                let comment_step = steps
+                    .iter()
+                    .find(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Drop { target })
                     if target.schema() == "test_schema" && target.name() == "priority")
-            }).expect("Should have DropTypeComment step");
+                    })
+                    .expect("Should have DropTypeComment step");
 
-            match comment_step {
-                MigrationStep::Type(TypeOperation::Comment(CommentOperation::Drop { target })) => {
-                    assert_eq!(target.schema(), "test_schema");
-                    assert_eq!(target.name(), "priority");
+                match comment_step {
+                    MigrationStep::Comment(CommentOperation::Drop { target }) => {
+                        assert_eq!(target.schema(), "test_schema");
+                        assert_eq!(target.name(), "priority");
+                    }
+                    _ => panic!("Expected DropTypeComment step"),
                 }
-                _ => panic!("Expected DropTypeComment step"),
-            }
 
-            // Verify final state
-            assert_eq!(final_catalog.types.len(), 1);
+                // Verify final state
+                assert_eq!(final_catalog.types.len(), 1);
 
-            let uncommented_type = &final_catalog.types[0];
-            assert_eq!(uncommented_type.schema, "test_schema");
-            assert_eq!(uncommented_type.name, "priority");
-            assert_eq!(uncommented_type.comment, None);
+                let uncommented_type = &final_catalog.types[0];
+                assert_eq!(uncommented_type.schema, "test_schema");
+                assert_eq!(uncommented_type.name, "priority");
+                assert_eq!(uncommented_type.comment, None);
 
-            Ok(())
-        }
-    ).await?;
+                Ok(())
+            },
+        )
+        .await?;
 
     Ok(())
 }

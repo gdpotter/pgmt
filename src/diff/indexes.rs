@@ -1,6 +1,4 @@
 use crate::catalog::index::Index;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{IndexOperation, MigrationStep};
 
 /// Compare two index states and generate migration steps
@@ -10,14 +8,6 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
             let mut steps = vec![MigrationStep::Index(IndexOperation::Create(
                 new_index.clone(),
             ))];
-
-            // Add comment if present
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &new_index.comment,
-                AttrTarget::object(new_index.id()),
-            ) {
-                steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));
-            }
 
             // Set clustering if new index should be clustered
             if new_index.is_clustered {
@@ -74,14 +64,6 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
                     new_index.clone(),
                 )));
 
-                // Add comment if present on new index
-                if let Some(comment_op) = comment_utils::handle_comment_creation(
-                    &new_index.comment,
-                    AttrTarget::object(new_index.id()),
-                ) {
-                    steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));
-                }
-
                 // Set clustering if new index should be clustered
                 if new_index.is_clustered {
                     steps.push(MigrationStep::Index(IndexOperation::Cluster {
@@ -119,15 +101,6 @@ pub fn diff(old: Option<&Index>, new: Option<&Index>) -> Vec<MigrationStep> {
                 }
                 // Note: If index goes from invalid to valid, it was already fixed manually
                 // so no operation is needed
-
-                // Handle comment changes
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(old_index), Some(new_index), || {
-                        AttrTarget::object(new_index.id())
-                    });
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Index(IndexOperation::Comment(comment_op)));
-                }
             }
 
             steps
@@ -222,23 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_index_with_comment() {
-        let new_index =
-            create_test_index("idx_users_email", false, Some("Email index".to_string()));
-        let steps = diff(None, Some(&new_index));
-
-        assert_eq!(steps.len(), 2);
-        match &steps[0] {
-            MigrationStep::Index(IndexOperation::Create(_)) => {}
-            _ => panic!("Expected index create operation"),
-        }
-        match &steps[1] {
-            MigrationStep::Index(IndexOperation::Comment(_)) => {}
-            _ => panic!("Expected index comment operation"),
-        }
-    }
-
-    #[test]
     fn test_drop_index() {
         let old_index = create_test_index("idx_users_email", false, None);
         let steps = diff(Some(&old_index), None);
@@ -267,22 +223,6 @@ mod tests {
                 MigrationStep::Index(IndexOperation::Create(_)),
             ) => {}
             _ => panic!("Expected drop + create for structural change"),
-        }
-    }
-
-    #[test]
-    fn test_modify_index_comment_only() {
-        let old_index =
-            create_test_index("idx_users_email", false, Some("Old comment".to_string()));
-        let new_index =
-            create_test_index("idx_users_email", false, Some("New comment".to_string()));
-        let steps = diff(Some(&old_index), Some(&new_index));
-
-        // Should be just a comment update
-        assert_eq!(steps.len(), 1);
-        match &steps[0] {
-            MigrationStep::Index(IndexOperation::Comment(_)) => {}
-            _ => panic!("Expected only comment operation for comment-only change"),
         }
     }
 

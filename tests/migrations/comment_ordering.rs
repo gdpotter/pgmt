@@ -1,6 +1,6 @@
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
-use pgmt::diff::operations::{MigrationStep, TableOperation, ViewOperation};
+use pgmt::diff::operations::{CommentOperation, MigrationStep, TableOperation, ViewOperation};
 
 #[tokio::test]
 async fn test_table_comment_ordering() -> Result<()> {
@@ -32,7 +32,7 @@ async fn test_table_comment_ordering() -> Result<()> {
 
                 let comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::Table(TableOperation::Comment(_))))
+                    .position(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have table comment step");
 
                 // Comment should come AFTER table creation
@@ -147,14 +147,21 @@ async fn test_multiple_object_comment_ordering() -> Result<()> {
                     })
                     .expect("Should have view creation step");
 
+                // Comments are flat steps now, so distinguish them by their target.
                 let table_comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::Table(TableOperation::Comment(_))))
+                    .position(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
+                        if target.name() == "users")
+                    })
                     .expect("Should have table comment step");
 
                 let view_comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::Comment(_)))
+                    .position(|s| {
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
+                        if target.name() == "user_emails")
+                    })
                     .expect("Should have view comment step");
 
                 // Verify ordering constraints:
@@ -221,7 +228,7 @@ async fn test_table_modification_with_comment_ordering() -> Result<()> {
 
                 let comment_pos = steps
                     .iter()
-                    .position(|s| matches!(s, MigrationStep::Table(TableOperation::Comment(_))))
+                    .position(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have table comment step");
 
                 // Comment should come AFTER table modification
@@ -284,29 +291,16 @@ async fn test_complex_dependency_chain_with_comments() -> Result<()> {
                     .position(|s| matches!(s, MigrationStep::View(ViewOperation::Create { .. })))
                     .expect("Should have view creation step");
 
-                // Find comment positions (we expect at least one comment)
-                let comment_positions: Vec<usize> = steps
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| match s {
-                        MigrationStep::Type(type_op) => {
-                            if matches!(type_op, pgmt::diff::operations::TypeOperation::Comment(_))
-                            {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        }
-                        MigrationStep::Table(TableOperation::Comment(_)) => Some(i),
-                        MigrationStep::Comment(_) => Some(i),
-                        _ => None,
-                    })
-                    .collect();
-
-                assert!(
-                    !comment_positions.is_empty(),
-                    "Should have comment operations"
-                );
+                // A comment's position, found by the object it annotates.
+                let comment_pos = |obj_name: &str| {
+                    steps
+                        .iter()
+                        .position(|s| {
+                            matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. })
+                            if target.name() == obj_name)
+                        })
+                        .unwrap_or_else(|| panic!("missing comment for {obj_name}"))
+                };
 
                 // Verify dependency ordering:
                 // 1. Type before table (table depends on type)
@@ -315,22 +309,10 @@ async fn test_complex_dependency_chain_with_comments() -> Result<()> {
                 // 2. Table before view (view depends on table)
                 assert!(table_pos < view_pos, "Table should come before view");
 
-                // 3. All comments should come after their respective objects
-                for comment_pos in comment_positions {
-                    // Comments should come after all object creations
-                    assert!(
-                        type_pos < comment_pos,
-                        "Type creation should come before any comment"
-                    );
-                    assert!(
-                        table_pos < comment_pos,
-                        "Table creation should come before any comment"
-                    );
-                    assert!(
-                        view_pos < comment_pos,
-                        "View creation should come before any comment"
-                    );
-                }
+                // 3. Each comment comes after the object it annotates.
+                assert!(type_pos < comment_pos("user_status"));
+                assert!(table_pos < comment_pos("users"));
+                assert!(view_pos < comment_pos("active_users"));
 
                 Ok(())
             },

@@ -1,6 +1,4 @@
 use crate::catalog::cast::Cast;
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{CastIdentifier, CastOperation, MigrationStep};
 
 /// Diff a single cast.
@@ -8,19 +6,9 @@ pub fn diff(old: Option<&Cast>, new: Option<&Cast>) -> Vec<MigrationStep> {
     match (old, new) {
         // CREATE new cast
         (None, Some(new_cast)) => {
-            let mut steps = vec![MigrationStep::Cast(CastOperation::Create {
+            vec![MigrationStep::Cast(CastOperation::Create {
                 cast: Box::new(new_cast.clone()),
-            })];
-
-            // A CREATE CAST statement cannot embed a comment, so emit it separately.
-            if let Some(comment_op) = comment_utils::handle_comment_creation(
-                &new_cast.comment,
-                AttrTarget::object(new_cast.id()),
-            ) {
-                steps.push(MigrationStep::Cast(CastOperation::Comment(comment_op)));
-            }
-
-            steps
+            })]
         }
 
         // DROP removed cast
@@ -39,14 +27,6 @@ pub fn diff(old: Option<&Cast>, new: Option<&Cast>) -> Vec<MigrationStep> {
                     old_cast: Box::new(old_cast.clone()),
                     new_cast: Box::new(new_cast.clone()),
                 }));
-            } else {
-                let comment_ops =
-                    comment_utils::handle_comment_diff(Some(old_cast), Some(new_cast), || {
-                        AttrTarget::object(new_cast.id())
-                    });
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Cast(CastOperation::Comment(comment_op)));
-                }
             }
 
             steps
@@ -102,18 +82,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_create_with_comment() {
-        let mut c = test_cast("fahrenheit");
-        c.comment = Some("temperature conversion".to_string());
-        let steps = diff(None, Some(&c));
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(
-            &steps[1],
-            MigrationStep::Cast(CastOperation::Comment(_))
-        ));
-    }
-
-    #[test]
     fn test_diff_drop() {
         let c = test_cast("fahrenheit");
         let steps = diff(Some(&c), None);
@@ -137,19 +105,6 @@ mod tests {
         assert!(matches!(
             &steps[0],
             MigrationStep::Cast(CastOperation::Replace { .. })
-        ));
-    }
-
-    #[test]
-    fn test_diff_comment_only_change() {
-        let old = test_cast("fahrenheit");
-        let mut new = test_cast("fahrenheit");
-        new.comment = Some("now documented".to_string());
-        let steps = diff(Some(&old), Some(&new));
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(
-            &steps[0],
-            MigrationStep::Cast(CastOperation::Comment(_))
         ));
     }
 }

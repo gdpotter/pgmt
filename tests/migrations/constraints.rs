@@ -24,12 +24,7 @@ async fn test_constraint_comment_migration() -> Result<()> {
                 assert!(!steps.is_empty());
                 let _comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have constraint comment step");
 
                 // Verify final state
@@ -73,12 +68,7 @@ async fn test_drop_constraint_comment_migration() -> Result<()> {
                 assert!(!steps.is_empty());
                 let _comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have constraint comment step");
 
                 // Verify final state
@@ -472,7 +462,7 @@ async fn test_fk_constraint_comment_migration() -> Result<()> {
                     .position(|s| {
                         matches!(
                             s,
-                            MigrationStep::Constraint(ConstraintOperation::Comment(_))
+                            MigrationStep::Comment(_)
                         )
                     })
                     .expect("Should have comment step");

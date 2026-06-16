@@ -1,7 +1,4 @@
-use crate::catalog::id::DependsOn;
-use crate::catalog::target::AttrTarget;
 use crate::catalog::triggers::Trigger;
-use crate::diff::comment_utils;
 use crate::diff::operations::{MigrationStep, TriggerIdentifier, TriggerOperation};
 
 /// Diff a single trigger
@@ -36,18 +33,6 @@ pub fn diff(old: Option<&Trigger>, new: Option<&Trigger>) -> Vec<MigrationStep> 
                     old_trigger: Box::new(old_trigger.clone()),
                     new_trigger: Box::new(new_trigger.clone()),
                 }));
-            } else {
-                // Only comments might have changed
-                let comment_ops = comment_utils::handle_comment_diff(
-                    Some(old_trigger),
-                    Some(new_trigger),
-                    || AttrTarget::object(new_trigger.id()),
-                );
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Trigger(TriggerOperation::Comment(
-                        comment_op,
-                    )));
-                }
             }
 
             steps
@@ -155,23 +140,6 @@ mod tests {
                 assert!(new_trigger.definition.contains("AFTER"));
             }
             _ => panic!("Expected TriggerOperation::Replace"),
-        }
-    }
-
-    #[test]
-    fn test_diff_comment_change_only() {
-        let old_trigger = create_test_trigger("test_trigger");
-        let mut new_trigger = create_test_trigger("test_trigger");
-        new_trigger.comment = Some("New comment".to_string());
-
-        let steps = diff(Some(&old_trigger), Some(&new_trigger));
-        assert_eq!(steps.len(), 1);
-
-        match &steps[0] {
-            MigrationStep::Trigger(TriggerOperation::Comment(_)) => {
-                // Expected comment operation
-            }
-            _ => panic!("Expected TriggerOperation::Comment"),
         }
     }
 

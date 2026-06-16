@@ -5,7 +5,6 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::DependencyBuilder;
 
@@ -49,12 +48,6 @@ impl DependsOn for Domain {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Domain {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

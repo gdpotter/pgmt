@@ -89,7 +89,6 @@ impl SqlRenderer for DomainOperation {
                 ),
                 safety: Safety::Safe,
             }],
-            DomainOperation::Comment(op) => op.to_sql(),
         }
     }
 
@@ -106,7 +105,6 @@ impl SqlRenderer for DomainOperation {
                 schema: schema.clone(),
                 name: name.clone(),
             },
-            DomainOperation::Comment(op) => op.db_object_id(),
         }
     }
 }

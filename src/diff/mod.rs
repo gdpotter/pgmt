@@ -2,7 +2,6 @@ pub mod aggregates;
 pub mod cascade;
 pub mod casts;
 pub mod columns;
-pub mod comment_utils;
 pub mod comments;
 pub mod constraints;
 pub mod custom_types;

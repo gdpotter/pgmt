@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 pub mod aggregate;
 pub mod attached;
 pub mod cast;
-pub mod comments;
 pub mod constraint;
 pub mod custom_type;
 pub mod domain;
@@ -396,31 +395,44 @@ impl Catalog {
     pub fn attached_objects(&self) -> Vec<&dyn crate::catalog::attached::Attached> {
         use crate::catalog::attached::Attached;
         let Catalog {
+            schemas,
+            tables,
             views,
-            // Not yet routed through the central comment pass — these still emit
-            // comments from their per-object diff. Move each out of `_` as it is
-            // converted.
-            schemas: _,
-            tables: _,
-            types: _,
-            domains: _,
-            functions: _,
-            aggregates: _,
-            operators: _,
-            casts: _,
-            sequences: _,
-            indexes: _,
-            constraints: _,
-            triggers: _,
-            policies: _,
-            extensions: _,
+            types,
+            domains,
+            functions,
+            aggregates,
+            operators,
+            casts,
+            sequences,
+            indexes,
+            constraints,
+            triggers,
+            policies,
+            extensions,
+            // Not object-attached comment state: grants are their own diff, and
+            // the dep maps are derived. A new object field belongs above, not here.
             grants: _,
             forward_deps: _,
             reverse_deps: _,
         } = self;
 
         let mut out: Vec<&dyn Attached> = Vec::new();
-        out.extend(views.iter().map(|v| v as &dyn Attached));
+        out.extend(schemas.iter().map(|x| x as &dyn Attached));
+        out.extend(tables.iter().map(|x| x as &dyn Attached));
+        out.extend(views.iter().map(|x| x as &dyn Attached));
+        out.extend(types.iter().map(|x| x as &dyn Attached));
+        out.extend(domains.iter().map(|x| x as &dyn Attached));
+        out.extend(functions.iter().map(|x| x as &dyn Attached));
+        out.extend(aggregates.iter().map(|x| x as &dyn Attached));
+        out.extend(operators.iter().map(|x| x as &dyn Attached));
+        out.extend(casts.iter().map(|x| x as &dyn Attached));
+        out.extend(sequences.iter().map(|x| x as &dyn Attached));
+        out.extend(indexes.iter().map(|x| x as &dyn Attached));
+        out.extend(constraints.iter().map(|x| x as &dyn Attached));
+        out.extend(triggers.iter().map(|x| x as &dyn Attached));
+        out.extend(policies.iter().map(|x| x as &dyn Attached));
+        out.extend(extensions.iter().map(|x| x as &dyn Attached));
         out
     }
 

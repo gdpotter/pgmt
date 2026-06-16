@@ -415,21 +415,11 @@ async fn test_domain_comment_migration() -> Result<()> {
                 // Should have SetComment step
                 let comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Domain(DomainOperation::Comment(
-                                CommentOperation::Set { .. }
-                            ))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(CommentOperation::Set { .. })))
                     .expect("Should have SetComment step");
 
                 match comment_step {
-                    MigrationStep::Domain(DomainOperation::Comment(CommentOperation::Set {
-                        target,
-                        comment,
-                    })) => {
+                    MigrationStep::Comment(CommentOperation::Set { target, comment }) => {
                         assert_eq!(target.schema(), "test_schema");
                         assert_eq!(target.name(), "email");
                         assert_eq!(comment, "Email address format");
@@ -471,20 +461,11 @@ async fn test_domain_drop_comment_migration() -> Result<()> {
                 // Should have DropComment step
                 let comment_step = steps
                     .iter()
-                    .find(|s| {
-                        matches!(
-                            s,
-                            MigrationStep::Domain(DomainOperation::Comment(
-                                CommentOperation::Drop { .. }
-                            ))
-                        )
-                    })
+                    .find(|s| matches!(s, MigrationStep::Comment(CommentOperation::Drop { .. })))
                     .expect("Should have DropComment step");
 
                 match comment_step {
-                    MigrationStep::Domain(DomainOperation::Comment(CommentOperation::Drop {
-                        target,
-                    })) => {
+                    MigrationStep::Comment(CommentOperation::Drop { target }) => {
                         assert_eq!(target.schema(), "test_schema");
                         assert_eq!(target.name(), "email");
                     }
@@ -650,18 +631,17 @@ async fn test_domain_multiple_changes_in_one_migration() {
 
             let steps = diff(target_domains.first(), source_domains.first());
 
-            // Should have multiple steps:
+            // Should have multiple structural steps (comments are emitted by the
+            // central comment pass in the full pipeline, not by `domains::diff`):
             // - AlterSetNotNull (adding NOT NULL)
             // - AlterSetDefault (changing default from 100 to 1)
             // - DropConstraint (removing range_check)
             // - AddConstraint (adding positive)
-            // - SetComment (adding comment)
 
             assert!(steps.iter().any(|s| matches!(s, MigrationStep::Domain(DomainOperation::AlterSetNotNull { .. }))));
             assert!(steps.iter().any(|s| matches!(s, MigrationStep::Domain(DomainOperation::AlterSetDefault { .. }))));
             assert!(steps.iter().any(|s| matches!(s, MigrationStep::Domain(DomainOperation::DropConstraint { constraint_name, .. }) if constraint_name == "range_check")));
             assert!(steps.iter().any(|s| matches!(s, MigrationStep::Domain(DomainOperation::AddConstraint { constraint_name, .. }) if constraint_name == "positive")));
-            assert!(steps.iter().any(|s| matches!(s, MigrationStep::Domain(DomainOperation::Comment(CommentOperation::Set { .. })))));
         })
         .await
     })

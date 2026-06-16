@@ -1,12 +1,13 @@
 use crate::catalog::attached::Attached;
 use crate::catalog::constraint::ConstraintType;
+use crate::catalog::target::AttrTarget;
 use crate::catalog::{Catalog, id::DbObjectId};
 use crate::diff::comments::desired_comment_steps;
 use crate::diff::grants::{desired_acl_steps, grant_target_object};
 use crate::diff::operations::{
     ColumnAction, MigrationStep, OperationKind, PolicyOperation, SequenceOperation, TableOperation,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Given a base list of steps, adds drop/recreate steps for dependent objects that must cascade.
 /// Also filters out redundant steps (e.g., DROP SEQUENCE for owned sequences when the owning
@@ -178,12 +179,19 @@ fn reapply_attached_state_for_recreated_objects(
         return steps;
     }
 
-    // The recreated objects that carry comments centrally, by id.
-    let attached: BTreeMap<DbObjectId, &dyn Attached> = new_catalog
+    // The recreated objects whose comments are centrally managed.
+    let recreated_attached: Vec<&dyn Attached> = new_catalog
         .attached_objects()
         .into_iter()
-        .map(|o| (o.object_id(), o))
-        .filter(|(id, _)| recreated.contains(id))
+        .filter(|o| recreated.contains(&o.object_id()))
+        .collect();
+
+    // Their comment targets. We strip by exact target, not object id, because a
+    // sub-object's target can be a different id than the object — e.g. a table's
+    // primary-key comment targets the PK constraint, not the table.
+    let recreated_comment_targets: BTreeSet<AttrTarget> = recreated_attached
+        .iter()
+        .flat_map(|o| o.comment_targets().into_iter().map(|(t, _)| t))
         .collect();
 
     // Drop the attached-state steps the diff produced for these objects; we
@@ -192,7 +200,7 @@ fn reapply_attached_state_for_recreated_objects(
         .into_iter()
         .filter(|step| match step {
             MigrationStep::Grant(op) => !recreated.contains(&grant_target_object(op)),
-            MigrationStep::Comment(op) => !attached.contains_key(&op.target().object),
+            MigrationStep::Comment(op) => !recreated_comment_targets.contains(op.target()),
             _ => true,
         })
         .collect();
@@ -200,7 +208,7 @@ fn reapply_attached_state_for_recreated_objects(
     for id in &recreated {
         result.extend(desired_acl_steps(id, new_catalog));
     }
-    for obj in attached.values() {
+    for obj in &recreated_attached {
         result.extend(desired_comment_steps(*obj));
     }
 

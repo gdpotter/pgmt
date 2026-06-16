@@ -1,7 +1,6 @@
 //! Domain operations for schema migrations
 
 use super::OperationKind;
-use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum DomainOperation {
@@ -42,7 +41,6 @@ pub enum DomainOperation {
         name: String,
         constraint_name: String,
     },
-    Comment(CommentOperation),
 }
 
 impl DomainOperation {
@@ -55,8 +53,7 @@ impl DomainOperation {
             | Self::AlterSetDefault { .. }
             | Self::AlterDropDefault { .. }
             | Self::AddConstraint { .. }
-            | Self::DropConstraint { .. }
-            | Self::Comment(_) => OperationKind::Alter,
+            | Self::DropConstraint { .. } => OperationKind::Alter,
         }
     }
 }

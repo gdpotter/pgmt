@@ -251,18 +251,8 @@ impl SchemaGenerator {
             }
 
             // A comment routes to the same file as the object it annotates; the
-            // object kind is carried in the target, exactly like a grant. Only
-            // views are flattened to `MigrationStep::Comment` so far — other
-            // object types still emit their nested `*::Comment` and route above.
-            MigrationStep::Comment(op) => match &op.target().object {
-                DbObjectId::View { schema, name } => {
-                    let prefix = self.schema_path_prefix(schema);
-                    format!("{}views/{}.sql", prefix, name)
-                }
-                other => unreachable!(
-                    "only view comments are flattened to MigrationStep::Comment so far; got {other:?}"
-                ),
-            },
+            // object kind is carried in the target, exactly like a grant.
+            MigrationStep::Comment(op) => self.determine_file_for_object_id(&op.target().object),
 
             MigrationStep::Grant(op) => match self.extract_grant_target(op) {
                 GrantTarget::Table { schema, name } => {
@@ -306,6 +296,75 @@ impl SchemaGenerator {
                     }
                 }
             },
+        }
+    }
+
+    /// The schema file an object is written to, keyed by its identity. Comments
+    /// (and grants) route here via their target object, since a `MigrationStep::Comment`
+    /// carries no object kind of its own. Sub-object ids resolve to the object
+    /// they live on (a column or PK to its table, an index to its table).
+    fn determine_file_for_object_id(&self, id: &DbObjectId) -> String {
+        match id {
+            DbObjectId::Schema { .. } => "schemas.sql".to_string(),
+            DbObjectId::Extension { .. } => "extensions.sql".to_string(),
+            DbObjectId::Type { schema, name } => {
+                format!("{}types/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Domain { schema, name } => {
+                format!("{}domains/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Table { schema, name } => {
+                format!("{}tables/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::View { schema, name } => {
+                format!("{}views/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Function { schema, name, .. }
+            | DbObjectId::Procedure { schema, name, .. } => {
+                format!("{}functions/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Aggregate { schema, name, .. } => {
+                format!("{}aggregates/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Operator { schema, .. } => {
+                format!("{}operators.sql", self.schema_path_prefix(schema))
+            }
+            DbObjectId::Cast { .. } => "casts.sql".to_string(),
+            DbObjectId::Sequence { schema, name } => {
+                match self.find_owning_table_for_sequence(schema, name) {
+                    Some((table_schema, table_name)) => {
+                        format!(
+                            "{}tables/{}.sql",
+                            self.schema_path_prefix(&table_schema),
+                            table_name
+                        )
+                    }
+                    None => format!("{}sequences/{}.sql", self.schema_path_prefix(schema), name),
+                }
+            }
+            DbObjectId::Constraint { schema, table, .. }
+            | DbObjectId::Trigger { schema, table, .. }
+            | DbObjectId::Policy { schema, table, .. }
+            | DbObjectId::Column { schema, table, .. } => {
+                format!("{}tables/{}.sql", self.schema_path_prefix(schema), table)
+            }
+            DbObjectId::Index { schema, name } => {
+                let (table_schema, table_name) = self
+                    .catalog
+                    .indexes
+                    .iter()
+                    .find(|i| i.schema == *schema && i.name == *name)
+                    .map(|i| (i.table_schema.clone(), i.table_name.clone()))
+                    .unwrap_or_else(|| (schema.clone(), "unknown".to_string()));
+                format!(
+                    "{}tables/{}.sql",
+                    self.schema_path_prefix(&table_schema),
+                    table_name
+                )
+            }
+            DbObjectId::Grant { .. } | DbObjectId::Comment { .. } => {
+                unreachable!("a comment/grant id is not a routable object: {id:?}")
+            }
         }
     }
 
@@ -424,14 +483,6 @@ impl SchemaGenerator {
             TableOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
             TableOperation::Drop { schema, name } => (schema.clone(), name.clone()),
             TableOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
-            TableOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -457,14 +508,6 @@ impl SchemaGenerator {
             FunctionOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
             FunctionOperation::Drop { schema, name, .. } => (schema.clone(), name.clone()),
             FunctionOperation::Replace { schema, name, .. } => (schema.clone(), name.clone()),
-            FunctionOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -483,14 +526,6 @@ impl SchemaGenerator {
             AggregateOperation::Replace { new_aggregate, .. } => {
                 (new_aggregate.schema.clone(), new_aggregate.name.clone())
             }
-            AggregateOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -505,14 +540,6 @@ impl SchemaGenerator {
             SequenceOperation::AlterOwnership { schema, name, .. } => {
                 (schema.clone(), name.clone())
             }
-            SequenceOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -525,22 +552,6 @@ impl SchemaGenerator {
             TypeOperation::Create { schema, name, .. } => (schema.clone(), name.clone()),
             TypeOperation::Drop { schema, name } => (schema.clone(), name.clone()),
             TypeOperation::Alter { schema, name, .. } => (schema.clone(), name.clone()),
-            TypeOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
-            TypeOperation::AttributeComment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -560,14 +571,6 @@ impl SchemaGenerator {
             | DomainOperation::DropConstraint { schema, name, .. } => {
                 (schema.clone(), name.clone())
             }
-            DomainOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -585,21 +588,6 @@ impl SchemaGenerator {
                     }
                 }
                 (schema.clone(), "unknown".to_string())
-            }
-            IndexOperation::Comment(comment_op) => {
-                let (schema, name) = match comment_op {
-                    crate::diff::operations::CommentOperation::Set { target, .. }
-                    | crate::diff::operations::CommentOperation::Drop { target } => {
-                        target.schema_and_name()
-                    }
-                };
-                // Look up the index to find its table
-                for index in &self.catalog.indexes {
-                    if index.schema == schema && index.name == name {
-                        return (index.table_schema.clone(), index.table_name.clone());
-                    }
-                }
-                (schema, "unknown".to_string())
             }
             IndexOperation::Cluster {
                 table_schema,
@@ -638,14 +626,6 @@ impl SchemaGenerator {
                 constraint_id.schema.clone(),
                 constraint_id.table_name.clone(),
             ),
-            ConstraintOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -665,14 +645,6 @@ impl SchemaGenerator {
             TriggerOperation::Replace { new_trigger, .. } => {
                 (new_trigger.schema.clone(), new_trigger.table_name.clone())
             }
-            TriggerOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 
@@ -694,14 +666,6 @@ impl SchemaGenerator {
             PolicyOperation::Replace { new_policy, .. } => {
                 (new_policy.schema.clone(), new_policy.table_name.clone())
             }
-            PolicyOperation::Comment(comment_op) => match comment_op {
-                crate::diff::operations::CommentOperation::Set { target, .. } => {
-                    target.schema_and_name()
-                }
-                crate::diff::operations::CommentOperation::Drop { target } => {
-                    target.schema_and_name()
-                }
-            },
         }
     }
 

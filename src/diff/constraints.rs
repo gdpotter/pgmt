@@ -1,8 +1,6 @@
 //! Diff constraints between database states
 
 use crate::catalog::constraint::{Constraint, ConstraintType};
-use crate::catalog::target::AttrTarget;
-use crate::diff::comment_utils;
 use crate::diff::operations::{ConstraintIdentifier, ConstraintOperation, MigrationStep};
 
 /// Diff a single constraint
@@ -10,20 +8,9 @@ pub fn diff(old: Option<&Constraint>, new: Option<&Constraint>) -> Vec<Migration
     match (old, new) {
         // CREATE new constraint
         (None, Some(n)) => {
-            let mut steps = vec![MigrationStep::Constraint(ConstraintOperation::Create(
+            vec![MigrationStep::Constraint(ConstraintOperation::Create(
                 n.clone(),
-            ))];
-
-            // Add constraint comment if present
-            if let Some(comment_op) =
-                comment_utils::handle_comment_creation(&n.comment, AttrTarget::object(n.id()))
-            {
-                steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
-                    comment_op,
-                )));
-            }
-
-            steps
+            ))]
         }
         // DROP removed constraint
         (Some(o), None) => {
@@ -43,16 +30,6 @@ pub fn diff(old: Option<&Constraint>, new: Option<&Constraint>) -> Vec<Migration
                 steps.push(MigrationStep::Constraint(ConstraintOperation::Create(
                     n.clone(),
                 )));
-            } else {
-                // Check for comment changes only
-                let comment_ops = comment_utils::handle_comment_diff(Some(o), Some(n), || {
-                    AttrTarget::object(n.id())
-                });
-                for comment_op in comment_ops {
-                    steps.push(MigrationStep::Constraint(ConstraintOperation::Comment(
-                        comment_op,
-                    )));
-                }
             }
 
             steps

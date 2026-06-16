@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use crate::catalog::{DependsOn, comments::Commentable, id::DbObjectId};
+use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Represents a PostgreSQL trigger
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,12 +32,6 @@ impl DependsOn for Trigger {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Trigger {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

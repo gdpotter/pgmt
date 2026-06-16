@@ -2,7 +2,6 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{is_system_schema, resolve_type_dependency};
 
@@ -39,12 +38,6 @@ impl DependsOn for Cast {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Cast {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

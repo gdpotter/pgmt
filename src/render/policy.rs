@@ -2,7 +2,7 @@
 
 use crate::catalog::id::DbObjectId;
 use crate::catalog::policy::{Policy, PolicyCommand};
-use crate::diff::operations::{CommentOperation, PolicyIdentifier, PolicyOperation};
+use crate::diff::operations::{PolicyIdentifier, PolicyOperation};
 use crate::render::{RenderedSql, SqlRenderer, quote_ident};
 
 impl SqlRenderer for PolicyOperation {
@@ -34,7 +34,6 @@ impl SqlRenderer for PolicyOperation {
                     render_create_policy(new_policy),
                 ]
             }
-            PolicyOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -56,11 +55,6 @@ impl SqlRenderer for PolicyOperation {
                 schema: new_policy.schema.clone(),
                 table: new_policy.table_name.clone(),
                 name: new_policy.name.clone(),
-            },
-            PolicyOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
             },
         }
     }

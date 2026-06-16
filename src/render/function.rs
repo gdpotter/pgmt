@@ -45,7 +45,6 @@ impl SqlRenderer for FunctionOperation {
                 ),
                 safety: Safety::Safe,
             }],
-            FunctionOperation::Comment(op) => op.to_sql(),
         }
     }
 
@@ -95,7 +94,6 @@ impl SqlRenderer for FunctionOperation {
                 kind,
                 ..
             } => routine_db_object_id(schema, name, arguments, kind),
-            FunctionOperation::Comment(op) => op.db_object_id(),
         }
     }
 }

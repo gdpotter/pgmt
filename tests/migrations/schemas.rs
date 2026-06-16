@@ -104,9 +104,7 @@ async fn test_schema_comment_migration() -> Result<()> {
                 let _comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
-                    CommentOperation::Set { target, .. }
-                )) if target.name() == "test_schema")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, .. }) if target.name() == "test_schema")
                     })
                     .expect("Should have SetComment step");
 
@@ -149,9 +147,7 @@ async fn test_drop_schema_comment_migration() -> Result<()> {
                 let _comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
-                    CommentOperation::Drop { target }
-                )) if target.name() == "test_schema")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Drop { target }) if target.name() == "test_schema")
                     })
                     .expect("Should have DropComment step");
 
@@ -238,7 +234,7 @@ async fn test_public_schema_default_comment_ignored() -> Result<()> {
             |steps, _final_catalog| {
                 // Should have NO comment diff steps - default comment should be normalized
                 let has_comment_step = steps.iter().any(|s| {
-                    matches!(s, MigrationStep::Schema(SchemaOperation::Comment(_)))
+                    matches!(s, MigrationStep::Comment(_))
                 });
                 assert!(
                     !has_comment_step,
@@ -272,9 +268,7 @@ async fn test_public_schema_custom_comment_detected() -> Result<()> {
                 let _comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
-                    CommentOperation::Set { target, comment }
-                )) if target.name() == "public" && comment == "My custom public schema")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, comment }) if target.name() == "public" && comment == "My custom public schema")
                     })
                     .expect("Should detect custom comment on public schema");
 
@@ -316,9 +310,7 @@ async fn test_public_schema_removing_custom_comment() -> Result<()> {
                 let _comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
-                    CommentOperation::Drop { target }
-                )) if target.name() == "public")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Drop { target }) if target.name() == "public")
                     })
                     .expect("Should detect removal of custom comment (back to default)");
 
@@ -358,9 +350,7 @@ async fn test_non_public_schema_comment_not_normalized() -> Result<()> {
                 let _comment_step = steps
                     .iter()
                     .find(|s| {
-                        matches!(s, MigrationStep::Schema(SchemaOperation::Comment(
-                    CommentOperation::Set { target, comment }
-                )) if target.name() == "other_schema" && comment == "standard public schema")
+                        matches!(s, MigrationStep::Comment(CommentOperation::Set { target, comment }) if target.name() == "other_schema" && comment == "standard public schema")
                     })
                     .expect("Non-public schemas should not have comment normalization");
 

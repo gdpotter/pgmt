@@ -1,7 +1,6 @@
 //! Sequence operations for schema migrations
 
 use super::OperationKind;
-use super::comments::CommentOperation;
 
 #[derive(Debug, Clone)]
 pub enum SequenceOperation {
@@ -24,7 +23,6 @@ pub enum SequenceOperation {
         name: String,
         owned_by: String,
     },
-    Comment(CommentOperation),
 }
 
 impl SequenceOperation {
@@ -32,7 +30,7 @@ impl SequenceOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::AlterOwnership { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::AlterOwnership { .. } => OperationKind::Alter,
         }
     }
 }

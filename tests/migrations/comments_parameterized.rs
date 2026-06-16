@@ -16,25 +16,24 @@ use rstest::rstest;
 /// 1. A comment step is generated
 /// 2. The final catalog reflects the comment
 #[rstest]
+// Every object's comment is emitted as the flat `MigrationStep::Comment`.
 #[case::table(
     "TABLE",
     "CREATE TABLE test_schema.t (id INT)",
     "COMMENT ON TABLE test_schema.t IS 'Test comment'",
-    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Table(_)))
+    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Comment(_)))
 )]
 #[case::view(
     "VIEW",
     "CREATE VIEW test_schema.v AS SELECT 1 AS x",
     "COMMENT ON VIEW test_schema.v IS 'Test comment'",
-    // View comments are emitted as the flat `MigrationStep::Comment` (others are
-    // still nested under their object op until they're flattened too).
     |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Comment(_)))
 )]
 #[case::schema(
     "SCHEMA",
     "", // No additional object to create
     "COMMENT ON SCHEMA test_schema IS 'Test comment'",
-    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Schema(_)))
+    |steps: &[MigrationStep]| steps.iter().any(|s| matches!(s, MigrationStep::Comment(_)))
 )]
 #[tokio::test]
 async fn test_set_comment_migration(

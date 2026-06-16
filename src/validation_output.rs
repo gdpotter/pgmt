@@ -258,13 +258,6 @@ fn classify_migration_step_conflict(step: &crate::diff::operations::MigrationSte
                         ),
                     }
                 }
-                _ => ConflictInfo {
-                    object_type: "table".to_string(),
-                    object_name: "unknown".to_string(),
-                    conflict_type: "modified_definition".to_string(),
-                    likely_source: Some("unapplied_migration".to_string()),
-                    details: "Table definition differs from expected state".to_string(),
-                },
             }
         }
         MigrationStep::View(view_op) => {
@@ -324,13 +317,6 @@ fn classify_migration_step_conflict(step: &crate::diff::operations::MigrationSte
                         "Function '{}' expected in applied migrations but missing from current schema",
                         name
                     ),
-                },
-                _ => ConflictInfo {
-                    object_type: "function".to_string(),
-                    object_name: "unknown".to_string(),
-                    conflict_type: "modified_definition".to_string(),
-                    likely_source: Some("unapplied_migration".to_string()),
-                    details: "Function definition differs from expected state".to_string(),
                 },
             }
         }

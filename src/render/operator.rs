@@ -2,7 +2,7 @@
 
 use crate::catalog::id::DbObjectId;
 use crate::catalog::operator::Operator;
-use crate::diff::operations::{CommentOperation, OperatorIdentifier, OperatorOperation};
+use crate::diff::operations::{OperatorIdentifier, OperatorOperation};
 use crate::render::{RenderedSql, SqlRenderer, quote_ident};
 
 impl SqlRenderer for OperatorOperation {
@@ -14,7 +14,6 @@ impl SqlRenderer for OperatorOperation {
                 render_drop_operator(&OperatorIdentifier::from_operator(new_operator)),
                 render_create_operator(new_operator),
             ],
-            OperatorOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -27,11 +26,6 @@ impl SqlRenderer for OperatorOperation {
                 arguments: identifier.arguments.clone(),
             },
             OperatorOperation::Replace { new_operator, .. } => new_operator.id(),
-            OperatorOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
-            },
         }
     }
 }

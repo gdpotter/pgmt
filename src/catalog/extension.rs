@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
-use crate::catalog::{DependsOn, comments::Commentable, id::DbObjectId};
+use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Represents a PostgreSQL extension
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,12 +24,6 @@ impl DependsOn for Extension {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for Extension {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

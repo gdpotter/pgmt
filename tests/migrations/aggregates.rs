@@ -212,11 +212,11 @@ async fn test_aggregate_comment_migration() -> Result<()> {
                 // Should have a Comment step
                 let comment_step = steps
                     .iter()
-                    .find(|s| matches!(s, MigrationStep::Aggregate(AggregateOperation::Comment(_))))
+                    .find(|s| matches!(s, MigrationStep::Comment(_)))
                     .expect("Should have Comment Aggregate step");
 
                 match comment_step {
-                    MigrationStep::Aggregate(AggregateOperation::Comment(_)) => {
+                    MigrationStep::Comment(_) => {
                         // Comment operation found
                     }
                     _ => panic!("Expected Comment Aggregate step"),

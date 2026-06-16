@@ -1,5 +1,5 @@
 use crate::catalog::index::Index;
-use crate::diff::operations::{CommentOperation, OperationKind};
+use crate::diff::operations::OperationKind;
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -9,7 +9,6 @@ pub enum IndexOperation {
         schema: String,
         name: String,
     },
-    Comment(CommentOperation),
     /// Set a table to use an index for clustering (CLUSTER table USING index)
     Cluster {
         table_schema: String,
@@ -35,10 +34,9 @@ impl IndexOperation {
         match self {
             Self::Create(_) => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Comment(_)
-            | Self::Cluster { .. }
-            | Self::SetWithoutCluster { .. }
-            | Self::Reindex { .. } => OperationKind::Alter,
+            Self::Cluster { .. } | Self::SetWithoutCluster { .. } | Self::Reindex { .. } => {
+                OperationKind::Alter
+            }
         }
     }
 }

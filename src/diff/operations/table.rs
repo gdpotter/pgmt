@@ -1,6 +1,6 @@
 //! Table operations
 
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::table::{Column, IdentityKind, PrimaryKey};
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,6 @@ pub enum TableOperation {
         name: String,
         actions: Vec<ColumnAction>,
     },
-    Comment(CommentOperation),
 }
 
 impl TableOperation {
@@ -29,7 +28,6 @@ impl TableOperation {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
             Self::Alter { .. } => OperationKind::Alter,
-            Self::Comment(_) => OperationKind::Alter,
         }
     }
 }
@@ -54,5 +52,4 @@ pub enum ColumnAction {
     DisableRls,
     ForceRls,
     NoForceRls,
-    Comment(CommentOperation),
 }

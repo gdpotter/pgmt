@@ -1,6 +1,5 @@
 //! src/catalog/view.rs
 //! Fetch views and their dependencies via pg_depend + pg_rewrite
-use super::comments::Commentable;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{is_system_schema, resolve_type_dependency};
 use anyhow::Result;
@@ -47,12 +46,6 @@ impl DependsOn for View {
 
     fn depends_on(&self) -> &[DbObjectId] {
         &self.depends_on
-    }
-}
-
-impl Commentable for View {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
     }
 }
 

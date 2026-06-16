@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::operator::Operator;
 
 /// Identifier for a user-defined operator, used by DROP.
@@ -36,7 +36,6 @@ pub enum OperatorOperation {
         old_operator: Box<Operator>,
         new_operator: Box<Operator>,
     },
-    Comment(CommentOperation),
 }
 
 impl OperatorOperation {
@@ -44,7 +43,7 @@ impl OperatorOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

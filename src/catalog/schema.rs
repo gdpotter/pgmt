@@ -1,4 +1,3 @@
-use super::comments::Commentable;
 use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
@@ -10,12 +9,6 @@ pub struct Schema {
 }
 
 impl Schema {}
-
-impl Commentable for Schema {
-    fn comment(&self) -> &Option<String> {
-        &self.comment
-    }
-}
 
 pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Schema>> {
     info!("Fetching schemas...");

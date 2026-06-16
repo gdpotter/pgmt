@@ -1,4 +1,4 @@
-use super::{CommentOperation, OperationKind};
+use super::OperationKind;
 use crate::catalog::policy::Policy;
 
 /// Identifier for a policy
@@ -47,7 +47,6 @@ pub enum PolicyOperation {
         old_policy: Box<Policy>,
         new_policy: Box<Policy>,
     },
-    Comment(CommentOperation),
 }
 
 impl PolicyOperation {
@@ -55,7 +54,7 @@ impl PolicyOperation {
         match self {
             Self::Create { .. } => OperationKind::Create,
             Self::Drop { .. } => OperationKind::Drop,
-            Self::Alter { .. } | Self::Replace { .. } | Self::Comment(_) => OperationKind::Alter,
+            Self::Alter { .. } | Self::Replace { .. } => OperationKind::Alter,
         }
     }
 }

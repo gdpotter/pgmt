@@ -2,7 +2,7 @@
 
 use crate::catalog::extension::Extension;
 use crate::catalog::id::DbObjectId;
-use crate::diff::operations::{CommentOperation, ExtensionIdentifier, ExtensionOperation};
+use crate::diff::operations::{ExtensionIdentifier, ExtensionOperation};
 use crate::render::{RenderedSql, SqlRenderer};
 
 impl SqlRenderer for ExtensionOperation {
@@ -14,7 +14,6 @@ impl SqlRenderer for ExtensionOperation {
             ExtensionOperation::Drop { identifier } => {
                 vec![render_drop_extension(identifier)]
             }
-            ExtensionOperation::Comment(comment_op) => comment_op.to_sql(),
         }
     }
 
@@ -25,11 +24,6 @@ impl SqlRenderer for ExtensionOperation {
             },
             ExtensionOperation::Drop { identifier } => DbObjectId::Extension {
                 name: identifier.name.clone(),
-            },
-            ExtensionOperation::Comment(comment_op) => match comment_op {
-                CommentOperation::Set { target, .. } | CommentOperation::Drop { target } => {
-                    target.db_object_id()
-                }
             },
         }
     }

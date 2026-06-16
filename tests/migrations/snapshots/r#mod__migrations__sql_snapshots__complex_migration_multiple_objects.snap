@@ -18,8 +18,8 @@ CREATE TABLE "app"."tasks" (
     CONSTRAINT "tasks_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "idx_tasks_priority" ON "app"."tasks" USING btree (priority pg_catalog.enum_ops);
-
 COMMENT ON TABLE "app"."tasks" IS 'Task management table';
+
+CREATE INDEX "idx_tasks_priority" ON "app"."tasks" USING btree (priority pg_catalog.enum_ops);
 
 ALTER SEQUENCE "app"."tasks_id_seq" OWNED BY "app"."tasks"."id";
