@@ -114,7 +114,8 @@ async fn test_fetch_exclusion_constraint() -> Result<()> {
                 id SERIAL,
                 room_id INTEGER,
                 during DATERANGE,
-                EXCLUDE USING gist (room_id WITH =, during WITH &&)
+                active DATERANGE,
+                EXCLUDE USING gist (room_id WITH =, during WITH &&, active WITH &&)
             )
         "#,
         )
@@ -136,12 +137,14 @@ async fn test_fetch_exclusion_constraint() -> Result<()> {
                 index_method,
                 predicate,
             } => {
-                assert_eq!(elements.len(), 2);
+                assert_eq!(elements.len(), 3);
                 assert!(elements[0].contains("room_id"));
                 assert!(elements[1].contains("during"));
-                assert_eq!(operators.len(), 2);
-                assert!(operators.contains(&"=".to_string()));
-                assert!(operators.contains(&"&&".to_string()));
+                assert!(elements[2].contains("active"));
+                assert_eq!(operators.len(), 3);
+                assert!(operators[0].contains(&"=".to_string()));
+                assert!(operators[1].contains(&"&&".to_string()));
+                assert!(operators[2].contains(&"&&".to_string()));
                 assert_eq!(index_method, "gist");
                 assert_eq!(*predicate, None);
             }
