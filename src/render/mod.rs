@@ -55,28 +55,6 @@ pub fn escape_string(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// Generic helper for rendering comment SQL
-pub fn render_comment_sql(
-    object_type: &str,
-    identifier: &str,
-    comment: Option<&str>,
-) -> RenderedSql {
-    let sql = match comment {
-        Some(comment_text) => format!(
-            "COMMENT ON {} {} IS {};",
-            object_type,
-            identifier,
-            escape_string(comment_text)
-        ),
-        None => format!("COMMENT ON {} {} IS NULL;", object_type, identifier),
-    };
-
-    RenderedSql {
-        sql,
-        safety: Safety::Safe,
-    }
-}
-
 impl SqlRenderer for MigrationStep {
     fn to_sql(&self) -> Vec<RenderedSql> {
         match self {
