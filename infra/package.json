@@ -7,11 +7,11 @@
     "build": "tsc"
   },
   "devDependencies": {
-    "@types/node": "^22.19.21",
+    "@types/node": "^22.20.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "@pulumi/aws": "^6.83.4",
-    "@pulumi/pulumi": "^3.246.0"
+    "@pulumi/pulumi": "^3.247.0"
   }
 }
