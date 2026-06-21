@@ -97,17 +97,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
 
           # Move files out of subdirectories (download-artifact creates dirs per artifact)
           mkdir -p release-files
           find artifacts -type f -exec mv {} release-files/ \;
           ls -la release-files/
 
-          # Create release and upload all files
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            release-files/*
+          # Extract this version's section from CHANGELOG.md (everything between
+          # its "## <version> - <date>" heading and the next "## " heading).
+          awk -v ver="$VERSION" '
+            /^## / { if (p) exit; if ($2 == ver) { p=1; next } }
+            p { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ -s release-notes.md ]; then
+            echo "Using CHANGELOG.md section for $VERSION:"
+            cat release-notes.md
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file release-notes.md \
+              release-files/*
+          else
+            echo "No CHANGELOG.md section for $VERSION; falling back to generated notes."
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              release-files/*
+          fi
 
       - name: Update major version tag
         env:

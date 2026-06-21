@@ -1,0 +1,27 @@
+# cargo-release configuration — https://github.com/crate-ci/cargo-release
+#
+# Cut a release with:
+#   cargo release patch      # 0.4.9 -> 0.4.10   (preview only)
+#   cargo release minor      # 0.4.9 -> 0.5.0
+#   cargo release 0.5.0      # exact version
+# Add --execute to actually perform it (the command is a dry run by default).
+#
+# What it does: bump Cargo.toml + Cargo.lock, stamp CHANGELOG.md, commit, tag
+# vX.Y.Z, and push. Building binaries and publishing to crates.io + npm is
+# handled by .github/workflows/release.yml, which triggers on the pushed tag —
+# so cargo-release itself must NOT publish.
+
+publish = false                                    # crates.io publish runs in CI, on the tag
+verify = false                                     # CI builds/verifies; skip the local sqlx-offline build
+tag-name = "v{{version}}"                          # matches the release.yml `v*.*.*` trigger
+tag-message = "Release {{version}}"
+pre-release-commit-message = "chore: release {{version}}"
+allow-branch = ["main"]                            # only cut releases from main
+
+# Stamp the changelog: promote the standing "## Unreleased" heading into a dated
+# version section, leaving a fresh empty "## Unreleased" on top for the next cycle.
+[[pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "## Unreleased"
+replace = "## Unreleased\n\n## {{version}} - {{date}}"
+exactly = 1
