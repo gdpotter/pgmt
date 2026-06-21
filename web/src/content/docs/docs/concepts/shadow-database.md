@@ -29,11 +29,11 @@ The shadow database is where this happens. pgmt applies your schema files to a f
 
 Every time pgmt needs to understand your schema files:
 
-1. **Spin up** - Create a fresh PostgreSQL environment (Docker container by default)
+1. **Spin up** - Get a fresh PostgreSQL database (by default, an ephemeral branch of a Docker container)
 2. **Build** - Apply your schema files in dependency order
 3. **Read** - Query PostgreSQL's system catalogs (`pg_class`, `pg_views`, `pg_proc`, etc.) to see what objects exist
 4. **Use** - Compare this catalog against another database, or generate SQL
-5. **Destroy** - Tear down the environment
+5. **Destroy** - Drop the ephemeral branch
 
 The shadow database is ephemeral - it exists only for the duration of the operation. Every run starts with a completely clean slate.
 
@@ -54,7 +54,7 @@ the database does exist solely for pgmt (a CI service container, say), set
 
 ## Configuration
 
-By default, pgmt manages shadow databases automatically - it spins up a docker container, creates a temporary database, uses it, and cleans up. No configuration needed.
+By default, pgmt manages shadow databases automatically - it starts a Docker container and works on a fresh, ephemeral branch of it for each operation, dropping the branch when done. No configuration needed.
 
 For advanced cases (specific PostgreSQL versions, existing databases, etc.), see the [Configuration Reference](../reference/configuration).
 
