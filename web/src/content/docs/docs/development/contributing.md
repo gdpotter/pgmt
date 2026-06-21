@@ -102,6 +102,44 @@ SQLX_OFFLINE=true cargo build
 - No clippy warnings
 - sqlx metadata committed (`.sqlx/` files)
 
+## Releasing
+
+Releases are automated with [git-cliff](https://git-cliff.org) for the changelog
+and [cargo-release](https://github.com/crate-ci/cargo-release) for the version
+bump and tag. Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`,
+which builds the binaries and publishes to crates.io and npm — the local steps
+deliberately do **not** publish.
+
+**1. Curate the changelog.** `CHANGELOG.md` is user-facing, not a commit dump.
+The `## Unreleased` section is maintained by hand; draft entries from recent
+commits with:
+
+```bash
+git cliff --unreleased   # preview entries since the last tag
+```
+
+Move the genuinely user-facing items into `## Unreleased` under **Breaking
+Changes / Features / Bug Fixes / Performance**, and drop noise (refactors,
+tests, CI, dependency bumps) and fixes to still-unreleased work. Writing
+[Conventional Commits](https://www.conventionalcommits.org) keeps the draft
+clean — git-cliff groups by type and filters chores automatically.
+
+**2. Cut the release** from a green `main`:
+
+```bash
+cargo release minor            # preview: patch | minor | major | X.Y.Z
+cargo release minor --execute  # bump Cargo.toml + Cargo.lock, stamp the
+                               # changelog, commit, tag vX.Y.Z, and push
+```
+
+cargo-release promotes `## Unreleased` into a dated version section, then the
+pushed tag drives CI, which extracts that section for the GitHub release notes
+and publishes everything.
+
+Version bumps are explicit: `cargo release` does exactly the level you name
+(pre-1.0, a feature release is `minor`, e.g. 0.4.x → 0.5.0). Configuration lives
+in `cliff.toml` and `release.toml`.
+
 ## Reporting Issues
 
 Include: pgmt version, PostgreSQL version, OS, full error messages, steps to reproduce.

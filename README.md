@@ -81,6 +81,7 @@ CREATE INDEX CONCURRENTLY idx_users_verified ON users(verified);
 - [Adopt Existing Database](https://pgmt.dev/docs/guides/existing-database) — Import existing schema
 - [CLI Reference](https://pgmt.dev/docs/cli/) — All commands and options
 - [Blog](https://pgmt.dev/blog) — Why schema-as-code?
+- [Changelog](CHANGELOG.md) — Notable changes in each release
 
 ## Requirements
 
