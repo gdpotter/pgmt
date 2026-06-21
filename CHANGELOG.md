@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.5.0 - 2026-06-21
+
 ### Breaking Changes
 
 - Connection settings now resolve with a single precedence — CLI flag > `PGMT_*` environment variable > `pgmt.yaml` — and the environment variables were renamed: `DEV_DATABASE_URL` → `PGMT_DEV_URL` and `TARGET_DATABASE_URL` → `PGMT_TARGET_URL`. The old names are no longer read.
