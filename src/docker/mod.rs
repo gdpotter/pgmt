@@ -577,6 +577,12 @@ impl DockerManager {
     async fn remove_container(&self, container_id: &str, force: bool) -> Result<()> {
         let remove_options = RemoveContainerOptions {
             force,
+            // Remove the anonymous volume the postgres image creates for
+            // /var/lib/postgresql/data. Shadow data is ephemeral, so its
+            // volume should never outlive the container — otherwise every run
+            // orphans a fresh volume. The keep-on-failure debug path skips
+            // removal entirely, so kept containers retain their volume too.
+            v: true,
             ..Default::default()
         };
 
@@ -1308,5 +1314,74 @@ mod tests {
 
         // Should show attempts for different socket types
         assert!(debug_info.contains("•"));
+    }
+
+    /// Tearing down a shadow container must also reclaim the anonymous volume
+    /// the postgres image creates for `/var/lib/postgresql/data` — i.e. the
+    /// removal call passes `v: true`. Otherwise every run silently orphans a
+    /// fresh volume, a leak nothing else surfaces. Lives in-crate so it reuses
+    /// the manager's own Docker connection (the same socket detection
+    /// production uses) and inspects only THIS container's volume — never a
+    /// daemon-wide count that other Docker activity could race.
+    #[tokio::test]
+    async fn test_shadow_teardown_reclaims_anonymous_volume() {
+        let manager = match DockerManager::new().await {
+            Ok(manager) => manager,
+            Err(e) => {
+                println!("Skipping Docker test - Docker daemon not available: {}", e);
+                return;
+            }
+        };
+
+        let mut environment = HashMap::new();
+        environment.insert("POSTGRES_PASSWORD".to_string(), "test_password".to_string());
+        let container_name = format!("pgmt_test_volume_{}", uuid::Uuid::new_v4().simple());
+
+        let config = ShadowDockerConfig {
+            version: None,
+            image: "postgres:18-alpine".to_string(),
+            platform: None,
+            environment,
+            container_name: Some(container_name.clone()),
+            auto_cleanup: true, // RAII removes the container (with v: true) on drop
+            volumes: None,
+            network: None,
+        };
+
+        let shadow = manager.start_shadow_database(&config).await.unwrap();
+
+        // Find the anonymous data volume by inspecting THIS container's mounts.
+        let inspect = manager
+            .docker
+            .inspect_container(&container_name, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect shadow container");
+        let volume_name = inspect
+            .mounts
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.typ == Some(bollard::models::MountPointTypeEnum::VOLUME))
+            .and_then(|m| m.name)
+            .expect("shadow container should have an anonymous data volume");
+
+        // Sanity: the volume exists while the container is alive.
+        assert!(
+            manager.docker.inspect_volume(&volume_name).await.is_ok(),
+            "anonymous volume should exist while the shadow container runs"
+        );
+
+        // Tear down through the real removal path. RAII Drop blocks until the
+        // container is removed (and on panic too, so a failed assertion above
+        // never leaks the container).
+        drop(shadow);
+
+        // The volume must be gone — if it survives, container removal isn't
+        // passing v: true and every run orphans a volume.
+        assert!(
+            manager.docker.inspect_volume(&volume_name).await.is_err(),
+            "anonymous volume {} survived shadow teardown — container removal \
+             must pass v: true to reclaim it",
+            volume_name
+        );
     }
 }
