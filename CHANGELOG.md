@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- Order same-object ALTER steps by emission order
+- Reclaim shadow container volumes on teardown
+
 ## 0.5.0 - 2026-06-21
 
 ### Breaking Changes
