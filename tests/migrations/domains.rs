@@ -397,6 +397,81 @@ async fn test_domain_drop_constraint_migration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_domain_change_constraint_expression_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    // Changing a CHECK constraint's expression (keeping the same name) must
+    // DROP the old constraint before re-ADDing it. Both are ALTER steps on the
+    // same domain id, so the ordering pass has to keep the drop ahead of the
+    // add — otherwise applying the migration fails with "constraint ... already
+    // exists". Regression test: the full pipeline applies the steps to a fresh
+    // DB, so a flipped order panics during apply, before verification runs.
+    let steps = helper
+        .run_migration_test(
+            // Both DBs: domain with the original constraint
+            &[
+                "CREATE SCHEMA test_schema",
+                "CREATE DOMAIN test_schema.numbersonly AS TEXT CHECK (VALUE ~ '^\\d+$')",
+            ],
+            // Initial DB: nothing extra
+            &[],
+            // Target DB: same constraint name, different expression
+            &[
+                "ALTER DOMAIN test_schema.numbersonly DROP CONSTRAINT numbersonly_check",
+                "ALTER DOMAIN test_schema.numbersonly ADD CONSTRAINT numbersonly_check CHECK (VALUE ~ '^[\\d+\\.]$')",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                // The DROP CONSTRAINT must be ordered before the matching ADD.
+                let drop_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Domain(DomainOperation::DropConstraint { constraint_name, .. })
+                            if constraint_name == "numbersonly_check")
+                    })
+                    .expect("Should have DropConstraint step");
+                let add_pos = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Domain(DomainOperation::AddConstraint { constraint_name, .. })
+                            if constraint_name == "numbersonly_check")
+                    })
+                    .expect("Should have AddConstraint step");
+
+                assert!(
+                    drop_pos < add_pos,
+                    "DROP CONSTRAINT (pos {drop_pos}) must come before ADD CONSTRAINT (pos {add_pos})"
+                );
+
+                // Final state reflects the new expression.
+                assert_eq!(final_catalog.domains.len(), 1);
+                let constraints = &final_catalog.domains[0].check_constraints;
+                assert_eq!(constraints.len(), 1);
+                assert_eq!(constraints[0].name, "numbersonly_check");
+                assert!(constraints[0].expression.contains("[\\d+\\.]"));
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    // Exactly the two constraint ALTERs, nothing spurious.
+    let constraint_steps = steps
+        .iter()
+        .filter(|s| {
+            matches!(
+                s,
+                MigrationStep::Domain(
+                    DomainOperation::DropConstraint { .. } | DomainOperation::AddConstraint { .. }
+                )
+            )
+        })
+        .count();
+    assert_eq!(constraint_steps, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_domain_comment_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 

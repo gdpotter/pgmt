@@ -457,6 +457,23 @@ fn order_steps_by_dependencies(
         }
     }
 
+    // Among ALTER steps targeting the same object, preserve their emission
+    // order. The diff emits these in a deliberate sequence — e.g. DROP
+    // CONSTRAINT before the re-ADD when a domain CHECK constraint's expression
+    // changes. Both are ALTERs with the same DbObjectId, so the Drop→Create→
+    // Alter edges above impose no order between them; without an explicit edge
+    // the toposort is free to flip them, emitting "ADD CONSTRAINT" before its
+    // matching "DROP CONSTRAINT" and failing with "constraint ... already
+    // exists". Chaining consecutive same-id ALTERs (indices are in emission
+    // order) only ever points earlier → later, so it cannot introduce a cycle.
+    for indices in other_indices.values() {
+        for window in indices.windows(2) {
+            let from = node_indices[window[0]];
+            let to = node_indices[window[1]];
+            graph.add_edge(from, to, ());
+        }
+    }
+
     // Special rule: Function overloads with the same schema+name but different arguments must
     // have all drops ordered before all creates. When both calculate_score(integer) and
     // calculate_score(integer, boolean DEFAULT false) exist simultaneously, PostgreSQL cannot
