@@ -76,6 +76,27 @@ pub async fn load_baseline_into_shadow(
     load_managed_catalog(shadow_pool, config).await
 }
 
+/// Apply baseline SQL to a real target database (used by `migrate provision`).
+///
+/// Unlike [`load_baseline_into_shadow`], this does NOT clean the database or
+/// apply the roles file: the target is a real, long-lived database whose roles
+/// are managed externally — the same contract as `migrate apply`'s grants. The
+/// baseline runs via the simple query protocol as a single implicit
+/// transaction, so a partial failure rolls back cleanly and a re-run starts
+/// from nothing.
+#[allow(dead_code)] // becomes live when `migrate provision` lands (Part D)
+pub async fn apply_baseline_to_target(
+    pool: &PgPool,
+    baseline_sql: &str,
+    source: &str,
+) -> Result<()> {
+    let executor = BaselineExecutor::new(pool.clone(), false, false);
+    executor
+        .execute_baseline(baseline_sql, source)
+        .await
+        .with_context(|| format!("Failed to apply baseline to target ({})", source))
+}
+
 /// Replay migration files onto a shadow database, in order.
 ///
 /// This is THE replay path — every reconstruction (migrate new/update starting

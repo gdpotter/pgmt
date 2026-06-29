@@ -364,3 +364,48 @@ async fn test_complex_schema_changes_after_baseline() -> Result<()> {
         Ok(())
     }).await
 }
+
+/// Applying a baseline to a real target database creates its objects.
+#[tokio::test]
+async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
+    with_test_db(async |db| {
+        let baseline_sql = "CREATE TABLE accounts (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
+        pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "baseline_1.sql")
+            .await?;
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'accounts')",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(exists, "baseline should have created the accounts table");
+
+        Ok(())
+    })
+    .await
+}
+
+/// A multi-statement baseline runs as one implicit transaction, so a failure
+/// part-way through must leave no objects behind (a clean re-run on provision).
+#[tokio::test]
+async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
+    with_test_db(async |db| {
+        // The second statement fails (duplicate table); the first must roll back.
+        let baseline_sql = "CREATE TABLE good (id INT); CREATE TABLE good (id INT);";
+        let result =
+            pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "bad.sql").await;
+        assert!(result.is_err(), "duplicate table should fail the baseline");
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'good')",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(!exists, "a failed baseline must leave no objects behind (atomic)");
+
+        Ok(())
+    })
+    .await
+}
