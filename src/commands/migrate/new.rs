@@ -1,8 +1,8 @@
+use crate::baseline::operations::BaselineCreationRequest;
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
-    BaselineConfig, ensure_baseline_for_migration, get_migration_starting_state,
-    validate_baseline_against_catalog,
+    BaselineConfig, get_migration_starting_state, validate_baseline_against_catalog,
 };
 use crate::prompts::prompt_required_string_with_validation;
 use anyhow::Result;
@@ -101,12 +101,16 @@ pub async fn cmd_migrate_new(
     // (the flag can only add, never suppress a configured default)
     let should_create_baseline = create_baseline || config.migration.create_baselines_by_default;
     if should_create_baseline {
-        let result = ensure_baseline_for_migration(
-            &baselines_dir,
+        // Generate the baseline from the full desired catalog, not the migration
+        // SQL — the migration is a delta against the prior state, so writing it
+        // would produce a partial baseline for any non-initial migration.
+        let result = crate::baseline::operations::create_baseline(BaselineCreationRequest {
+            catalog: new_catalog.clone(),
             version,
-            &migration_result.migration_sql,
-            &baseline_config,
-        )
+            description: "baseline".to_string(),
+            baselines_dir: baselines_dir.clone(),
+            verbose: baseline_config.verbose,
+        })
         .await?;
         println!("Created baseline: {}", result.path.display());
 

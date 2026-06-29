@@ -267,4 +267,49 @@ mod baseline_tests {
         })
         .await
     }
+
+    /// Regression: `--create-baseline` on a *non-initial* migration must capture
+    /// the full schema, not just that migration's delta. The baseline used to be
+    /// written from the migration SQL (a delta against the prior state), so it
+    /// omitted everything earlier migrations created — and validation rejected it.
+    #[tokio::test]
+    async fn test_create_baseline_on_non_initial_migration_is_full_schema() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // First migration (no baseline): users.
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "add_users"])
+                .assert()
+                .success();
+
+            // Second migration WITH --create-baseline: adds posts.
+            helper.write_schema_file("posts.sql", "CREATE TABLE posts (id SERIAL PRIMARY KEY);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "add_posts", "--create-baseline"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Baseline validation passed"));
+
+            // The baseline is a from-scratch snapshot: it must include BOTH the
+            // pre-existing users table and the newly added posts table.
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(baselines.len(), 1);
+            let baseline = helper.read_baseline_file(&baselines[0])?;
+            assert!(
+                baseline.contains("users"),
+                "baseline must include the pre-existing users table:\n{baseline}"
+            );
+            assert!(
+                baseline.contains("posts"),
+                "baseline must include the newly added posts table:\n{baseline}"
+            );
+
+            Ok(())
+        })
+        .await
+    }
 }

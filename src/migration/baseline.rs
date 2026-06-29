@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::info;
 
 use crate::catalog::Catalog;
@@ -11,7 +11,7 @@ use crate::db::cleaner;
 use crate::db::schema_executor::BaselineExecutor;
 use crate::migration::{
     ParsedMigration, discover_migrations, find_baseline_for_version, find_latest_baseline,
-    generate_baseline_filename, parse_migration_sections, validate_sections,
+    parse_migration_sections, validate_sections,
 };
 use crate::progress::SectionReporter;
 use crate::validation::validate_baseline_consistency;
@@ -30,12 +30,6 @@ impl Default for BaselineConfig {
             verbose: true,
         }
     }
-}
-
-/// Result of baseline operations
-#[derive(Debug)]
-pub struct BaselineOperationResult {
-    pub path: PathBuf,
 }
 
 /// Shadow catalogs feed baseline rendering and validation: scope them to the
@@ -161,34 +155,6 @@ fn warn_pre_baseline_migrations(migrations: &[ParsedMigration], baseline_version
             m.version, baseline_version, m.version
         );
     }
-}
-
-/// Update or create a baseline file for a migration
-pub async fn ensure_baseline_for_migration(
-    baselines_dir: &Path,
-    version: u64,
-    baseline_sql: &str,
-    config: &BaselineConfig,
-) -> Result<BaselineOperationResult> {
-    let baseline_filename = generate_baseline_filename(version);
-    let baseline_path = baselines_dir.join(&baseline_filename);
-
-    std::fs::create_dir_all(baselines_dir).with_context(|| {
-        format!(
-            "Failed to create baselines directory: {}",
-            baselines_dir.display()
-        )
-    })?;
-
-    if config.verbose {
-        println!("💾 Writing baseline: {}", baseline_path.display());
-    }
-    std::fs::write(&baseline_path, baseline_sql)
-        .with_context(|| format!("Failed to write baseline file: {}", baseline_path.display()))?;
-
-    Ok(BaselineOperationResult {
-        path: baseline_path,
-    })
 }
 
 /// Validate that a baseline file reproduces the expected catalog

@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
+use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
 use crate::migration::{
-    BaselineConfig, ensure_baseline_for_migration, find_latest_migration,
-    generate_baseline_filename, get_migration_update_starting_state,
-    should_manage_baseline_for_migration, validate_baseline_against_catalog,
+    BaselineConfig, find_latest_migration, generate_baseline_filename,
+    get_migration_update_starting_state, should_manage_baseline_for_migration,
+    validate_baseline_against_catalog,
 };
 use anyhow::{Result, anyhow};
 use std::path::Path;
@@ -112,12 +113,13 @@ pub async fn cmd_migrate_update_with_options(
     );
 
     if should_update_baseline {
-        let result = ensure_baseline_for_migration(
-            &baselines_dir,
-            latest_migration.version,
-            &migration_result.migration_sql,
-            &baseline_config,
-        )
+        let result = create_baseline(BaselineCreationRequest {
+            catalog: new_catalog.clone(),
+            version: latest_migration.version,
+            description: "baseline".to_string(),
+            baselines_dir: baselines_dir.clone(),
+            verbose: baseline_config.verbose,
+        })
         .await?;
         println!("Updated baseline: {}", result.path.display());
 
@@ -374,12 +376,13 @@ pub async fn cmd_migrate_update_specific(
     );
 
     if should_update_baseline {
-        let result = ensure_baseline_for_migration(
-            &baselines_dir,
-            new_version,
-            &migration_result.migration_sql,
-            &baseline_config,
-        )
+        let result = create_baseline(BaselineCreationRequest {
+            catalog: new_catalog.clone(),
+            version: new_version,
+            description: "baseline".to_string(),
+            baselines_dir: baselines_dir.clone(),
+            verbose: baseline_config.verbose,
+        })
         .await?;
         if is_latest {
             println!("Updated baseline: {}", result.path.display());
