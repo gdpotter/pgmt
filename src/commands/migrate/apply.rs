@@ -2,8 +2,8 @@ use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor}
 use crate::config::Config;
 use crate::migration::{discover_migrations, parse_migration_sections, validate_sections};
 use crate::migration_tracking::{
-    ensure_section_tracking_table, format_tracking_table_name, initialize_sections,
-    version_from_db, version_to_db,
+    calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
+    format_tracking_table_name, initialize_sections, record_migration_as_applied, version_from_db,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
@@ -29,21 +29,8 @@ pub async fn cmd_migrate_apply(
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
-    sqlx::query(&format!(
-        r#"
-        CREATE TABLE IF NOT EXISTS {} (
-            version BIGINT PRIMARY KEY,
-            description TEXT NOT NULL,
-            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            checksum TEXT NOT NULL
-        )
-        "#,
-        tracking_table_name
-    ))
-    .execute(&pool)
-    .await?;
-
-    // Ensure section tracking table exists
+    // Ensure the tracking tables exist (and are migrated to the current shape)
+    ensure_tracking_table_exists(&pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(&pool, &config.migration.tracking_table).await?;
 
     // Get list of applied migrations with their checksums
@@ -72,7 +59,7 @@ pub async fn cmd_migrate_apply(
         })?;
 
         // Calculate checksum
-        let checksum = format!("{:x}", md5::compute(&migration_sql));
+        let checksum = calculate_checksum(&migration_sql);
 
         // Check if migration was already applied
         if let Some(stored_checksum) = applied_migrations.get(&migration.version) {
@@ -147,14 +134,13 @@ pub async fn cmd_migrate_apply(
         let duration = start.elapsed();
 
         // Record migration as applied
-        sqlx::query(&format!(
-            "INSERT INTO {} (version, description, checksum) VALUES ($1, $2, $3)",
-            tracking_table_name
-        ))
-        .bind(version_to_db(migration.version)?)
-        .bind(&migration.description)
-        .bind(&checksum)
-        .execute(&pool)
+        record_migration_as_applied(
+            &pool,
+            &config.migration.tracking_table,
+            migration.version,
+            &migration.description,
+            &checksum,
+        )
         .await?;
 
         // Report completion

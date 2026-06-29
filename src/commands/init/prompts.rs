@@ -555,7 +555,8 @@ pub fn prompt_baseline_creation(database_state: &DatabaseState) -> Result<bool> 
 
 🔍 What is a baseline?
    A baseline is a SQL snapshot of your current database schema.
-   It gets marked as 'applied' so future migrations build on top of it.";
+   It becomes your 'migration zero' — the starting point future migrations
+   build on top of.";
 
             println!("{}", explanation);
 
@@ -565,7 +566,7 @@ pub fn prompt_baseline_creation(database_state: &DatabaseState) -> Result<bool> 
                 .interact()?;
 
             if create_baseline {
-                println!("✅ Baseline will be created and marked as applied");
+                println!("✅ Baseline will be created");
                 println!("   Future migrations will only contain new changes");
             } else {
                 println!("⚠️  Baseline creation skipped");

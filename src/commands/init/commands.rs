@@ -13,7 +13,6 @@ use crate::catalog::Catalog;
 use crate::config::load_config;
 use crate::constants::CONFIG_FILENAME;
 use crate::db::connection::mask_url_password;
-use crate::migration_tracking;
 use crate::prompts::ShadowDatabaseInput;
 
 /// Result of checking for existing configuration
@@ -550,7 +549,7 @@ async fn process_imported_catalog(
     // Step 4: Create baseline if requested
     if should_create_baseline {
         let version = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        match create_baseline_with_migration_sync(catalog, options, version).await {
+        match create_baseline_during_init(catalog, options, version).await {
             Ok((_baseline_path, _baseline_content)) => Ok(BaselineResult::Created),
             Err(e) => {
                 handle_baseline_failure(&e);
@@ -661,8 +660,12 @@ fn handle_baseline_failure(error: &anyhow::Error) {
     println!("💡 After fixing the dependency issues, run: pgmt migrate baseline");
 }
 
-/// Create baseline from imported catalog during init and sync migration state
-async fn create_baseline_with_migration_sync(
+/// Create the baseline from the imported catalog during init.
+///
+/// This writes the baseline file only; it does not record anything in the
+/// migration tracking table (init runs no SQL against the database — the schema
+/// is already present). See the note at the end of this function.
+async fn create_baseline_during_init(
     catalog: &Catalog,
     options: &InitOptions,
     version: u64,
@@ -693,37 +696,13 @@ async fn create_baseline_with_migration_sync(
     // Show baseline summary using shared display function
     display_baseline_summary(&result);
 
-    // Mark baseline as applied in migration tracking
-    println!("🔄 Marking baseline as applied in migration tracking...");
-
-    // Connect to development database for migration tracking
-    use sqlx::PgPool;
-    let dev_pool = PgPool::connect(&options.dev_database_url).await?;
-
-    // Use default tracking table configuration (will be read from config later)
-    let tracking_table = crate::config::types::TrackingTable {
-        schema: "public".to_string(),
-        name: "pgmt_migrations".to_string(),
-    };
-
-    // Calculate checksum for baseline content
-    let checksum = migration_tracking::calculate_checksum(&result.baseline_sql);
-
-    // Record baseline as applied
-    migration_tracking::record_baseline_as_applied(
-        &dev_pool,
-        &tracking_table,
-        version,
-        &options
-            .baseline_config
-            .description
-            .clone()
-            .unwrap_or_else(|| "baseline".to_string()),
-        &checksum,
-    )
-    .await?;
-
-    println!("✅ Baseline marked as applied in migration tracking");
+    // Note: pgmt deliberately does NOT record this baseline in the migration
+    // tracking table. init runs nothing against the database (the schema is
+    // already present, e.g. from a previous tool or a dump), and tracking
+    // records only what pgmt executed. `migrate new` reconstructs from the
+    // baseline file on disk, so future migrations still contain only new
+    // changes. Provisioning a *fresh* database (which does run the baseline) is
+    // `pgmt migrate provision`, which is the sole writer of baseline rows.
     println!("💡 Future migrations will only contain NEW changes");
 
     Ok((result.path, result.baseline_sql))

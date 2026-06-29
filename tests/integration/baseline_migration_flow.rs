@@ -6,7 +6,9 @@ use pgmt::migration_tracking::version_to_db;
 use sqlx::Row;
 
 /// Test the complete baseline + migration flow to ensure future migrations
-/// only contain new changes after baseline creation during init
+/// only contain new changes after a baseline is recorded. The recording is done
+/// by `migrate provision` (init no longer writes a baseline row); this exercises
+/// the underlying mechanism.
 #[tokio::test]
 async fn test_baseline_prevents_recreation_in_future_migrations() -> Result<()> {
     with_test_db(async |db| {
@@ -18,7 +20,7 @@ async fn test_baseline_prevents_recreation_in_future_migrations() -> Result<()> 
         db.execute("CREATE INDEX idx_users_email ON users (email)")
             .await;
 
-        // Step 2: Simulate what init would do - record baseline as applied
+        // Step 2: Record a baseline as applied (as `migrate provision` does)
         let tracking_table = TrackingTable {
             schema: "public".to_string(),
             name: "pgmt_migrations".to_string(),

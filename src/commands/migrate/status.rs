@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::migration::{
     BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
 };
-use crate::migration_tracking::format_tracking_table_name;
+use crate::migration_tracking::{ensure_tracking_table_exists, format_tracking_table_name};
 use crate::validation::{ValidationConfig, validate_catalogs};
 use crate::validation_output::{BaselineInfo, ValidationOutputOptions, format_validation_output};
 use anyhow::{Result, anyhow};
@@ -17,19 +17,8 @@ pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) ->
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
-    sqlx::query(&format!(
-        r#"
-        CREATE TABLE IF NOT EXISTS {} (
-            version BIGINT PRIMARY KEY,
-            description TEXT NOT NULL,
-            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            checksum TEXT NOT NULL
-        )
-        "#,
-        tracking_table_name
-    ))
-    .execute(&dev_pool)
-    .await?;
+    // Ensure the tracking table exists (and is migrated to the current shape)
+    ensure_tracking_table_exists(&dev_pool, &config.migration.tracking_table).await?;
 
     // Get list of applied migrations
     let applied_migrations: Vec<(i64, String, String)> = sqlx::query_as(&format!(

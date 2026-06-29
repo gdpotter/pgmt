@@ -28,6 +28,61 @@ async fn test_ensure_tracking_table_exists() -> Result<()> {
     }).await
 }
 
+/// A tracking table created by an older pgmt version (no `applied_by`, no
+/// `is_baseline`) must be migrated up to the current shape idempotently, with
+/// existing rows backfilled to is_baseline = FALSE.
+#[tokio::test]
+async fn test_ensure_tracking_table_migrates_legacy_schema() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "legacy_migrations".to_string(),
+        };
+
+        // Legacy shape: no applied_by, no is_baseline, non-TZ timestamp.
+        db.execute(
+            "CREATE TABLE \"public\".\"legacy_migrations\" (\
+                version BIGINT PRIMARY KEY, \
+                description TEXT NOT NULL, \
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
+                checksum TEXT NOT NULL)",
+        )
+        .await;
+        db.execute(
+            "INSERT INTO \"public\".\"legacy_migrations\" (version, description, checksum) \
+             VALUES (1, 'legacy', 'abc')",
+        )
+        .await;
+
+        // Evolve to the current shape.
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+
+        // Existing row backfilled to FALSE (and is_baseline is now NOT NULL).
+        let is_baseline: bool = sqlx::query_scalar(
+            "SELECT is_baseline FROM \"public\".\"legacy_migrations\" WHERE version = 1",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(!is_baseline, "legacy rows should backfill to is_baseline = FALSE");
+
+        // applied_by reconciled too.
+        let has_applied_by: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'legacy_migrations' \
+             AND column_name = 'applied_by')",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(has_applied_by, "applied_by should be reconciled");
+
+        // Idempotent: a second call is a no-op and must not error.
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+
+        Ok(())
+    })
+    .await
+}
+
 #[tokio::test]
 async fn test_record_baseline_as_applied() -> Result<()> {
     with_test_db(async |db| {

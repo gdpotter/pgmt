@@ -72,7 +72,12 @@ pub fn format_tracking_table_name(tracking_table: &TrackingTable) -> Result<Stri
     ))
 }
 
-/// Initialize the migration tracking table in the database
+/// Initialize the migration tracking table in the database.
+///
+/// This is the single source of truth for the tracking table's shape. All
+/// callers (apply, status, provision, init, …) must route through here rather
+/// than defining their own `CREATE TABLE`, so the schema can't drift between
+/// commands.
 pub async fn ensure_tracking_table_exists(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -86,7 +91,8 @@ pub async fn ensure_tracking_table_exists(
             description TEXT NOT NULL,
             applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             checksum TEXT NOT NULL,
-            applied_by TEXT DEFAULT CURRENT_USER
+            applied_by TEXT DEFAULT CURRENT_USER,
+            is_baseline BOOLEAN NOT NULL
         )
         "#,
         tracking_table_name
@@ -95,10 +101,84 @@ pub async fn ensure_tracking_table_exists(
     .await
     .with_context(|| format!("Failed to create tracking table {}", tracking_table_name))?;
 
+    migrate_tracking_table_schema(pool, tracking_table, &tracking_table_name).await?;
+
     Ok(())
 }
 
-/// Insert a baseline record into the migration tracking table
+/// Bring a pre-existing tracking table up to the current column shape.
+///
+/// pgmt's own tracking schema can change between versions ("migrate the
+/// migrator"). This reconciles older tables idempotently. It reads the existing
+/// columns once (a cheap catalog query, no lock) and only issues `ALTER`
+/// statements for columns that are actually missing, so routine commands don't
+/// take an `ACCESS EXCLUSIVE` lock on every run.
+async fn migrate_tracking_table_schema(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    tracking_table_name: &str,
+) -> Result<()> {
+    let existing_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = $1 AND table_name = $2",
+    )
+    .bind(&tracking_table.schema)
+    .bind(&tracking_table.name)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("Failed to inspect columns of {}", tracking_table_name))?;
+
+    let has = |name: &str| existing_columns.iter().any(|c| c == name);
+
+    // `applied_by` was missing from the earlier inline `CREATE TABLE` definitions
+    // in apply.rs/status.rs, so some tables in the wild lack it.
+    if !has("applied_by") {
+        sqlx::query(&format!(
+            "ALTER TABLE {} ADD COLUMN applied_by TEXT DEFAULT CURRENT_USER",
+            tracking_table_name
+        ))
+        .execute(pool)
+        .await
+        .with_context(|| format!("Failed to add applied_by to {}", tracking_table_name))?;
+    }
+
+    // `is_baseline`: add nullable, backfill existing rows to FALSE (every existing
+    // row is a migration), then enforce NOT NULL. No column DEFAULT — every insert
+    // sets the value explicitly. Done in one transaction so the column is never
+    // observed in a half-migrated, NULL-permitting state.
+    if !has("is_baseline") {
+        let mut tx = pool.begin().await?;
+        sqlx::query(&format!(
+            "ALTER TABLE {} ADD COLUMN is_baseline BOOLEAN",
+            tracking_table_name
+        ))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "UPDATE {} SET is_baseline = FALSE",
+            tracking_table_name
+        ))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
+            tracking_table_name
+        ))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit()
+            .await
+            .with_context(|| format!("Failed to add is_baseline to {}", tracking_table_name))?;
+    }
+
+    Ok(())
+}
+
+/// Insert a baseline record into the migration tracking table (is_baseline = TRUE).
+///
+/// Currently exercised by tests; becomes the sole baseline-row writer once
+/// `pgmt migrate provision` lands (Part D).
+#[allow(dead_code)]
 pub async fn record_baseline_as_applied(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -111,9 +191,9 @@ pub async fn record_baseline_as_applied(
     // First ensure the tracking table exists
     ensure_tracking_table_exists(pool, tracking_table).await?;
 
-    // Insert the baseline record
+    // Insert the baseline record (is_baseline = TRUE)
     sqlx::query(&format!(
-        "INSERT INTO {} (version, description, checksum) VALUES ($1, $2, $3)",
+        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, TRUE)",
         tracking_table_name
     ))
     .bind(version_to_db(version)?)
@@ -122,6 +202,33 @@ pub async fn record_baseline_as_applied(
     .execute(pool)
     .await
     .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
+
+    Ok(())
+}
+
+/// Insert a migration record into the migration tracking table (is_baseline = FALSE).
+///
+/// The caller is responsible for ensuring the tracking table exists (e.g. via
+/// `ensure_tracking_table_exists`) before invoking this in a loop.
+pub async fn record_migration_as_applied(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    description: &str,
+    checksum: &str,
+) -> Result<()> {
+    let tracking_table_name = format_tracking_table_name(tracking_table)?;
+
+    sqlx::query(&format!(
+        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, FALSE)",
+        tracking_table_name
+    ))
+    .bind(version_to_db(version)?)
+    .bind(description)
+    .bind(checksum)
+    .execute(pool)
+    .await
+    .with_context(|| format!("Failed to record migration {} in tracking table", version))?;
 
     Ok(())
 }
