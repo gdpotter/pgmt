@@ -38,6 +38,9 @@ pgmt migrate new "add user analytics"
 
 # Deploy to production
 pgmt migrate apply --target-url $PROD_DATABASE_URL
+
+# Provision a brand-new environment (demo, staging, DR) from a baseline
+pgmt migrate provision --target-url $NEW_ENV_DATABASE_URL
 ```
 
 ## Watch Mode

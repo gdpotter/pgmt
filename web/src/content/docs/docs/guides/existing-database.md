@@ -5,6 +5,8 @@ description: Import an existing PostgreSQL database into pgmt and start managing
 
 When you import an existing database, pgmt creates a **baseline** - a snapshot of your current schema. Without it, the first migration would try to recreate everything, breaking any database that already has those objects.
 
+This is one of two on-ramps into pgmt: `pgmt init` **adopts an existing database** (the schema is already there — pgmt records a baseline and starts managing changes from that point), while `pgmt migrate provision` **stands up a fresh database** from that baseline. This guide covers the first; see [Provisioning a New Environment](/docs/guides/baseline-management#provisioning-a-new-environment) for the second.
+
 ## Import Workflow
 
 Point pgmt at your existing database:
@@ -115,15 +117,15 @@ The migration should contain only the new table, not your existing schema. That'
 
 ## Team Onboarding
 
-When teammates clone the repo:
+When teammates clone the repo, they provision a fresh database from the baseline:
 
 ```bash
 git clone your-repo && cd your-repo
 createdb myapp_dev
-pgmt migrate apply --dev-url postgres://localhost/myapp_dev
+pgmt migrate provision --target-url postgres://localhost/myapp_dev
 ```
 
-They get a complete database with all migrations applied, including the baseline.
+`migrate provision` applies the baseline and then every migration after it, leaving them with a complete database. From there they iterate locally with `pgmt apply`. (Use `provision`, not `migrate apply`, for a brand-new database — `apply` only runs pending migrations and never applies the baseline, so it can't build the schema from scratch.)
 
 ## CLI Options
 

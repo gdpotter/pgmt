@@ -3,13 +3,18 @@ title: Baseline Management
 description: Understand when and how to use baselines to consolidate your migration history.
 ---
 
-Baselines are complete SQL snapshots of your schema at a point in time. They're optional - pgmt can reconstruct state from your migration chain - but useful for performance when migration chains get long.
+Baselines are complete SQL snapshots of your schema at a point in time. They serve two purposes:
+
+- **Faster reconstruction:** when generating or validating migrations, pgmt can rebuild "current state" from a baseline instead of replaying the entire migration chain.
+- **Provisioning new databases:** `pgmt migrate provision` applies a baseline (plus the migrations after it) to stand up a fresh database from scratch.
+
+They're optional for the first purpose (pgmt can always reconstruct from the full chain), but once you consolidate history into a baseline, they become how you provision a brand-new environment.
 
 ## When You Need Baselines
 
 **Importing an existing database:** When you run `pgmt init` against a database that already has objects, you create a baseline to establish the starting point. See [Adopt Existing Database](/docs/guides/existing-database).
 
-**Long migration chains:** After 50+ migrations, new environment setup gets slow. A baseline lets pgmt skip replaying the entire chain.
+**Long migration chains:** After 50+ migrations, new environment setup can get slow. A baseline lets pgmt skip replaying the entire chain.
 
 **Keeping the migrations directory manageable:** Since schema files are the source of truth, old migrations are a derived artifact. Periodically consolidating them into a baseline keeps your repo clean.
 
@@ -30,6 +35,18 @@ Clone repo → Load baseline → Compare to schema files → Generate M51
 Both produce the same result. Baselines just make it faster.
 
 **This is why migrations stay incremental:** A new team member cloning the repo, editing schema files, and running `migrate new` gets an ALTER statement - not a full schema recreation. pgmt reconstructs the chain to understand what already exists.
+
+## Provisioning a New Environment
+
+`migrate apply` maintains a database that's already established — it runs pending migration files and does **not** apply baselines. So to stand up a *new* database (a demo, a fresh staging environment, a new region, disaster recovery), use `pgmt migrate provision`:
+
+```bash
+pgmt migrate provision --target-url postgres://demo/myapp
+```
+
+The `migrate provision` command applies the latest baseline (the full schema snapshot), then applies every migration after it, recording each in the tracking table, so the database is left ready for `migrate apply` going forward.
+
+If there's no baseline yet, `migrate provision` simply replays all migrations and behaves identically to `migrate apply`. If the target already contains objects but has no pgmt history, provision refuses and points you at `pgmt init` to adopt it instead. Preview first with `--dry-run`.
 
 ## Commands
 

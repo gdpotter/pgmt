@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Features
+
+- Add `pgmt migrate provision` to stand up a new database from a baseline plus its post-baseline migrations — the on-ramp for fresh environments (demo, staging, preview, disaster recovery), where `migrate apply` only maintains a database that's already established.
+
 ## 0.5.1 - 2026-06-24
 
 ### Bug Fixes

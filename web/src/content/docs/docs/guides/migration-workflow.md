@@ -84,6 +84,16 @@ pgmt migrate apply --target-url postgres://prod/myapp
 
 Migrations run in order. pgmt tracks which migrations have been applied in a `pgmt_migrations` table.
 
+### Establishing vs Maintaining
+
+`migrate apply` *maintains* a database that already exists — it runs pending migration files. To *establish* a brand-new database from the repo (a demo, a fresh staging environment, disaster recovery), use `pgmt migrate provision`, which applies the latest baseline and then the migrations after it:
+
+```bash
+pgmt migrate provision --target-url postgres://demo/myapp
+```
+
+Rule of thumb: **provision establishes a new database; apply maintains an existing one.** See [Provisioning a New Environment](/docs/guides/baseline-management#provisioning-a-new-environment).
+
 ## Checking Status
 
 See what's applied and what's pending:
@@ -217,5 +227,6 @@ CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 | Generate migration     | `pgmt migrate new "description"`      |
 | Update stale migration | `pgmt migrate update <version>`       |
 | Apply to target        | `pgmt migrate apply --target-url URL` |
+| Provision new env       | `pgmt migrate provision --target-url URL` |
 | Check status           | `pgmt migrate status`                 |
 | Validate in CI         | `pgmt migrate validate`               |

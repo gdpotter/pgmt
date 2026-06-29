@@ -104,3 +104,14 @@ This compares your migration chain's expected state against what's actually in t
 For automated drift detection in CI, see [CI/CD Integration](/docs/guides/ci-cd#drift-detection).
 
 **If drift is detected:** Decide whether the drift should be kept or reverted. If kept, update your schema files to match and generate a new migration. If reverted, apply the remediation SQL that `pgmt migrate diff --format sql` generates.
+
+## Spinning Up a New Environment
+
+To stand up a new database from the repo — a fresh staging environment, a new region, or recovering after a disaster — use `pgmt migrate provision` rather than `migrate apply`. `apply` only maintains a database that's already established; `provision` applies the latest baseline and then the migrations after it, leaving the database ready for `migrate apply`:
+
+```bash
+pgmt migrate provision --target-url postgres://new-env/myapp
+pgmt migrate provision --target-url postgres://new-env/myapp --dry-run   # preview first
+```
+
+If the target already contains objects but isn't managed by pgmt, `provision` refuses and points you at `pgmt init` to adopt it.

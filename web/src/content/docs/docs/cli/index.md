@@ -13,6 +13,7 @@ description: Complete command reference for pgmt.
 | `pgmt migrate new`           | Generate migration                       |
 | `pgmt migrate update`        | Regenerate migration after changes       |
 | `pgmt migrate apply`         | Apply migrations to target database      |
+| `pgmt migrate provision`     | Set up a new database from a baseline    |
 | `pgmt migrate status`        | Show migration status                    |
 | `pgmt migrate validate`      | Validate migrations match schema         |
 | `pgmt migrate diff`          | Detect drift in target database          |
@@ -284,6 +285,37 @@ pgmt migrate apply [OPTIONS]
 ```bash
 pgmt migrate apply --target-url postgres://prod/myapp
 pgmt migrate apply            # Uses target_url from pgmt.yaml
+```
+
+---
+
+## pgmt migrate provision
+
+Set up a new database from a baseline plus its post-baseline migrations. Use this for a fresh environment (demo, staging, preview, disaster recovery); `migrate apply` only maintains a database that's already established.
+
+```bash
+pgmt migrate provision [OPTIONS]
+```
+
+**Options:**
+
+```bash
+--target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
+--dry-run                     # Preview what would be applied, without changing the database
+```
+
+**What it does, based on the target's state:**
+
+- **Empty + a baseline exists:** applies the baseline, records it, then applies the migrations after it.
+- **No baseline in the repo:** replays all migrations from scratch.
+- **Already provisioned:** applies any pending migrations (like `migrate apply`).
+- **Already populated but unmanaged:** refuses, and points you at `pgmt init` to adopt it.
+
+**Examples:**
+
+```bash
+pgmt migrate provision --target-url postgres://localhost/demo
+pgmt migrate provision --target-url postgres://localhost/demo --dry-run
 ```
 
 ---
