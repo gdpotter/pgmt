@@ -1,12 +1,16 @@
 use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use crate::config::Config;
-use crate::migration::{discover_migrations, parse_migration_sections, validate_sections};
+use crate::migration::{
+    ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
+};
 use crate::migration_tracking::{
     calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     format_tracking_table_name, initialize_sections, record_migration_as_applied, version_from_db,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
+use sqlx::PgPool;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 use tracing::debug;
@@ -27,26 +31,40 @@ pub async fn cmd_migrate_apply(
     let pool =
         crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
 
+    let migrations = discover_migrations(&migrations_dir)?;
+
+    apply_pending_migrations(&pool, config, &migrations).await
+}
+
+/// Apply migration files to a database, skipping any already recorded in the
+/// tracking table (and validating their checksums haven't drifted).
+///
+/// This is THE production apply path: section execution, checksum validation,
+/// and tracking-table recording all live here, so `migrate apply` and
+/// `migrate provision` can't diverge. The caller selects which migrations to
+/// consider (e.g. provision passes only those after the baseline it just
+/// applied) and is responsible for connecting to the target.
+pub(crate) async fn apply_pending_migrations(
+    pool: &PgPool,
+    config: &Config,
+    migrations: &[ParsedMigration],
+) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
     // Ensure the tracking tables exist (and are migrated to the current shape)
-    ensure_tracking_table_exists(&pool, &config.migration.tracking_table).await?;
-    ensure_section_tracking_table(&pool, &config.migration.tracking_table).await?;
+    ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
+    ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
 
     // Get list of applied migrations with their checksums
-    let applied_migrations: std::collections::HashMap<u64, String> =
-        sqlx::query_as::<_, (i64, String)>(&format!(
-            "SELECT version, checksum FROM {}",
-            tracking_table_name
-        ))
-        .fetch_all(&pool)
-        .await?
-        .into_iter()
-        .map(|(v, checksum)| (version_from_db(v), checksum))
-        .collect();
-
-    // Find all migration files using the parsing utilities
-    let migrations = discover_migrations(&migrations_dir)?;
+    let applied_migrations: HashMap<u64, String> = sqlx::query_as::<_, (i64, String)>(&format!(
+        "SELECT version, checksum FROM {}",
+        tracking_table_name
+    ))
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(v, checksum)| (version_from_db(v), checksum))
+    .collect();
 
     // Apply unapplied migrations
     for migration in migrations {
@@ -102,7 +120,7 @@ pub async fn cmd_migrate_apply(
 
         // Initialize section tracking
         initialize_sections(
-            &pool,
+            pool,
             &config.migration.tracking_table,
             migration.version,
             &sections,
@@ -135,7 +153,7 @@ pub async fn cmd_migrate_apply(
 
         // Record migration as applied
         record_migration_as_applied(
-            &pool,
+            pool,
             &config.migration.tracking_table,
             migration.version,
             &migration.description,
