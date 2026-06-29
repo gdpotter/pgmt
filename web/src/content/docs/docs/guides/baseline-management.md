@@ -46,7 +46,7 @@ pgmt migrate provision --target-url postgres://demo/myapp
 
 The `migrate provision` command applies the latest baseline (the full schema snapshot), then applies every migration after it, recording each in the tracking table, so the database is left ready for `migrate apply` going forward.
 
-If there's no baseline yet, `migrate provision` simply replays all migrations and behaves identically to `migrate apply`. If the target already contains objects but has no pgmt history, provision refuses and points you at `pgmt init` to adopt it instead. Preview first with `--dry-run`.
+If there's no baseline yet, `migrate provision` simply replays all migrations and behaves identically to `migrate apply`. Preview first with `--dry-run`.
 
 ## Commands
 

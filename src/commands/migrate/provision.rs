@@ -1,7 +1,5 @@
-use crate::catalog::Catalog;
 use crate::commands::migrate::apply::apply_pending_migrations;
 use crate::config::Config;
-use crate::config::filter::ObjectFilter;
 use crate::migration::baseline::apply_baseline_to_target;
 use crate::migration::{discover_migrations, find_latest_baseline};
 use crate::migration_tracking::{
@@ -16,10 +14,11 @@ use std::path::Path;
 ///
 /// Unlike `migrate apply` (which only maintains an already-established
 /// database), provision is willing to lay down the baseline on a fresh target.
-/// It classifies the target by reading state only — the tracking table and a
-/// managed-catalog presence check — and never diffs or generates SQL against
-/// the target: everything it runs is committed (the baseline file and the
-/// migration files).
+/// It reads the tracking table to decide whether the database is already
+/// established, and never diffs or generates SQL against the target: everything
+/// it runs is committed (the baseline file and the migration files). If the
+/// baseline collides with objects already present, the atomic baseline apply
+/// fails cleanly.
 pub async fn cmd_migrate_provision(
     config: &Config,
     root_dir: &Path,
@@ -53,22 +52,6 @@ pub async fn cmd_migrate_provision(
 
     match latest_baseline {
         Some(baseline) => {
-            // A baseline lays down the full schema with CREATE statements, so the
-            // target must be empty of managed objects. If it already has objects
-            // (but no pgmt history), it's an existing database to adopt, not a
-            // fresh one to provision.
-            let filter = ObjectFilter::from_config(config);
-            let catalog = Catalog::load_managed(&pool, &filter).await?;
-            if has_managed_objects(&catalog) {
-                anyhow::bail!(
-                    "Target database already contains managed objects but has no pgmt \
-                     migration history.\n\n\
-                     If this is an existing database, adopt it with `pgmt init` (which records \
-                     its current state as a baseline). `migrate provision` is for provisioning a \
-                     fresh database."
-                );
-            }
-
             let baseline_sql = std::fs::read_to_string(&baseline.path).with_context(|| {
                 format!("Failed to read baseline file: {}", baseline.path.display())
             })?;
@@ -135,24 +118,4 @@ async fn tracking_has_rows(pool: &PgPool, config: &Config) -> Result<bool> {
         .fetch_one(pool)
         .await?;
     Ok(count > 0)
-}
-
-/// Whether the managed catalog contains any user objects pgmt would manage.
-///
-/// Ignores schemas and extensions, which can exist on an otherwise fresh
-/// database (e.g. `public`, `plpgsql`).
-fn has_managed_objects(catalog: &Catalog) -> bool {
-    !catalog.tables.is_empty()
-        || !catalog.views.is_empty()
-        || !catalog.types.is_empty()
-        || !catalog.domains.is_empty()
-        || !catalog.functions.is_empty()
-        || !catalog.aggregates.is_empty()
-        || !catalog.operators.is_empty()
-        || !catalog.casts.is_empty()
-        || !catalog.sequences.is_empty()
-        || !catalog.indexes.is_empty()
-        || !catalog.constraints.is_empty()
-        || !catalog.triggers.is_empty()
-        || !catalog.policies.is_empty()
 }

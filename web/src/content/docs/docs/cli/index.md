@@ -309,7 +309,8 @@ pgmt migrate provision [OPTIONS]
 - **Empty + a baseline exists:** applies the baseline, records it, then applies the migrations after it.
 - **No baseline in the repo:** replays all migrations from scratch.
 - **Already provisioned:** applies any pending migrations (like `migrate apply`).
-- **Already populated but unmanaged:** refuses, and points you at `pgmt init` to adopt it.
+
+If the baseline collides with objects already in the target, the apply fails atomically (Postgres reports `relation "x" already exists`) and nothing is left behind.
 
 **Examples:**
 

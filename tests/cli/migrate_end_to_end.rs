@@ -286,7 +286,7 @@ CREATE TABLE posts (id SERIAL, title TEXT);
     }
 
     #[tokio::test]
-    async fn test_migrate_provision_refuses_populated_unmanaged_db() -> Result<()> {
+    async fn test_migrate_provision_fails_on_object_collision() -> Result<()> {
         with_cli_helper(async |helper| {
             helper.init_project()?;
             helper.write_schema_file("tables/users.sql", "CREATE TABLE users (id SERIAL);")?;
@@ -296,14 +296,15 @@ CREATE TABLE posts (id SERIAL, title TEXT);
                 .assert()
                 .success();
 
-            // Pre-populate the target with an unmanaged object (no pgmt history).
+            // Pre-create an object the baseline also creates, so its CREATE collides.
             let pool = helper.connect_to_dev_db().await?;
-            sqlx::query("CREATE TABLE legacy_thing (id INT)")
+            sqlx::query("CREATE TABLE users (id INT)")
                 .execute(&pool)
                 .await?;
             pool.close().await;
 
-            // Provision must refuse and point at `pgmt init`.
+            // provision attempts the baseline; the collision fails it (atomically),
+            // surfacing Postgres's own error rather than a guessed-context message.
             helper
                 .command()
                 .args([
@@ -314,7 +315,7 @@ CREATE TABLE posts (id SERIAL, title TEXT);
                 ])
                 .assert()
                 .failure()
-                .stderr(predicate::str::contains("pgmt init"));
+                .stderr(predicate::str::contains("already exists"));
 
             Ok(())
         })
