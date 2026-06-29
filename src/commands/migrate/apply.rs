@@ -55,19 +55,38 @@ pub(crate) async fn apply_pending_migrations(
     ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
 
-    // Get list of applied migrations with their checksums
-    let applied_migrations: HashMap<u64, String> = sqlx::query_as::<_, (i64, String)>(&format!(
-        "SELECT version, checksum FROM {}",
-        tracking_table_name
-    ))
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(v, checksum)| (version_from_db(v), checksum))
-    .collect();
+    // Get applied rows: version -> (checksum, is_baseline).
+    let applied_migrations: HashMap<u64, (String, bool)> =
+        sqlx::query_as::<_, (i64, String, bool)>(&format!(
+            "SELECT version, checksum, is_baseline FROM {}",
+            tracking_table_name
+        ))
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(v, checksum, is_baseline)| (version_from_db(v), (checksum, is_baseline)))
+        .collect();
+
+    // A recorded baseline covers every migration up to its version. Those
+    // migration files (if still present alongside the baseline) must be skipped
+    // rather than re-applied or checksum-compared against the baseline.
+    let baseline_version = applied_migrations
+        .iter()
+        .filter(|(_, (_, is_baseline))| *is_baseline)
+        .map(|(version, _)| *version)
+        .max();
 
     // Apply unapplied migrations
     for migration in migrations {
+        // Skip migrations covered by a recorded baseline.
+        if baseline_version.is_some_and(|bv| migration.version <= bv) {
+            debug!(
+                "Migration {} is covered by the baseline, skipping",
+                migration.version
+            );
+            continue;
+        }
+
         // Read migration SQL first so we can validate checksum
         let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
             format!(
@@ -80,7 +99,7 @@ pub(crate) async fn apply_pending_migrations(
         let checksum = calculate_checksum(&migration_sql);
 
         // Check if migration was already applied
-        if let Some(stored_checksum) = applied_migrations.get(&migration.version) {
+        if let Some((stored_checksum, _)) = applied_migrations.get(&migration.version) {
             // Validate checksum hasn't changed
             if stored_checksum != &checksum {
                 anyhow::bail!(

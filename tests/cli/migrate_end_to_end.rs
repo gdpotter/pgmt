@@ -197,6 +197,131 @@ CREATE TABLE posts (id SERIAL, title TEXT);
     }
 
     #[tokio::test]
+    async fn test_migrate_provision_from_baseline() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);",
+            )?;
+
+            // Create a migration AND a baseline at the same version.
+            helper
+                .command()
+                .args(["migrate", "new", "initial", "--create-baseline"])
+                .assert()
+                .success();
+
+            // Provision a fresh database from the baseline.
+            helper
+                .command()
+                .args([
+                    "migrate",
+                    "provision",
+                    "--target-url",
+                    &helper.dev_database_url,
+                ])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Provisioned from baseline"));
+
+            // The schema exists.
+            assert!(helper.table_exists_in_dev("public", "users").await?);
+
+            // The tracking table recorded exactly one baseline row.
+            let pool = helper.connect_to_dev_db().await?;
+            let baseline_rows: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations WHERE is_baseline")
+                    .fetch_one(&pool)
+                    .await?;
+            assert_eq!(
+                baseline_rows, 1,
+                "provision should record exactly one baseline row"
+            );
+            pool.close().await;
+
+            // A subsequent `migrate apply` is a clean no-op: the migration that
+            // shares the baseline's version must be skipped, not checksum-failed.
+            helper
+                .command()
+                .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+                .assert()
+                .success();
+
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_migrate_provision_no_baseline_replays_migrations() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+            helper.write_schema_file("tables/users.sql", "CREATE TABLE users (id SERIAL);")?;
+
+            // Migration without a baseline.
+            helper
+                .command()
+                .args(["migrate", "new", "add_users"])
+                .assert()
+                .success();
+
+            helper
+                .command()
+                .args([
+                    "migrate",
+                    "provision",
+                    "--target-url",
+                    &helper.dev_database_url,
+                ])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Provisioned from migrations"));
+
+            assert!(helper.table_exists_in_dev("public", "users").await?);
+
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_migrate_provision_refuses_populated_unmanaged_db() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+            helper.write_schema_file("tables/users.sql", "CREATE TABLE users (id SERIAL);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "initial", "--create-baseline"])
+                .assert()
+                .success();
+
+            // Pre-populate the target with an unmanaged object (no pgmt history).
+            let pool = helper.connect_to_dev_db().await?;
+            sqlx::query("CREATE TABLE legacy_thing (id INT)")
+                .execute(&pool)
+                .await?;
+            pool.close().await;
+
+            // Provision must refuse and point at `pgmt init`.
+            helper
+                .command()
+                .args([
+                    "migrate",
+                    "provision",
+                    "--target-url",
+                    &helper.dev_database_url,
+                ])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("pgmt init"));
+
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
     async fn test_migrate_status_command() -> Result<()> {
         with_cli_helper(async |helper| {
             helper.init_project()?;

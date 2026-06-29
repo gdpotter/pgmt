@@ -84,7 +84,6 @@ pub async fn load_baseline_into_shadow(
 /// baseline runs via the simple query protocol as a single implicit
 /// transaction, so a partial failure rolls back cleanly and a re-run starts
 /// from nothing.
-#[allow(dead_code)] // becomes live when `migrate provision` lands (Part D)
 pub async fn apply_baseline_to_target(
     pool: &PgPool,
     baseline_sql: &str,

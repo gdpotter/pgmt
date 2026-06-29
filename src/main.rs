@@ -197,6 +197,16 @@ enum MigrateCommands {
         target: config::TargetUrlArgs,
     },
 
+    /// Provision a fresh database from a baseline + migrations
+    Provision {
+        #[command(flatten)]
+        target: config::TargetUrlArgs,
+
+        /// Preview what would be applied without changing the database
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Check migration status
     Status {
         #[command(flatten)]
@@ -472,6 +482,15 @@ async fn run_main(cli: Cli) -> Result<()> {
 
                         info!("Applying explicit migrations");
                         commands::cmd_migrate_apply(&config, &root_dir, &target).await
+                    }
+                    MigrateCommands::Provision { target, dry_run } => {
+                        let config = config::ConfigBuilder::new()
+                            .with_file(file_config.clone())
+                            .resolve()?;
+                        let target = target.resolve(&file_config)?;
+
+                        info!("Provisioning database");
+                        commands::cmd_migrate_provision(&config, &root_dir, &target, *dry_run).await
                     }
                     MigrateCommands::Status { dev } => {
                         let config = config::ConfigBuilder::new()

@@ -176,9 +176,7 @@ async fn migrate_tracking_table_schema(
 
 /// Insert a baseline record into the migration tracking table (is_baseline = TRUE).
 ///
-/// Currently exercised by tests; becomes the sole baseline-row writer once
-/// `pgmt migrate provision` lands (Part D).
-#[allow(dead_code)]
+/// Written by `migrate provision` after it applies a baseline to a fresh target.
 pub async fn record_baseline_as_applied(
     pool: &PgPool,
     tracking_table: &TrackingTable,
