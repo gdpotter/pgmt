@@ -63,7 +63,10 @@ async fn test_ensure_tracking_table_migrates_legacy_schema() -> Result<()> {
         )
         .fetch_one(db.pool())
         .await?;
-        assert!(!is_baseline, "legacy rows should backfill to is_baseline = FALSE");
+        assert!(
+            !is_baseline,
+            "legacy rows should backfill to is_baseline = FALSE"
+        );
 
         // applied_by reconciled too.
         let has_applied_by: bool = sqlx::query_scalar(

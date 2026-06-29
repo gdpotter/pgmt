@@ -370,8 +370,12 @@ async fn test_complex_schema_changes_after_baseline() -> Result<()> {
 async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
     with_test_db(async |db| {
         let baseline_sql = "CREATE TABLE accounts (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
-        pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "baseline_1.sql")
-            .await?;
+        pgmt::migration::baseline::apply_baseline_to_target(
+            db.pool(),
+            baseline_sql,
+            "baseline_1.sql",
+        )
+        .await?;
 
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
@@ -394,7 +398,8 @@ async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
         // The second statement fails (duplicate table); the first must roll back.
         let baseline_sql = "CREATE TABLE good (id INT); CREATE TABLE good (id INT);";
         let result =
-            pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "bad.sql").await;
+            pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "bad.sql")
+                .await;
         assert!(result.is_err(), "duplicate table should fail the baseline");
 
         let exists: bool = sqlx::query_scalar(
@@ -403,7 +408,10 @@ async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
         )
         .fetch_one(db.pool())
         .await?;
-        assert!(!exists, "a failed baseline must leave no objects behind (atomic)");
+        assert!(
+            !exists,
+            "a failed baseline must leave no objects behind (atomic)"
+        );
 
         Ok(())
     })

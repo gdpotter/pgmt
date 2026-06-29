@@ -1,6 +1,6 @@
+use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
-use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
 use crate::migration::{
     BaselineConfig, find_latest_migration, generate_baseline_filename,
     get_migration_update_starting_state, should_manage_baseline_for_migration,
