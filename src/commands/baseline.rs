@@ -2,6 +2,7 @@ use crate::baseline::operations::{
     BaselineCreationRequest, create_baseline, display_baseline_summary, display_baseline_usage_info,
 };
 use crate::config::Config;
+use crate::config::filter::ObjectFilter;
 use crate::diff::operations::SqlRenderer;
 use crate::migration::{discover_baselines, discover_migrations};
 use anyhow::{Result, anyhow};
@@ -72,13 +73,25 @@ pub async fn cmd_migrate_baseline(
         return Ok(());
     }
 
-    // Create the baseline from current schema files
+    // Create the baseline from current schema files. Capture the shadow's base
+    // (image-provided substrate) and diff the unfiltered desired state against
+    // it, so substrate is subtracted out structurally rather than via the
+    // `objects` predicate.
     debug!("Loading schema files into shadow database");
-    let catalog =
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
+    let (base_catalog, desired) =
+        crate::schema_ops::apply_current_schema_to_shadow_with_base(config, root_dir, shadow)
+            .await?;
+
+    // The managed view of the desired state — used for the dependency debug
+    // output below and for baseline validation. The baseline itself is
+    // desired-minus-base; re-applied onto a substrate-bearing shadow it
+    // reproduces this view, so validating against it holds whether or not the
+    // user scoped `objects`.
+    let catalog = ObjectFilter::from_config(config).filter_catalog(desired.clone());
 
     let request = BaselineCreationRequest {
-        catalog: catalog.clone(),
+        catalog: desired,
+        base_catalog,
         version,
         description: "baseline".to_string(),
         baselines_dir: baselines_dir.clone(),

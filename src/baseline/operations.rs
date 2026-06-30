@@ -11,6 +11,10 @@ use std::path::PathBuf;
 pub struct BaselineCreationRequest {
     /// Source catalog to create baseline from
     pub catalog: Catalog,
+    /// Catalog to diff the source against — the base whose objects are excluded
+    /// from the baseline (image-provided substrate). `Catalog::empty()` produces
+    /// a from-scratch baseline.
+    pub base_catalog: Catalog,
     /// Version timestamp for the baseline
     pub version: u64,
     /// Description for the baseline
@@ -46,7 +50,7 @@ pub async fn create_baseline(request: BaselineCreationRequest) -> Result<Baselin
     }
 
     let generation_input = MigrationGenerationInput {
-        old_catalog: Catalog::empty(),
+        old_catalog: request.base_catalog,
         new_catalog: request.catalog,
         description: request.description.clone(),
         version: request.version,
@@ -146,6 +150,7 @@ mod tests {
 
         let request = BaselineCreationRequest {
             catalog: Catalog::empty(),
+            base_catalog: Catalog::empty(),
             version: 1234567890,
             description: "test_baseline".to_string(),
             baselines_dir,

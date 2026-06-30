@@ -66,7 +66,37 @@ pub async fn build_desired_state(
     root_dir: &Path,
     shadow_pool: &PgPool,
 ) -> Result<Catalog> {
-    let schema_dir = root_dir.join(&config.directories.schema);
+    clean_shadow_for_schema(config, root_dir, shadow_pool).await?;
+    let catalog = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
+    Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
+}
+
+/// Like [`build_desired_state`], but also returns the **base** catalog: the
+/// shadow's contents after clean+roles but before any schema files are applied
+/// (image-provided substrate). Diffing the *unfiltered* desired catalog against
+/// this base subtracts substrate out structurally, instead of relying on the
+/// `objects` predicate to name it. Used by baseline generation.
+pub async fn build_desired_state_with_base(
+    config: &Config,
+    root_dir: &Path,
+    shadow_pool: &PgPool,
+) -> Result<(Catalog, Catalog)> {
+    clean_shadow_for_schema(config, root_dir, shadow_pool).await?;
+    // Whatever the shadow already provides is the base: for a docker/branch
+    // shadow that's the pristine image substrate; for a clean-mode shadow it's
+    // the post-clean state. Loaded unfiltered so substrate cancels in the diff.
+    let base = Catalog::load_unfiltered(shadow_pool).await?;
+    let desired = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
+    Ok((base, desired))
+}
+
+/// Clean the shadow database and apply the roles file, leaving it ready for
+/// schema files. (For docker/branch shadows the clean is a no-op.)
+async fn clean_shadow_for_schema(
+    config: &Config,
+    root_dir: &Path,
+    shadow_pool: &PgPool,
+) -> Result<()> {
     let roles_file = root_dir.join(&config.directories.roles);
 
     info!("🧹 Cleaning database before applying schema...");
@@ -75,10 +105,21 @@ pub async fn build_desired_state(
         .map_err(|e| anyhow::anyhow!("Failed to clean database: {}", e))?;
 
     apply_roles_file(shadow_pool, &roles_file).await?;
+    Ok(())
+}
+
+/// Apply the schema files to an already-cleaned shadow and return the resulting
+/// **unfiltered** catalog (callers apply the managed-universe filter if needed).
+async fn apply_schema_files_to_shadow(
+    config: &Config,
+    root_dir: &Path,
+    shadow_pool: &PgPool,
+) -> Result<Catalog> {
+    let schema_dir = root_dir.join(&config.directories.schema);
 
     let processor_config = SchemaProcessorConfig {
         verbose: config.schema.verbose_file_processing,
-        clean_before_apply: false, // Already cleaned above
+        clean_before_apply: false, // Already cleaned by clean_shadow_for_schema
         objects: config.objects.clone(),
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
@@ -108,7 +149,7 @@ pub async fn build_desired_state(
     validate_schema_applied(shadow_pool).await?;
     info!("✅ Schema validation completed");
 
-    Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
+    Ok(catalog)
 }
 
 /// Connect to the given shadow database, build the desired state on it,
@@ -127,6 +168,22 @@ pub async fn apply_current_schema_to_shadow(
     // for long-running callers like `apply --watch`); no-op for external URLs.
     crate::db::branch::drop_branch(shadow_pool).await?;
     Ok(catalog)
+}
+
+/// Like [`apply_current_schema_to_shadow`], but returns the
+/// `(base, unfiltered desired)` pair for baseline generation. See
+/// [`build_desired_state_with_base`].
+pub async fn apply_current_schema_to_shadow_with_base(
+    config: &Config,
+    root_dir: &Path,
+    shadow: &crate::config::ShadowDatabase,
+) -> Result<(Catalog, Catalog)> {
+    let shadow_pool = shadow.connect_fresh().await?;
+
+    let pair = build_desired_state_with_base(config, root_dir, &shadow_pool).await?;
+
+    crate::db::branch::drop_branch(shadow_pool).await?;
+    Ok(pair)
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

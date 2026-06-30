@@ -675,6 +675,7 @@ async fn create_baseline_during_init(
     // Create baseline using shared logic
     let request = BaselineCreationRequest {
         catalog: catalog.clone(),
+        base_catalog: Catalog::empty(),
         version,
         description: options
             .baseline_config

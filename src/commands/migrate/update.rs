@@ -1,4 +1,5 @@
 use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
+use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
@@ -115,6 +116,7 @@ pub async fn cmd_migrate_update_with_options(
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
+            base_catalog: Catalog::empty(),
             version: latest_migration.version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),
@@ -378,6 +380,7 @@ pub async fn cmd_migrate_update_specific(
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
+            base_catalog: Catalog::empty(),
             version: new_version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),

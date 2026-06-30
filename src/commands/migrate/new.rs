@@ -1,4 +1,5 @@
 use crate::baseline::operations::BaselineCreationRequest;
+use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
@@ -106,6 +107,7 @@ pub async fn cmd_migrate_new(
         // would produce a partial baseline for any non-initial migration.
         let result = crate::baseline::operations::create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
+            base_catalog: Catalog::empty(),
             version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),
