@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use tempfile::TempDir;
 
-const SUPABASE_IMAGE: &str = "public.ecr.aws/supabase/postgres:17.6.1.081";
+const SUPABASE_IMAGE: &str = "supabase/postgres:17.6.1.081";
 
 /// `migrate baseline` never dials the dev database, so this is a syntactically
 /// valid placeholder that is never connected to.

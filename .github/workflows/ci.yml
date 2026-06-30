@@ -125,13 +125,17 @@ jobs:
       - uses: actions/checkout@v5
 
       # These tests run a real platform image (Supabase) as pgmt's Docker shadow;
-      # bollard pulls it by the exact name in the test config. Pre-pull it so the
-      # test doesn't pay the pull mid-run. ECR Public allows anonymous pulls, so
-      # there's no Docker Hub rate limit and no retag needed. No Postgres service
-      # is required — `migrate baseline` only talks to the Docker shadow.
+      # bollard pulls it by the exact name in the test config. Both Docker Hub and
+      # ECR Public rate-limit anonymous pulls from shared CI IPs (ECR fails with
+      # "toomanyrequests"), so pull from Google's Docker Hub mirror (mirror.gcr.io,
+      # no auth, no rate limit) and retag to the bare name the test uses — bollard
+      # then finds it via inspect_image and never hits a rate-limited registry. No
+      # Postgres service is required: `migrate baseline` only talks to the shadow.
       # Keep this tag in sync with SUPABASE_IMAGE in tests/cli/substrate.rs.
       - name: Pre-pull Supabase image
-        run: docker pull public.ecr.aws/supabase/postgres:17.6.1.081
+        run: |
+          docker pull mirror.gcr.io/supabase/postgres:17.6.1.081
+          docker tag mirror.gcr.io/supabase/postgres:17.6.1.081 supabase/postgres:17.6.1.081
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
