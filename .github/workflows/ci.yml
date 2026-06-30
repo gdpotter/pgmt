@@ -116,7 +116,34 @@ jobs:
         run: cargo test
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-          
+
+  substrate:
+    name: Substrate tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # These tests run a real platform image (Supabase) as pgmt's Docker shadow;
+      # bollard pulls it by the exact name in the test config. Pre-pull it so the
+      # test doesn't pay the pull mid-run. ECR Public allows anonymous pulls, so
+      # there's no Docker Hub rate limit and no retag needed. No Postgres service
+      # is required — `migrate baseline` only talks to the Docker shadow.
+      # Keep this tag in sync with SUPABASE_IMAGE in tests/cli/substrate.rs.
+      - name: Pre-pull Supabase image
+        run: docker pull public.ecr.aws/supabase/postgres:17.6.1.081
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run substrate tests
+        run: cargo test --test mod -- cli::substrate
+        env:
+          PGMT_SUBSTRATE_TESTS: "1"
+
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

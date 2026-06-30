@@ -36,3 +36,4 @@ pub mod migrate_new;
 pub mod migrate_reconstruction;
 pub mod migrate_validate_json;
 pub mod roles_file;
+pub mod substrate;
