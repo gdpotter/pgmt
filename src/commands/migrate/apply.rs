@@ -3,9 +3,10 @@ use crate::config::Config;
 use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
+use crate::migration_tracking::section_tracking::{SectionStatus, section_statuses};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    format_tracking_table_name, initialize_sections, record_migration_as_applied, version_from_db,
+    format_tracking_table_name, register_migration_start, version_from_db,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
@@ -63,26 +64,31 @@ pub(crate) async fn apply_pending_migrations(
     ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
 
-    // Get applied rows: version -> (checksum, is_baseline).
-    let applied_migrations: HashMap<u64, (String, bool)> =
-        sqlx::query_as::<_, (i64, String, bool)>(&format!(
-            "SELECT version, checksum, is_baseline FROM {}",
-            tracking_table_name
-        ))
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|(v, checksum, is_baseline)| (version_from_db(v), (checksum, is_baseline)))
-        .collect();
+    // All tracking rows: version + checksum + is_baseline.
+    let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
+        "SELECT version, checksum, is_baseline FROM {}",
+        tracking_table_name
+    ))
+    .fetch_all(pool)
+    .await?;
 
     // A recorded baseline covers every migration up to its version. Those
     // migration files (if still present alongside the baseline) must be skipped
     // rather than re-applied or checksum-compared against the baseline.
-    let baseline_version = applied_migrations
+    let baseline_version = rows
         .iter()
-        .filter(|(_, (_, is_baseline))| *is_baseline)
-        .map(|(version, _)| *version)
+        .filter(|(_, _, is_baseline)| *is_baseline)
+        .map(|(version, _, _)| version_from_db(*version))
         .max();
+
+    // Migration rows only: a version can also host a baseline row (paired
+    // `--create-baseline`), whose checksum is the baseline file's, not the
+    // migration's — it must never enter the migration checksum comparison.
+    let applied_migrations: HashMap<u64, String> = rows
+        .into_iter()
+        .filter(|(_, _, is_baseline)| !is_baseline)
+        .map(|(v, checksum, _)| (version_from_db(v), checksum))
+        .collect();
 
     // Apply unapplied migrations
     for migration in migrations {
@@ -132,32 +138,24 @@ pub(crate) async fn apply_pending_migrations(
         // Calculate checksum
         let checksum = calculate_checksum(&migration_sql);
 
-        // Check if migration was already applied
-        if let Some((stored_checksum, _)) = applied_migrations.get(&migration.version) {
-            // Validate checksum hasn't changed
-            if stored_checksum != &checksum {
-                anyhow::bail!(
-                    "Migration {} has been modified after being applied!\n\
-                     Expected checksum: {}\n\
-                     Actual checksum:   {}\n\n\
-                     Migrations must be immutable once applied. If you need to make changes:\n\
-                     • Create a new migration with the changes\n\
-                     • Or roll back and recreate this migration (dangerous in production)",
-                    migration.version,
-                    stored_checksum,
-                    checksum
-                );
-            }
-            debug!("Migration {} already applied, skipping", migration.version);
-            continue;
+        // Validate the checksum of an already-registered migration before
+        // anything else — resume must never run sections from an edited file.
+        let registered = applied_migrations.get(&migration.version);
+        if let Some(stored_checksum) = registered
+            && stored_checksum != &checksum
+        {
+            anyhow::bail!(
+                "Migration {} has been modified after being applied!\n\
+                 Expected checksum: {}\n\
+                 Actual checksum:   {}\n\n\
+                 Migrations must be immutable once applied. If you need to make changes:\n\
+                 • Create a new migration with the changes\n\
+                 • Or roll back and recreate this migration (dangerous in production)",
+                migration.version,
+                stored_checksum,
+                checksum
+            );
         }
-
-        println!(
-            "\nApplying migration {} - {}",
-            migration.version, migration.description
-        );
-
-        let start = Instant::now();
 
         // Parse migration into sections
         let sections = parse_migration_sections(&migration.path, &migration_sql)
@@ -171,15 +169,58 @@ pub(crate) async fn apply_pending_migrations(
             )
         })?;
 
-        // Initialize section tracking
-        initialize_sections(
-            pool,
-            &config.migration.tracking_table,
-            migration.version,
-            false,
-            &sections,
-        )
-        .await?;
+        if registered.is_some() {
+            // The version row is written at start (register_migration_start),
+            // so its existence doesn't mean "done" — completeness is derived:
+            // every section in the file has a Completed row. Legacy rows with
+            // NO section rows were recorded on completion by older pgmt and
+            // are fully applied by construction (the registration insert is
+            // atomic, so a crash can't produce that shape).
+            let statuses = section_statuses(
+                pool,
+                &config.migration.tracking_table,
+                migration.version,
+                false,
+            )
+            .await?;
+            let fully_applied = statuses.is_empty()
+                || sections
+                    .iter()
+                    .all(|s| statuses.get(&s.name) == Some(&SectionStatus::Completed));
+            if fully_applied {
+                debug!("Migration {} already applied, skipping", migration.version);
+                continue;
+            }
+            let done = statuses
+                .values()
+                .filter(|s| **s == SectionStatus::Completed)
+                .count();
+            println!(
+                "\nResuming migration {} - {} ({}/{} sections already complete)",
+                migration.version,
+                migration.description,
+                done,
+                sections.len()
+            );
+        } else {
+            println!(
+                "\nApplying migration {} - {}",
+                migration.version, migration.description
+            );
+            // Register the version row + Pending section rows atomically,
+            // before anything executes.
+            register_migration_start(
+                pool,
+                &config.migration.tracking_table,
+                migration.version,
+                &migration.description,
+                &checksum,
+                &sections,
+            )
+            .await?;
+        }
+
+        let start = Instant::now();
 
         // Create section executor
         let reporter = SectionReporter::new(sections.len(), false); // TODO: Add verbose flag to config
@@ -206,15 +247,8 @@ pub(crate) async fn apply_pending_migrations(
 
         let duration = start.elapsed();
 
-        // Record migration as applied
-        record_migration_as_applied(
-            pool,
-            &config.migration.tracking_table,
-            migration.version,
-            &migration.description,
-            &checksum,
-        )
-        .await?;
+        // Nothing to record here: the version row was registered at start and
+        // per-section completion rows drive the derived applied-state.
 
         // Report completion
         let reporter = SectionReporter::new(sections.len(), false);

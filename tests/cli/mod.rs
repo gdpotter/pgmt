@@ -24,6 +24,7 @@
 /// ```
 pub mod apply_crash_states;
 pub mod apply_locking;
+pub mod apply_resume;
 pub mod baseline_commands;
 pub mod baseline_extension_ordering;
 pub mod baseline_sections;

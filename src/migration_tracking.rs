@@ -288,19 +288,32 @@ pub async fn record_baseline_as_applied(
     Ok(())
 }
 
-/// Insert a migration record into the migration tracking table (is_baseline = FALSE).
+/// Register a migration as started: insert its tracking row and its Pending
+/// section rows in ONE transaction, before any section executes.
 ///
-/// The caller is responsible for ensuring the tracking table exists (e.g. via
-/// `ensure_tracking_table_exists`) before invoking this in a loop.
-pub async fn record_migration_as_applied(
+/// Writing the row at start (rather than on completion) is what lets a failed
+/// migration resume: the version row exists, and "fully applied" is *derived*
+/// — every section in the (checksummed) file has a Completed row. Legacy rows
+/// with NO section rows at all were recorded on completion by older pgmt and
+/// are fully applied by construction. That distinction is only sound because
+/// this insert is atomic: a crash can never leave a version row with zero
+/// section rows.
+///
+/// `ON CONFLICT DO NOTHING` on the section rows preserves any rows left by a
+/// pre-refactor crashed apply (sections used to be initialized before the
+/// version row existed), so their Completed statuses keep driving resume.
+pub async fn register_migration_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
     description: &str,
     checksum: &str,
+    sections: &[crate::migration::section_parser::MigrationSection],
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
+    let sections_table = section_tracking::format_sections_table_name(tracking_table);
 
+    let mut tx = pool.begin().await?;
     sqlx::query(&format!(
         "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, FALSE)",
         tracking_table_name
@@ -308,9 +321,28 @@ pub async fn record_migration_as_applied(
     .bind(version_to_db(version)?)
     .bind(description)
     .bind(checksum)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .with_context(|| format!("Failed to record migration {} in tracking table", version))?;
+
+    for (order, section) in sections.iter().enumerate() {
+        sqlx::query(&format!(
+            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
+             VALUES ($1, FALSE, $2, $3, $4, 0)
+             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
+            sections_table
+        ))
+        .bind(version_to_db(version)?)
+        .bind(&section.name)
+        .bind(order as i32)
+        .bind(section_tracking::SectionStatus::Pending.as_str())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .with_context(|| format!("Failed to register migration {} start", version))?;
 
     Ok(())
 }

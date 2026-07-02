@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use std::str::FromStr;
 
 /// Format the sections tracking table name with proper schema qualification
-fn format_sections_table_name(tracking_table: &TrackingTable) -> String {
+pub(crate) fn format_sections_table_name(tracking_table: &TrackingTable) -> String {
     format!(
         r#""{}"."{}_sections""#,
         tracking_table.schema, tracking_table.name
@@ -174,6 +174,30 @@ pub async fn initialize_sections(
     }
 
     Ok(())
+}
+
+/// Status of every recorded section for a version. Empty for legacy rows
+/// (recorded on completion by older pgmt, before per-section registration).
+pub async fn section_statuses(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    migration_version: u64,
+    is_baseline: bool,
+) -> Result<std::collections::BTreeMap<String, SectionStatus>> {
+    let sections_table = format_sections_table_name(tracking_table);
+
+    let rows: Vec<(String, String)> = sqlx::query_as(&format!(
+        "SELECT section_name, status FROM {} WHERE migration_version = $1 AND is_baseline = $2",
+        sections_table
+    ))
+    .bind(migration_version as i64)
+    .bind(is_baseline)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|(name, status)| Ok((name, SectionStatus::from_str(&status)?)))
+        .collect()
 }
 
 /// Get status of a specific section

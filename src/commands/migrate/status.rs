@@ -2,7 +2,9 @@ use crate::config::Config;
 use crate::migration::{
     BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
 };
-use crate::migration_tracking::{ensure_tracking_table_exists, format_tracking_table_name};
+use crate::migration_tracking::{
+    ensure_section_tracking_table, ensure_tracking_table_exists, format_tracking_table_name,
+};
 use crate::validation::{ValidationConfig, validate_catalogs};
 use crate::validation_output::{BaselineInfo, ValidationOutputOptions, format_validation_output};
 use anyhow::{Result, anyhow};
@@ -17,13 +19,26 @@ pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) ->
 
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
-    // Ensure the tracking table exists (and is migrated to the current shape)
+    // Ensure the tracking tables exist (and are migrated to the current shape)
     ensure_tracking_table_exists(&dev_pool, &config.migration.tracking_table).await?;
+    ensure_section_tracking_table(&dev_pool, &config.migration.tracking_table).await?;
 
-    // Get list of applied migrations
-    let applied_migrations: Vec<(i64, String, String)> = sqlx::query_as(&format!(
-        "SELECT version, description, applied_at::TEXT FROM {} ORDER BY version",
-        tracking_table_name
+    // The version row is written when a migration STARTS (see
+    // register_migration_start), so surface rows whose recorded sections
+    // aren't all complete — they're in-progress or failed, not applied.
+    let sections_table = format!(
+        r#""{}"."{}_sections""#,
+        config.migration.tracking_table.schema, config.migration.tracking_table.name
+    );
+    let applied_migrations: Vec<(i64, String, String, i64)> = sqlx::query_as(&format!(
+        "SELECT m.version, m.description, m.applied_at::TEXT,
+                COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete
+         FROM {} m
+         LEFT JOIN {} s
+           ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
+         GROUP BY m.version, m.is_baseline, m.description, m.applied_at
+         ORDER BY m.version",
+        tracking_table_name, sections_table
     ))
     .fetch_all(&dev_pool)
     .await?;
@@ -32,8 +47,15 @@ pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) ->
         println!("No migrations have been applied");
     } else {
         println!("Applied migrations:");
-        for (version, description, applied_at) in applied_migrations {
-            println!("  {} - {} (applied: {})", version, description, applied_at);
+        for (version, description, applied_at, incomplete) in applied_migrations {
+            if incomplete > 0 {
+                println!(
+                    "  {} - {} (INCOMPLETE: {} section(s) pending or failed — resume with `pgmt migrate apply`)",
+                    version, description, incomplete
+                );
+            } else {
+                println!("  {} - {} (applied: {})", version, description, applied_at);
+            }
         }
     }
 

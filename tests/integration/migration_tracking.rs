@@ -3,7 +3,7 @@ use anyhow::Result;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::{
     calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    record_baseline_as_applied, record_migration_as_applied, version_to_db,
+    record_baseline_as_applied, register_migration_start, version_to_db,
 };
 use sqlx::Row;
 
@@ -115,7 +115,7 @@ async fn test_same_version_migration_and_baseline_rows() -> Result<()> {
         };
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
 
-        record_migration_as_applied(db.pool(), &tracking_table, 1234, "migration", "aaa").await?;
+        register_migration_start(db.pool(), &tracking_table, 1234, "migration", "aaa", &[]).await?;
         record_baseline_as_applied(db.pool(), &tracking_table, 1234, "baseline", "bbb").await?;
 
         let rows: Vec<(i64, bool)> = sqlx::query_as(
