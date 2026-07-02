@@ -312,4 +312,63 @@ mod baseline_tests {
         })
         .await
     }
+
+    /// Version-pairing pin: `migrate update` on a migration with a same-version
+    /// baseline regenerates that baseline as a FULL schema snapshot, at the
+    /// same (paired) version as the migration.
+    #[tokio::test]
+    async fn test_migrate_update_regenerates_full_baseline() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // Migration + paired baseline: users only.
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "initial", "--create-baseline"])
+                .assert()
+                .success();
+
+            // Grow the schema, then regenerate the same migration.
+            helper.write_schema_file("posts.sql", "CREATE TABLE posts (id SERIAL PRIMARY KEY);")?;
+            helper
+                .command()
+                .args(["migrate", "update"])
+                .assert()
+                .success();
+
+            let migrations = helper.list_migration_files()?;
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(migrations.len(), 1);
+            assert_eq!(baselines.len(), 1, "update must not leave stray baselines");
+
+            // Still paired: baseline version == migration version.
+            let migration_version: String = migrations[0]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            let baseline_version: String = baselines[0]
+                .trim_start_matches("baseline_")
+                .trim_end_matches(".sql")
+                .to_string();
+            assert_eq!(
+                baseline_version, migration_version,
+                "regenerated baseline must keep the migration's version"
+            );
+
+            // And it is a full snapshot, not the update's delta.
+            let baseline = helper.read_baseline_file(&baselines[0])?;
+            assert!(
+                baseline.contains("users"),
+                "updated baseline must include the pre-existing users table:\n{baseline}"
+            );
+            assert!(
+                baseline.contains("posts"),
+                "updated baseline must include the newly added posts table:\n{baseline}"
+            );
+
+            Ok(())
+        })
+        .await
+    }
 }

@@ -2,7 +2,8 @@ use crate::helpers::harness::with_test_db;
 use anyhow::Result;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::{
-    calculate_checksum, ensure_tracking_table_exists, record_baseline_as_applied, version_to_db,
+    calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
+    record_baseline_as_applied, record_migration_as_applied, version_to_db,
 };
 use sqlx::Row;
 
@@ -78,8 +79,124 @@ async fn test_ensure_tracking_table_migrates_legacy_schema() -> Result<()> {
         .await?;
         assert!(has_applied_by, "applied_by should be reconciled");
 
+        // The single-column PK is migrated to (version, is_baseline).
+        let pk_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT a.attname::text
+             FROM pg_index i
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+             WHERE i.indrelid = '\"public\".\"legacy_migrations\"'::regclass AND i.indisprimary
+             ORDER BY array_position(i.indkey, a.attnum)",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(
+            pk_columns,
+            vec!["version".to_string(), "is_baseline".to_string()],
+            "PK should be migrated to (version, is_baseline)"
+        );
+
         // Idempotent: a second call is a no-op and must not error.
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+
+        Ok(())
+    })
+    .await
+}
+
+/// The composite PK allows a migration row and a baseline row at the SAME
+/// version — a baseline generated alongside a migration (`migrate new
+/// --create-baseline`) covers it, and both must be trackable independently.
+#[tokio::test]
+async fn test_same_version_migration_and_baseline_rows() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "paired_migrations".to_string(),
+        };
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+
+        record_migration_as_applied(db.pool(), &tracking_table, 1234, "migration", "aaa").await?;
+        record_baseline_as_applied(db.pool(), &tracking_table, 1234, "baseline", "bbb").await?;
+
+        let rows: Vec<(i64, bool)> = sqlx::query_as(
+            "SELECT version, is_baseline FROM \"public\".\"paired_migrations\" ORDER BY is_baseline",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(rows, vec![(1234, false), (1234, true)]);
+
+        Ok(())
+    })
+    .await
+}
+
+/// A sections table created by an older pgmt version (no `is_baseline`, PK
+/// without it) must be migrated to the current shape idempotently, with
+/// existing rows backfilled to is_baseline = FALSE.
+#[tokio::test]
+async fn test_ensure_section_table_migrates_legacy_schema() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "legacy_sec_migrations".to_string(),
+        };
+
+        // Legacy sections shape: no is_baseline, two-column PK.
+        db.execute(
+            "CREATE TABLE \"public\".\"legacy_sec_migrations_sections\" (\
+                migration_version BIGINT NOT NULL, \
+                section_name TEXT NOT NULL, \
+                section_order INT NOT NULL, \
+                status TEXT NOT NULL, \
+                started_at TIMESTAMP WITH TIME ZONE, \
+                completed_at TIMESTAMP WITH TIME ZONE, \
+                attempts INT DEFAULT 0, \
+                last_error TEXT, \
+                rows_affected BIGINT, \
+                duration_ms BIGINT, \
+                PRIMARY KEY (migration_version, section_name))",
+        )
+        .await;
+        db.execute(
+            "INSERT INTO \"public\".\"legacy_sec_migrations_sections\" \
+             (migration_version, section_name, section_order, status) \
+             VALUES (1, 'default', 0, 'completed')",
+        )
+        .await;
+
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        // Existing row backfilled to FALSE, column NOT NULL.
+        let is_baseline: bool = sqlx::query_scalar(
+            "SELECT is_baseline FROM \"public\".\"legacy_sec_migrations_sections\" \
+             WHERE migration_version = 1",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(!is_baseline, "legacy section rows backfill to FALSE");
+
+        // PK migrated to (migration_version, is_baseline, section_name).
+        let pk_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT a.attname::text
+             FROM pg_index i
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+             WHERE i.indrelid = '\"public\".\"legacy_sec_migrations_sections\"'::regclass
+                   AND i.indisprimary
+             ORDER BY array_position(i.indkey, a.attnum)",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(
+            pk_columns,
+            vec![
+                "migration_version".to_string(),
+                "is_baseline".to_string(),
+                "section_name".to_string()
+            ]
+        );
+
+        // Idempotent second call.
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
 
         Ok(())
     })

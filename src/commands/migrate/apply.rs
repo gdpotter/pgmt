@@ -176,6 +176,7 @@ pub(crate) async fn apply_pending_migrations(
             pool,
             &config.migration.tracking_table,
             migration.version,
+            false,
             &sections,
         )
         .await?;
@@ -187,6 +188,7 @@ pub(crate) async fn apply_pending_migrations(
             config.migration.tracking_table.clone(),
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         // Execute each section

@@ -170,19 +170,24 @@ CREATE TABLE users (
 );"#;
         fs::write(&migration_path, invalid_migration_sql)?;
 
-        // Test the enhanced SQL executor for migrations
-        use pgmt::db::schema_executor::BaselineExecutor;
-        let executor = BaselineExecutor::new(shadow_db.pool().clone(), false, false);
-        let result = executor
-            .execute_baseline(invalid_migration_sql, "V001__test_migration.sql")
-            .await;
+        // Baselines run through the section executor; its errors carry the
+        // source file, the failing section, and rich SQL context.
+        let tracking_table = pgmt::config::types::TrackingTable::default();
+        let result = pgmt::migration::baseline::apply_baseline_to_target(
+            shadow_db.pool(),
+            &tracking_table,
+            1,
+            invalid_migration_sql,
+            "V001__test_migration.sql",
+        )
+        .await;
 
         assert!(
             result.is_err(),
             "Migration execution should fail with syntax error"
         );
 
-        let error_message = result.unwrap_err().to_string();
+        let error_message = format!("{:#}", result.unwrap_err());
 
         // Verify the error message contains enhanced information
         assert!(
@@ -196,7 +201,7 @@ CREATE TABLE users (
             error_message
         );
         assert!(
-            error_message.contains("🐘 Database Error:"),
+            error_message.contains("SQL error"),
             "Should include PostgreSQL error details. Error: {}",
             error_message
         );

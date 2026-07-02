@@ -80,6 +80,10 @@ pub fn format_tracking_table_name(tracking_table: &TrackingTable) -> Result<Stri
 /// callers (apply, status, provision, init, …) must route through here rather
 /// than defining their own `CREATE TABLE`, so the schema can't drift between
 /// commands.
+///
+/// The primary key is `(version, is_baseline)`: one version can host both a
+/// migration row and a baseline row (a baseline generated alongside a
+/// migration covers it), and they are tracked independently.
 pub async fn ensure_tracking_table_exists(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -89,12 +93,13 @@ pub async fn ensure_tracking_table_exists(
     sqlx::query(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS {} (
-            version BIGINT PRIMARY KEY,
+            version BIGINT NOT NULL,
             description TEXT NOT NULL,
             applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             checksum TEXT NOT NULL,
             applied_by TEXT DEFAULT CURRENT_USER,
-            is_baseline BOOLEAN NOT NULL
+            is_baseline BOOLEAN NOT NULL,
+            PRIMARY KEY (version, is_baseline)
         )
         "#,
         tracking_table_name
@@ -104,6 +109,78 @@ pub async fn ensure_tracking_table_exists(
     .with_context(|| format!("Failed to create tracking table {}", tracking_table_name))?;
 
     migrate_tracking_table_schema(pool, tracking_table, &tracking_table_name).await?;
+
+    Ok(())
+}
+
+/// Columns of a table's primary key, in index order. Empty if the table has
+/// no primary key. `qualified_name` must be a safely-quoted qualified name
+/// (from `format_tracking_table_name` or equivalent).
+pub(crate) async fn primary_key_columns(
+    pool: &PgPool,
+    qualified_name: &str,
+) -> Result<Vec<String>> {
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT a.attname::text
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid
+              AND a.attnum = ANY(i.indkey)
+         WHERE i.indrelid = $1::regclass AND i.indisprimary
+         ORDER BY array_position(i.indkey, a.attnum)",
+    )
+    .bind(qualified_name)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("Failed to inspect primary key of {}", qualified_name))?;
+    Ok(columns)
+}
+
+/// Replace a table's primary key with `PRIMARY KEY (columns…)` if its current
+/// PK differs. Used by the "migrate the migrator" steps: pgmt's own tracking
+/// tables gained `is_baseline` in their keys, and older deployments must be
+/// brought up to shape in one transaction.
+pub(crate) async fn ensure_primary_key(
+    pool: &PgPool,
+    qualified_name: &str,
+    expected_columns: &[&str],
+) -> Result<()> {
+    let current = primary_key_columns(pool, qualified_name).await?;
+    if current == expected_columns {
+        return Ok(());
+    }
+
+    let pk_name: Option<String> = sqlx::query_scalar(
+        "SELECT conname::text FROM pg_constraint
+         WHERE conrelid = $1::regclass AND contype = 'p'",
+    )
+    .bind(qualified_name)
+    .fetch_optional(pool)
+    .await?;
+
+    let mut tx = pool.begin().await?;
+    if let Some(pk_name) = pk_name {
+        sqlx::query(&format!(
+            r#"ALTER TABLE {} DROP CONSTRAINT "{}""#,
+            qualified_name,
+            pk_name.replace('"', "")
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(&format!(
+        "ALTER TABLE {} ADD PRIMARY KEY ({})",
+        qualified_name,
+        expected_columns.join(", ")
+    ))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await.with_context(|| {
+        format!(
+            "Failed to migrate primary key of {} to ({})",
+            qualified_name,
+            expected_columns.join(", ")
+        )
+    })?;
 
     Ok(())
 }
@@ -172,6 +249,11 @@ async fn migrate_tracking_table_schema(
             .await
             .with_context(|| format!("Failed to add is_baseline to {}", tracking_table_name))?;
     }
+
+    // The PK grew from (version) to (version, is_baseline) so a migration and
+    // a baseline can coexist at one version. Runs after the is_baseline column
+    // is guaranteed present and NOT NULL.
+    ensure_primary_key(pool, tracking_table_name, &["version", "is_baseline"]).await?;
 
     Ok(())
 }

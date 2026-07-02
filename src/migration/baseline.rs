@@ -7,12 +7,13 @@ use crate::catalog::Catalog;
 use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
+use crate::config::types::TrackingTable;
 use crate::db::cleaner;
-use crate::db::schema_executor::BaselineExecutor;
 use crate::migration::{
     ParsedMigration, discover_migrations, find_baseline_for_version, find_latest_baseline,
     parse_migration_sections, validate_sections,
 };
+use crate::migration_tracking::{ensure_section_tracking_table, initialize_sections};
 use crate::progress::SectionReporter;
 use crate::validation::validate_baseline_consistency;
 
@@ -41,6 +42,22 @@ async fn load_managed_catalog(shadow_pool: &PgPool, config: &Config) -> Result<C
     Catalog::load_managed(shadow_pool, &filter).await
 }
 
+/// Parse baseline SQL into its sections.
+///
+/// Baselines use the same `-- pgmt:section` header syntax as migrations; a
+/// header-less baseline parses as one "default" transactional section, which
+/// preserves the historical all-or-nothing apply for existing baselines.
+fn parse_baseline_sections(
+    baseline_sql: &str,
+    source: &str,
+) -> Result<Vec<crate::migration::section_parser::MigrationSection>> {
+    let sections = parse_migration_sections(Path::new(source), baseline_sql)
+        .with_context(|| format!("Failed to parse baseline sections ({})", source))?;
+    validate_sections(&sections)
+        .with_context(|| format!("Invalid section configuration in baseline ({})", source))?;
+    Ok(sections)
+}
+
 /// Load a baseline SQL file into a shadow database and return the resulting catalog
 pub async fn load_baseline_into_shadow(
     shadow_pool: &PgPool,
@@ -55,17 +72,31 @@ pub async fn load_baseline_into_shadow(
 
     let baseline_sql = std::fs::read_to_string(baseline_path)
         .with_context(|| format!("Failed to read baseline file: {}", baseline_path.display()))?;
-
-    let executor = BaselineExecutor::new(shadow_pool.clone(), false, false);
     let source = baseline_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown_baseline.sql");
 
-    executor
-        .execute_baseline(&baseline_sql, source)
-        .await
-        .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
+    // Replay section-by-section so each section runs with its declared
+    // transaction mode (validation mode: no tracking, no retries). The version
+    // is only used for tracking, which validation mode never touches.
+    let sections = parse_baseline_sections(&baseline_sql, source)?;
+    let reporter = SectionReporter::new(sections.len(), false);
+    let mut executor = SectionExecutor::new(
+        shadow_pool.clone(),
+        config.migration.tracking_table.clone(),
+        reporter,
+        ExecutionMode::Validation,
+        true,
+    );
+    for section in &sections {
+        executor
+            .execute_section(0, section)
+            .await
+            .with_context(|| {
+                format!("Failed to apply baseline SQL: {}", baseline_path.display())
+            })?;
+    }
 
     load_managed_catalog(shadow_pool, config).await
 }
@@ -74,20 +105,47 @@ pub async fn load_baseline_into_shadow(
 ///
 /// Unlike [`load_baseline_into_shadow`], this does NOT clean the database or
 /// apply the roles file: the target is a real, long-lived database whose roles
-/// are managed externally — the same contract as `migrate apply`'s grants. The
-/// baseline runs via the simple query protocol as a single implicit
-/// transaction, so a partial failure rolls back cleanly and a re-run starts
-/// from nothing.
+/// are managed externally — the same contract as `migrate apply`'s grants.
+///
+/// The baseline executes section-by-section through the same machinery as
+/// migrations, with section rows recorded under `is_baseline = TRUE`. A
+/// header-less baseline is a single transactional "default" section — the
+/// whole file applies atomically, exactly as before sections existed. A
+/// multi-section baseline gets per-section atomicity with resume: a re-run
+/// skips sections already recorded Completed.
 pub async fn apply_baseline_to_target(
     pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
     baseline_sql: &str,
     source: &str,
 ) -> Result<()> {
-    let executor = BaselineExecutor::new(pool.clone(), false, false);
-    executor
-        .execute_baseline(baseline_sql, source)
-        .await
-        .with_context(|| format!("Failed to apply baseline to target ({})", source))
+    let sections = parse_baseline_sections(baseline_sql, source)?;
+
+    ensure_section_tracking_table(pool, tracking_table).await?;
+    initialize_sections(pool, tracking_table, version, true, &sections).await?;
+
+    let reporter = SectionReporter::new(sections.len(), false);
+    let mut executor = SectionExecutor::new(
+        pool.clone(),
+        tracking_table.clone(),
+        reporter,
+        ExecutionMode::Production,
+        true,
+    );
+    for section in &sections {
+        executor
+            .execute_section(version, section)
+            .await
+            .with_context(|| {
+                format!(
+                    "Baseline {} failed at section '{}' ({})",
+                    version, section.name, source
+                )
+            })?;
+    }
+
+    Ok(())
 }
 
 /// Replay migration files onto a shadow database, in order.
@@ -127,6 +185,7 @@ async fn replay_migrations(
             config.migration.tracking_table.clone(),
             reporter,
             ExecutionMode::Validation,
+            false,
         );
 
         for section in &sections {

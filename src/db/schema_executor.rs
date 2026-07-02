@@ -45,9 +45,8 @@ pub enum ProgressStyle {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceContextStyle {
-    File,     // Display as file context
-    Step,     // Display as step context
-    Baseline, // Display as baseline context
+    File, // Display as file context
+    Step, // Display as step context
     #[allow(dead_code)]
     Custom(String), // Custom context label
 }
@@ -93,7 +92,6 @@ impl SqlExecutionError {
         let context_label = match context_style {
             SourceContextStyle::File => "schema file",
             SourceContextStyle::Step => "migration step",
-            SourceContextStyle::Baseline => "baseline",
             SourceContextStyle::Custom(label) => label,
         };
 
@@ -303,11 +301,6 @@ impl SqlContentExecutor {
             .await
     }
 
-    /// Execute baseline SQL with appropriate context
-    pub async fn execute_baseline(&self, baseline_sql: &str, source: &str) -> Result<()> {
-        self.execute_content(baseline_sql, source).await
-    }
-
     /// Execute a migration step with safety indicators and step context
     pub async fn execute_step(
         &self,
@@ -470,41 +463,6 @@ impl SchemaFileExecutor {
     /// Execute a single schema file
     pub async fn execute_schema_file(&self, file: &SchemaFile) -> Result<()> {
         self.inner.execute_schema_file(file).await
-    }
-}
-
-/// Specialized executor for baseline files with enhanced progress reporting
-pub struct BaselineExecutor {
-    inner: SqlContentExecutor,
-}
-
-impl BaselineExecutor {
-    pub fn new(pool: PgPool, verbose: bool, force: bool) -> Self {
-        let config = SqlExecutorConfig {
-            error_level: if force {
-                ErrorLevel::Enhanced
-            } else {
-                ErrorLevel::WithTips
-            },
-            progress_style: if verbose {
-                ProgressStyle::Detailed
-            } else {
-                ProgressStyle::None
-            },
-            content_truncation: 300,
-            source_context: SourceContextStyle::Baseline,
-            safety_indicators: false,
-            continue_on_error: force,
-        };
-
-        Self {
-            inner: SqlContentExecutor::new(pool, config),
-        }
-    }
-
-    /// Execute baseline SQL with enhanced reporting
-    pub async fn execute_baseline(&self, baseline_sql: &str, source: &str) -> Result<()> {
-        self.inner.execute_baseline(baseline_sql, source).await
     }
 }
 

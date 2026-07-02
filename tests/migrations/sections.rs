@@ -35,7 +35,7 @@ ALTER TABLE users ADD COLUMN email TEXT;
         // Setup section tracking
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
 
         // Execute sections
         let reporter = SectionReporter::new(sections.len(), false);
@@ -44,6 +44,7 @@ ALTER TABLE users ADD COLUMN email TEXT;
             tracking_table.clone(),
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         executor.execute_section(1, &sections[0]).await?;
@@ -61,7 +62,7 @@ ALTER TABLE users ADD COLUMN email TEXT;
         assert!(column_exists, "Email column should exist");
 
         // Verify section status was recorded
-        let status = get_section_status(db.pool(), &tracking_table, 1, "add_email").await?;
+        let status = get_section_status(db.pool(), &tracking_table, 1, false, "add_email").await?;
         assert_eq!(status, Some(SectionStatus::Completed));
 
         Ok(())
@@ -85,7 +86,7 @@ async fn test_legacy_migration_compatibility() -> Result<()> {
         // Setup and execute
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(
@@ -93,6 +94,7 @@ async fn test_legacy_migration_compatibility() -> Result<()> {
             tracking_table,
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         executor.execute_section(1, &sections[0]).await?;
@@ -136,7 +138,7 @@ ALTER TABLE inventory ADD COLUMN location TEXT;
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
 
         // Execute only first section
         let reporter = SectionReporter::new(sections.len(), false);
@@ -145,12 +147,13 @@ ALTER TABLE inventory ADD COLUMN location TEXT;
             tracking_table.clone(),
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         executor.execute_section(1, &sections[0]).await?;
 
         // Verify first section completed
-        let status1 = get_section_status(db.pool(), &tracking_table, 1, "section1").await?;
+        let status1 = get_section_status(db.pool(), &tracking_table, 1, false, "section1").await?;
         assert_eq!(status1, Some(SectionStatus::Completed));
 
         // Now execute both sections - first should be skipped
@@ -160,6 +163,7 @@ ALTER TABLE inventory ADD COLUMN location TEXT;
             tracking_table.clone(),
             reporter2,
             ExecutionMode::Production,
+            false,
         );
 
         // Section1 already completed — should be skipped
@@ -219,7 +223,7 @@ CREATE INDEX CONCURRENTLY idx_customers_email ON customers(email);
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(
@@ -227,6 +231,7 @@ CREATE INDEX CONCURRENTLY idx_customers_email ON customers(email);
             tracking_table,
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         executor.execute_section(1, &sections[0]).await?;
@@ -275,7 +280,7 @@ CREATE INDEX CONCURRENTLY idx_items_name ON items(name);
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(
@@ -283,6 +288,7 @@ CREATE INDEX CONCURRENTLY idx_items_name ON items(name);
             tracking_table,
             reporter,
             ExecutionMode::Production,
+            false,
         );
 
         // Execute all sections

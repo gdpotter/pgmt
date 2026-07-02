@@ -26,6 +26,7 @@ pub mod apply_crash_states;
 pub mod apply_locking;
 pub mod baseline_commands;
 pub mod baseline_extension_ordering;
+pub mod baseline_sections;
 pub mod basic_interactive;
 pub mod connection_precedence;
 pub mod debug_commands;

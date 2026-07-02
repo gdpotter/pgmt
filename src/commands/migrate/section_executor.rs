@@ -84,6 +84,10 @@ pub struct SectionExecutor {
     tracking_table: TrackingTable,
     reporter: SectionReporter,
     mode: ExecutionMode,
+    /// Whether the sections being executed belong to a baseline (true) or a
+    /// migration (false) — part of the section tracking key, since one version
+    /// can host both.
+    is_baseline: bool,
 }
 
 impl SectionExecutor {
@@ -92,12 +96,14 @@ impl SectionExecutor {
         tracking_table: TrackingTable,
         reporter: SectionReporter,
         mode: ExecutionMode,
+        is_baseline: bool,
     ) -> Self {
         Self {
             pool,
             tracking_table,
             reporter,
             mode,
+            is_baseline,
         }
     }
 
@@ -117,6 +123,7 @@ impl SectionExecutor {
             &self.pool,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
         )
         .await?
@@ -163,6 +170,7 @@ impl SectionExecutor {
             &self.pool,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
         )
         .await?;
@@ -193,6 +201,7 @@ impl SectionExecutor {
                     &self.pool,
                     &self.tracking_table,
                     migration_version,
+                    self.is_baseline,
                     &section.name,
                     &e.to_string(),
                 )
@@ -213,6 +222,7 @@ impl SectionExecutor {
             &mut *tx,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
             Some(rows),
             duration.as_millis() as i64,
@@ -248,6 +258,7 @@ impl SectionExecutor {
             &self.pool,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
         )
         .await?;
@@ -280,6 +291,7 @@ impl SectionExecutor {
                         &self.pool,
                         &self.tracking_table,
                         migration_version,
+                        self.is_baseline,
                         &section.name,
                         Some(rows),
                         duration.as_millis() as i64,
@@ -325,6 +337,7 @@ impl SectionExecutor {
                             &self.pool,
                             &self.tracking_table,
                             migration_version,
+                            self.is_baseline,
                             &section.name,
                             &recorded_error,
                         )
@@ -357,6 +370,7 @@ impl SectionExecutor {
             &self.pool,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
         )
         .await?;
@@ -386,6 +400,7 @@ impl SectionExecutor {
             &self.pool,
             &self.tracking_table,
             migration_version,
+            self.is_baseline,
             &section.name,
             Some(rows),
             duration.as_millis() as i64,

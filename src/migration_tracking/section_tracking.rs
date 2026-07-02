@@ -45,7 +45,13 @@ impl FromStr for SectionStatus {
     }
 }
 
-/// Ensure the section tracking table exists
+/// Ensure the section tracking table exists (and migrate older tables to the
+/// current shape).
+///
+/// Sections are keyed by `(migration_version, is_baseline, section_name)`:
+/// baselines execute through the same section machinery as migrations, and a
+/// version can host both (a baseline generated alongside a migration), so
+/// their section rows must not collide.
 pub async fn ensure_section_tracking_table(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -56,6 +62,7 @@ pub async fn ensure_section_tracking_table(
         r#"
         CREATE TABLE IF NOT EXISTS {} (
             migration_version BIGINT NOT NULL,
+            is_baseline BOOLEAN NOT NULL,
             section_name TEXT NOT NULL,
             section_order INT NOT NULL,
             status TEXT NOT NULL,
@@ -65,7 +72,7 @@ pub async fn ensure_section_tracking_table(
             last_error TEXT,
             rows_affected BIGINT,
             duration_ms BIGINT,
-            PRIMARY KEY (migration_version, section_name)
+            PRIMARY KEY (migration_version, is_baseline, section_name)
         )
         "#,
         sections_table
@@ -73,6 +80,8 @@ pub async fn ensure_section_tracking_table(
     .execute(pool)
     .await
     .context("Failed to create section tracking table")?;
+
+    migrate_section_table_schema(pool, &sections_table).await?;
 
     // Create index for querying by status
     sqlx::query(&format!(
@@ -87,23 +96,76 @@ pub async fn ensure_section_tracking_table(
     Ok(())
 }
 
-/// Initialize sections for a migration
+/// "Migrate the migrator" for the sections table: older tables lack
+/// `is_baseline` (every existing row is a migration section — backfill FALSE,
+/// no column DEFAULT) and key sections by `(migration_version, section_name)`.
+async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Result<()> {
+    let has_is_baseline: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM pg_attribute
+             WHERE attrelid = $1::regclass AND attname = 'is_baseline' AND NOT attisdropped
+         )",
+    )
+    .bind(sections_table)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("Failed to inspect columns of {}", sections_table))?;
+
+    if !has_is_baseline {
+        let mut tx = pool.begin().await?;
+        sqlx::query(&format!(
+            "ALTER TABLE {} ADD COLUMN is_baseline BOOLEAN",
+            sections_table
+        ))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "UPDATE {} SET is_baseline = FALSE",
+            sections_table
+        ))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
+            sections_table
+        ))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit()
+            .await
+            .with_context(|| format!("Failed to add is_baseline to {}", sections_table))?;
+    }
+
+    crate::migration_tracking::ensure_primary_key(
+        pool,
+        sections_table,
+        &["migration_version", "is_baseline", "section_name"],
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Initialize sections for a migration or baseline (idempotent: rows already
+/// present — e.g. on a resumed run — are left untouched).
 pub async fn initialize_sections(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     migration_version: u64,
+    is_baseline: bool,
     sections: &[MigrationSection],
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
     for (order, section) in sections.iter().enumerate() {
         sqlx::query(&format!(
-            "INSERT INTO {} (migration_version, section_name, section_order, status, attempts)
-             VALUES ($1, $2, $3, $4, 0)
-             ON CONFLICT (migration_version, section_name) DO NOTHING",
+            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
+             VALUES ($1, $2, $3, $4, $5, 0)
+             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
             sections_table
         ))
         .bind(migration_version as i64)
+        .bind(is_baseline)
         .bind(&section.name)
         .bind(order as i32)
         .bind(SectionStatus::Pending.as_str())
@@ -119,15 +181,17 @@ pub async fn get_section_status(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     migration_version: u64,
+    is_baseline: bool,
     section_name: &str,
 ) -> Result<Option<SectionStatus>> {
     let sections_table = format_sections_table_name(tracking_table);
 
     let row: Option<(String,)> = sqlx::query_as(&format!(
-        "SELECT status FROM {} WHERE migration_version = $1 AND section_name = $2",
+        "SELECT status FROM {} WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
         sections_table
     ))
     .bind(migration_version as i64)
+    .bind(is_baseline)
     .bind(section_name)
     .fetch_optional(pool)
     .await?;
@@ -141,6 +205,7 @@ pub async fn record_section_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     migration_version: u64,
+    is_baseline: bool,
     section_name: &str,
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
@@ -148,11 +213,12 @@ pub async fn record_section_start(
     sqlx::query(&format!(
         "UPDATE {}
          SET status = $1, started_at = NOW(), attempts = attempts + 1
-         WHERE migration_version = $2 AND section_name = $3",
+         WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4",
         sections_table
     ))
     .bind(SectionStatus::Running.as_str())
     .bind(migration_version as i64)
+    .bind(is_baseline)
     .bind(section_name)
     .execute(pool)
     .await?;
@@ -171,6 +237,7 @@ pub async fn record_section_complete<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     tracking_table: &TrackingTable,
     migration_version: u64,
+    is_baseline: bool,
     section_name: &str,
     rows_affected: Option<i64>,
     duration_ms: i64,
@@ -180,13 +247,14 @@ pub async fn record_section_complete<'e>(
     sqlx::query(&format!(
         "UPDATE {}
          SET status = $1, completed_at = NOW(), rows_affected = $2, duration_ms = $3
-         WHERE migration_version = $4 AND section_name = $5",
+         WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
         sections_table
     ))
     .bind(SectionStatus::Completed.as_str())
     .bind(rows_affected)
     .bind(duration_ms)
     .bind(migration_version as i64)
+    .bind(is_baseline)
     .bind(section_name)
     .execute(executor)
     .await?;
@@ -199,6 +267,7 @@ pub async fn record_section_failed(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     migration_version: u64,
+    is_baseline: bool,
     section_name: &str,
     error: &str,
 ) -> Result<()> {
@@ -207,12 +276,13 @@ pub async fn record_section_failed(
     sqlx::query(&format!(
         "UPDATE {}
          SET status = $1, last_error = $2
-         WHERE migration_version = $3 AND section_name = $4",
+         WHERE migration_version = $3 AND is_baseline = $4 AND section_name = $5",
         sections_table
     ))
     .bind(SectionStatus::Failed.as_str())
     .bind(error)
     .bind(migration_version as i64)
+    .bind(is_baseline)
     .bind(section_name)
     .execute(pool)
     .await?;

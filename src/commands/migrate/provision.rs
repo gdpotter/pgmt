@@ -94,7 +94,14 @@ async fn provision_inner(
             }
 
             println!("Applying baseline {}...", baseline.version);
-            apply_baseline_to_target(pool, &baseline_sql, source).await?;
+            apply_baseline_to_target(
+                pool,
+                &config.migration.tracking_table,
+                baseline.version,
+                &baseline_sql,
+                source,
+            )
+            .await?;
             record_baseline_as_applied(
                 pool,
                 &config.migration.tracking_table,

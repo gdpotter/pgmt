@@ -370,8 +370,11 @@ async fn test_complex_schema_changes_after_baseline() -> Result<()> {
 async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
     with_test_db(async |db| {
         let baseline_sql = "CREATE TABLE accounts (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
+        let tracking_table = pgmt::config::types::TrackingTable::default();
         pgmt::migration::baseline::apply_baseline_to_target(
             db.pool(),
+            &tracking_table,
+            1,
             baseline_sql,
             "baseline_1.sql",
         )
@@ -396,10 +399,18 @@ async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
 async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
     with_test_db(async |db| {
         // The second statement fails (duplicate table); the first must roll back.
+        // A header-less baseline is a single transactional "default" section,
+        // so the whole file still applies atomically.
         let baseline_sql = "CREATE TABLE good (id INT); CREATE TABLE good (id INT);";
-        let result =
-            pgmt::migration::baseline::apply_baseline_to_target(db.pool(), baseline_sql, "bad.sql")
-                .await;
+        let tracking_table = pgmt::config::types::TrackingTable::default();
+        let result = pgmt::migration::baseline::apply_baseline_to_target(
+            db.pool(),
+            &tracking_table,
+            1,
+            baseline_sql,
+            "bad.sql",
+        )
+        .await;
         assert!(result.is_err(), "duplicate table should fail the baseline");
 
         let exists: bool = sqlx::query_scalar(
