@@ -1,4 +1,5 @@
 use crate::catalog::Catalog;
+use crate::catalog::file_dependencies::FileToObjectMapping;
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
@@ -67,7 +68,7 @@ pub async fn build_desired_state(
     shadow_pool: &PgPool,
 ) -> Result<Catalog> {
     clean_shadow_for_schema(config, root_dir, shadow_pool).await?;
-    let catalog = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
+    let (catalog, _) = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
     Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
 }
 
@@ -86,7 +87,7 @@ pub async fn build_desired_state_with_base(
     // shadow that's the pristine image substrate; for a clean-mode shadow it's
     // the post-clean state. Loaded unfiltered so substrate cancels in the diff.
     let base = Catalog::load_unfiltered(shadow_pool).await?;
-    let desired = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
+    let (desired, _) = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
     Ok((base, desired))
 }
 
@@ -108,13 +109,14 @@ async fn clean_shadow_for_schema(
     Ok(())
 }
 
-/// Apply the schema files to an already-cleaned shadow and return the resulting
-/// **unfiltered** catalog (callers apply the managed-universe filter if needed).
+/// Apply the schema files to an already-cleaned shadow and return the
+/// resulting **unfiltered** catalog plus the file→object mapping (callers
+/// apply the managed-universe filter if needed).
 async fn apply_schema_files_to_shadow(
     config: &Config,
     root_dir: &Path,
     shadow_pool: &PgPool,
-) -> Result<Catalog> {
+) -> Result<(Catalog, FileToObjectMapping)> {
     let schema_dir = root_dir.join(&config.directories.schema);
 
     let processor_config = SchemaProcessorConfig {
@@ -139,6 +141,7 @@ async fn apply_schema_files_to_shadow(
             )
         })?;
 
+    let file_mapping = processed_schema.file_mapping.clone();
     let catalog = if config.schema.augment_dependencies_from_files {
         processed_schema.with_file_dependencies_applied()
     } else {
@@ -149,7 +152,7 @@ async fn apply_schema_files_to_shadow(
     validate_schema_applied(shadow_pool).await?;
     info!("✅ Schema validation completed");
 
-    Ok(catalog)
+    Ok((catalog, file_mapping))
 }
 
 /// Connect to the given shadow database, build the desired state on it,
@@ -184,6 +187,25 @@ pub async fn apply_current_schema_to_shadow_with_base(
 
     crate::db::branch::drop_branch(shadow_pool).await?;
     Ok(pair)
+}
+
+/// Like [`apply_current_schema_to_shadow`], but also returns the file→object
+/// mapping so module-aware generation can attribute desired-state objects to
+/// their owning modules. Identical shadow work — the mapping is computed by
+/// the schema processor either way.
+pub async fn apply_current_schema_to_shadow_with_mapping(
+    config: &Config,
+    root_dir: &Path,
+    shadow: &crate::config::ShadowDatabase,
+) -> Result<(Catalog, FileToObjectMapping)> {
+    let shadow_pool = shadow.connect_fresh().await?;
+
+    clean_shadow_for_schema(config, root_dir, &shadow_pool).await?;
+    let (catalog, mapping) = apply_schema_files_to_shadow(config, root_dir, &shadow_pool).await?;
+    let managed = ObjectFilter::from_config(config).filter_catalog(catalog);
+
+    crate::db::branch::drop_branch(shadow_pool).await?;
+    Ok((managed, mapping))
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

@@ -22,6 +22,18 @@ pub async fn cmd_migrate_baseline(
     dry_run: bool,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
+    // A header-less baseline attributes everything to the unmoduled base on
+    // replay, which would erase the project's module ownership and force a
+    // mass re-anchor on the next `migrate new`. Refuse until this command
+    // learns to emit module-tagged sections.
+    if config.modules.is_enabled() {
+        anyhow::bail!(
+            "`migrate baseline` is not yet module-aware; on a module project use \
+             `pgmt migrate new <description> --create-baseline`, which emits a \
+             module-sectioned baseline alongside the migration"
+        );
+    }
+
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
 

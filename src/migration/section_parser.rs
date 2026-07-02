@@ -26,6 +26,15 @@ pub struct MigrationSection {
     /// The SQL to execute for this section
     pub sql: String,
 
+    /// Owning module (modules feature). `None` = the unmoduled base — also
+    /// what every pre-modules migration parses as.
+    pub module: Option<String>,
+
+    /// Prior owners of this section's objects (re-anchoring baselines only):
+    /// module names, or "(unmoduled)" for the base. Establishment derivation
+    /// reads these; ordinary migrations never carry them.
+    pub remaps: Vec<String>,
+
     /// Line number where this section starts (for error reporting)
     pub start_line: usize,
 }
@@ -145,6 +154,8 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
             lock_timeout: None,
             retry_config: None,
             sql: sql.to_string(),
+            module: None,
+            remaps: Vec::new(),
             start_line: 1,
         });
     }
@@ -169,6 +180,10 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
             "retry_backoff" => builder.retry_backoff = Some(parse_backoff(&value)?),
             "on_lock_timeout" => builder.on_lock_timeout = Some(parse_lock_action(&value)?),
             "lock_timeout" => builder.lock_timeout = Some(parse_duration(&value)?),
+            "module" => builder.module = Some(value),
+            "remaps" => {
+                builder.remaps = Some(value.split(',').map(|s| s.trim().to_string()).collect())
+            }
             _ => {
                 return Err(anyhow!(
                     "Unknown section attribute '{}' at line {}",
@@ -330,6 +345,8 @@ struct SectionBuilder {
     retry_delay: Option<Duration>,
     retry_backoff: Option<BackoffStrategy>,
     on_lock_timeout: Option<LockTimeoutAction>,
+    module: Option<String>,
+    remaps: Option<Vec<String>>,
 }
 
 impl SectionBuilder {
@@ -345,6 +362,8 @@ impl SectionBuilder {
             retry_delay: None,
             retry_backoff: None,
             on_lock_timeout: None,
+            module: None,
+            remaps: None,
         }
     }
 
@@ -379,6 +398,8 @@ impl SectionBuilder {
         Ok(MigrationSection {
             name,
             description: self.description,
+            module: self.module,
+            remaps: self.remaps.unwrap_or_default(),
             mode,
             timeout,
             lock_timeout: self.lock_timeout,

@@ -7,6 +7,10 @@ use crate::migration::{
     get_migration_update_starting_state, should_manage_baseline_for_migration,
     validate_baseline_against_catalog,
 };
+use crate::modules::{
+    HistoricalAttribution, evaluate_module_generation, sectioned_migration_sql,
+    write_sectioned_baseline,
+};
 use anyhow::{Result, anyhow};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,6 +56,8 @@ pub async fn cmd_migrate_update_with_options(
     // the shadow and `clean_shadow_db` is a no-op on branches, so a shared
     // branch would make the schema-file apply collide. See `migrate new`.
     let starting_pool = shadow.connect_fresh().await?;
+    let mut historical = HistoricalAttribution::default();
+    let attribution = config.modules.is_enabled().then_some(&mut historical);
     let old_catalog = get_migration_update_starting_state(
         &starting_pool,
         &baselines_dir,
@@ -60,14 +66,16 @@ pub async fn cmd_migrate_update_with_options(
         &roles_file,
         &baseline_config,
         config,
+        attribution,
     )
     .await?;
     crate::db::branch::drop_branch(starting_pool).await?;
 
     // Step 2: Reset shadow database and apply current schema
     debug!("Applying current schema to shadow database");
-    let new_catalog =
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
+    let (new_catalog, file_mapping) =
+        crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
+            .await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -79,12 +87,32 @@ pub async fn cmd_migrate_update_with_options(
     // Step 3: Generate migration using pure logic
     debug!("Generating updated migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog,
+        old_catalog: old_catalog.clone(),
         new_catalog: new_catalog.clone(),
         description: latest_migration.description.clone(), // We keep the original description
         version: latest_migration.version,
         filename_prefix: config.migration.filename_prefix.clone(),
     })?;
+
+    // Whether a paired baseline will be (re)generated below — that baseline is
+    // also what a partition re-anchor requires.
+    let baseline_filename = generate_baseline_filename(latest_migration.version);
+    let baseline_path = baselines_dir.join(&baseline_filename);
+    let should_update_baseline = should_manage_baseline_for_migration(
+        config,
+        &baseline_path,
+        config.migration.create_baselines_by_default,
+    );
+
+    let module_gen = evaluate_module_generation(
+        config,
+        &old_catalog,
+        &new_catalog,
+        &file_mapping,
+        &historical,
+        should_update_baseline,
+    )?;
+    let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 
     if !migration_result.has_changes {
         println!("No changes detected - updating migration to be empty");
@@ -97,22 +125,29 @@ pub async fn cmd_migrate_update_with_options(
             latest_migration.path.display()
         );
 
-        return Ok(());
+        if !partition_diverged {
+            return Ok(());
+        }
+        // Pure re-tag: fall through so the re-anchoring baseline regenerates.
+    } else {
+        // Step 4: Update migration file (module projects write module-tagged
+        // sections; everything else the plain form).
+        let migration_sql = match &module_gen {
+            Some(module_gen) => sectioned_migration_sql(
+                &migration_result.steps,
+                &old_catalog,
+                &new_catalog,
+                &module_gen.partition,
+                &file_mapping,
+                &historical,
+            )?,
+            None => migration_result.migration_sql.clone(),
+        };
+        std::fs::write(&latest_migration.path, &migration_sql)?;
+        println!("Updated migration: {}", latest_migration.path.display());
     }
 
-    // Step 4: Update migration file
-    std::fs::write(&latest_migration.path, &migration_result.migration_sql)?;
-    println!("Updated migration: {}", latest_migration.path.display());
-
     // Step 5: Optionally update the corresponding baseline
-    let baseline_filename = generate_baseline_filename(latest_migration.version);
-    let baseline_path = baselines_dir.join(&baseline_filename);
-    let should_update_baseline = should_manage_baseline_for_migration(
-        config,
-        &baseline_path,
-        config.migration.create_baselines_by_default,
-    );
-
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -123,6 +158,16 @@ pub async fn cmd_migrate_update_with_options(
             verbose: baseline_config.verbose,
         })
         .await?;
+        if let Some(module_gen) = &module_gen {
+            write_sectioned_baseline(
+                &result.path,
+                &result.steps,
+                &new_catalog,
+                &module_gen.partition,
+                &file_mapping,
+                &historical,
+            )?;
+        }
         println!("Updated baseline: {}", result.path.display());
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
@@ -219,6 +264,8 @@ pub async fn cmd_migrate_update_specific(
     // Fresh branch per pristine-start phase (see `migrate new`): the replay
     // dirties the shadow and branch cleans are no-ops, so reuse would collide.
     let starting_pool = shadow.connect_fresh().await?;
+    let mut historical = HistoricalAttribution::default();
+    let attribution = config.modules.is_enabled().then_some(&mut historical);
     let old_catalog = get_migration_update_starting_state(
         &starting_pool,
         &baselines_dir,
@@ -227,14 +274,16 @@ pub async fn cmd_migrate_update_specific(
         &roles_file,
         &baseline_config,
         config,
+        attribution,
     )
     .await?;
     crate::db::branch::drop_branch(starting_pool).await?;
 
     // Apply current schema to shadow database
     debug!("Applying current schema to shadow database");
-    let new_catalog =
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
+    let (new_catalog, file_mapping) =
+        crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
+            .await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -262,12 +311,45 @@ pub async fn cmd_migrate_update_specific(
     // Generate migration content
     debug!("Generating updated migration steps");
     let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog,
+        old_catalog: old_catalog.clone(),
         new_catalog: new_catalog.clone(),
         description: new_description.clone(),
         version: new_version,
         filename_prefix: config.migration.filename_prefix.clone(),
     })?;
+
+    // Whether a paired baseline will be (re)generated below — required for a
+    // partition re-anchor.
+    let baseline_filename = generate_baseline_filename(new_version);
+    let baseline_path = baselines_dir.join(&baseline_filename);
+    let should_update_baseline = should_manage_baseline_for_migration(
+        config,
+        &baseline_path,
+        config.migration.create_baselines_by_default,
+    );
+
+    let module_gen = evaluate_module_generation(
+        config,
+        &old_catalog,
+        &new_catalog,
+        &file_mapping,
+        &historical,
+        should_update_baseline,
+    )?;
+    let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
+
+    // Module projects render module-tagged sections.
+    let migration_sql = match &module_gen {
+        Some(module_gen) if migration_result.has_changes => sectioned_migration_sql(
+            &migration_result.steps,
+            &old_catalog,
+            &new_catalog,
+            &module_gen.partition,
+            &file_mapping,
+            &historical,
+        )?,
+        _ => migration_result.migration_sql.clone(),
+    };
 
     if !migration_result.has_changes {
         if is_latest {
@@ -315,11 +397,14 @@ pub async fn cmd_migrate_update_specific(
                 println!("Created: {}", new_path.display());
             }
         }
-        return Ok(());
+        if !partition_diverged {
+            return Ok(());
+        }
+        // Pure re-tag: fall through so the re-anchoring baseline regenerates.
     }
 
     // Write the migration file
-    if dry_run {
+    if migration_result.has_changes && dry_run {
         println!(
             "📝 Preview: Generated migration content ({} chars)",
             migration_result.migration_sql.len()
@@ -341,15 +426,12 @@ pub async fn cmd_migrate_update_specific(
             println!("   Delete: {}", target_migration.path.display());
             println!("   Create: {}", new_path.display());
         }
-        println!(
-            "\n📋 Migration preview:\n{}",
-            migration_result.migration_sql
-        );
-    } else if is_latest {
+        println!("\n📋 Migration preview:\n{}", migration_sql);
+    } else if migration_result.has_changes && is_latest {
         // For latest migration, overwrite the existing file (current behavior)
-        std::fs::write(&target_migration.path, &migration_result.migration_sql)?;
+        std::fs::write(&target_migration.path, &migration_sql)?;
         println!("Updated migration: {}", target_migration.path.display());
-    } else {
+    } else if migration_result.has_changes {
         // For older migration, delete old file and create new one with fresh timestamp
         std::fs::remove_file(&target_migration.path)?;
         let new_filename = format!(
@@ -359,7 +441,7 @@ pub async fn cmd_migrate_update_specific(
             new_description.replace(' ', "_")
         );
         let new_path = migrations_dir.join(&new_filename);
-        std::fs::write(&new_path, &migration_result.migration_sql)?;
+        std::fs::write(&new_path, &migration_sql)?;
         println!(
             "Migration {} updated to {} (renumbered)",
             target_migration.version, new_version
@@ -369,14 +451,6 @@ pub async fn cmd_migrate_update_specific(
     }
 
     // Handle baseline updates (similar to existing logic)
-    let baseline_filename = generate_baseline_filename(new_version);
-    let baseline_path = baselines_dir.join(&baseline_filename);
-    let should_update_baseline = should_manage_baseline_for_migration(
-        config,
-        &baseline_path,
-        config.migration.create_baselines_by_default,
-    );
-
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -387,6 +461,16 @@ pub async fn cmd_migrate_update_specific(
             verbose: baseline_config.verbose,
         })
         .await?;
+        if let Some(module_gen) = &module_gen {
+            write_sectioned_baseline(
+                &result.path,
+                &result.steps,
+                &new_catalog,
+                &module_gen.partition,
+                &file_mapping,
+                &historical,
+            )?;
+        }
         if is_latest {
             println!("Updated baseline: {}", result.path.display());
         } else {

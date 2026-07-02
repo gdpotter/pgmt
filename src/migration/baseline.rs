@@ -4,16 +4,19 @@ use std::path::Path;
 use tracing::info;
 
 use crate::catalog::Catalog;
+use crate::catalog::identity::{CatalogIdentity, find_new_objects};
 use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::config::types::TrackingTable;
 use crate::db::cleaner;
+use crate::migration::section_parser::MigrationSection;
 use crate::migration::{
     ParsedMigration, discover_migrations, find_baseline_for_version, find_latest_baseline,
     parse_migration_sections, validate_sections,
 };
 use crate::migration_tracking::{ensure_section_tracking_table, initialize_sections};
+use crate::modules::HistoricalAttribution;
 use crate::progress::SectionReporter;
 use crate::validation::validate_baseline_consistency;
 
@@ -47,15 +50,57 @@ async fn load_managed_catalog(shadow_pool: &PgPool, config: &Config) -> Result<C
 /// Baselines use the same `-- pgmt:section` header syntax as migrations; a
 /// header-less baseline parses as one "default" transactional section, which
 /// preserves the historical all-or-nothing apply for existing baselines.
-fn parse_baseline_sections(
-    baseline_sql: &str,
-    source: &str,
-) -> Result<Vec<crate::migration::section_parser::MigrationSection>> {
+fn parse_baseline_sections(baseline_sql: &str, source: &str) -> Result<Vec<MigrationSection>> {
     let sections = parse_migration_sections(Path::new(source), baseline_sql)
         .with_context(|| format!("Failed to parse baseline sections ({})", source))?;
     validate_sections(&sections)
         .with_context(|| format!("Invalid section configuration in baseline ({})", source))?;
     Ok(sections)
+}
+
+/// Execute sections against the shadow in validation mode, optionally
+/// collecting per-section historical attribution: snapshot object identities
+/// before and after each section (one cheap UNION-ALL query each) and tag
+/// whatever appeared with the section's `module`. Only pays the snapshot cost
+/// when a collector is passed — i.e. when the project declares modules.
+async fn execute_validation_sections(
+    shadow_pool: &PgPool,
+    sections: &[MigrationSection],
+    config: &Config,
+    mut attribution: Option<&mut HistoricalAttribution>,
+) -> Result<()> {
+    let reporter = SectionReporter::new(sections.len(), false);
+    let mut executor = SectionExecutor::new(
+        shadow_pool.clone(),
+        config.migration.tracking_table.clone(),
+        reporter,
+        ExecutionMode::Validation,
+        false,
+    );
+
+    let mut previous = match attribution {
+        Some(_) => Some(CatalogIdentity::load(shadow_pool).await?),
+        None => None,
+    };
+
+    for section in sections {
+        executor
+            .execute_section(0, section)
+            .await
+            .with_context(|| format!("Failed to apply section '{}'", section.name))?;
+
+        if let Some(attr) = attribution.as_deref_mut() {
+            let current = CatalogIdentity::load(shadow_pool).await?;
+            let created = find_new_objects(
+                previous.as_ref().expect("snapshot taken when collecting"),
+                &current,
+            );
+            attr.record(created, section.module.as_deref());
+            previous = Some(current);
+        }
+    }
+
+    Ok(())
 }
 
 /// Load a baseline SQL file into a shadow database and return the resulting catalog
@@ -64,6 +109,18 @@ pub async fn load_baseline_into_shadow(
     baseline_path: &Path,
     roles_file: &Path,
     config: &Config,
+) -> Result<Catalog> {
+    load_baseline_into_shadow_inner(shadow_pool, baseline_path, roles_file, config, None).await
+}
+
+/// Section-by-section baseline replay (validation mode), optionally
+/// collecting object→module attribution from the baseline's section tags.
+async fn load_baseline_into_shadow_inner(
+    shadow_pool: &PgPool,
+    baseline_path: &Path,
+    roles_file: &Path,
+    config: &Config,
+    attribution: Option<&mut HistoricalAttribution>,
 ) -> Result<Catalog> {
     cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
 
@@ -77,26 +134,10 @@ pub async fn load_baseline_into_shadow(
         .and_then(|name| name.to_str())
         .unwrap_or("unknown_baseline.sql");
 
-    // Replay section-by-section so each section runs with its declared
-    // transaction mode (validation mode: no tracking, no retries). The version
-    // is only used for tracking, which validation mode never touches.
     let sections = parse_baseline_sections(&baseline_sql, source)?;
-    let reporter = SectionReporter::new(sections.len(), false);
-    let mut executor = SectionExecutor::new(
-        shadow_pool.clone(),
-        config.migration.tracking_table.clone(),
-        reporter,
-        ExecutionMode::Validation,
-        true,
-    );
-    for section in &sections {
-        executor
-            .execute_section(0, section)
-            .await
-            .with_context(|| {
-                format!("Failed to apply baseline SQL: {}", baseline_path.display())
-            })?;
-    }
+    execute_validation_sections(shadow_pool, &sections, config, attribution)
+        .await
+        .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
 
     load_managed_catalog(shadow_pool, config).await
 }
@@ -160,6 +201,7 @@ async fn replay_migrations(
     migrations: &[ParsedMigration],
     config: &Config,
     verbose: bool,
+    mut attribution: Option<&mut HistoricalAttribution>,
 ) -> Result<()> {
     for migration in migrations {
         if verbose {
@@ -179,27 +221,15 @@ async fn replay_migrations(
         let sections = parse_migration_sections(&migration.path, &migration_sql)?;
         validate_sections(&sections)?;
 
-        let reporter = SectionReporter::new(sections.len(), false);
-        let mut executor = SectionExecutor::new(
-            shadow_pool.clone(),
-            config.migration.tracking_table.clone(),
-            reporter,
-            ExecutionMode::Validation,
-            false,
-        );
-
-        for section in &sections {
-            executor
-                .execute_section(migration.version, section)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to apply migration {}: {}",
-                        migration.version,
-                        migration.path.display()
-                    )
-                })?;
-        }
+        execute_validation_sections(shadow_pool, &sections, config, attribution.as_deref_mut())
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to apply migration {}: {}",
+                    migration.version,
+                    migration.path.display()
+                )
+            })?;
     }
 
     Ok(())
@@ -257,13 +287,69 @@ pub async fn get_migration_starting_state(
     baseline_config: &BaselineConfig,
     config: &Config,
 ) -> Result<Catalog> {
+    get_migration_starting_state_inner(
+        shadow_pool,
+        baselines_dir,
+        migrations_dir,
+        roles_file,
+        baseline_config,
+        config,
+        None,
+    )
+    .await
+}
+
+/// Like [`get_migration_starting_state`], but also collects object→module
+/// attribution from the replayed history's section tags (per-section identity
+/// snapshots). Used by module-aware generation to attribute DROP steps —
+/// their objects have no current file, so ownership can only come from the
+/// checksummed history that created them.
+pub async fn get_migration_starting_state_with_attribution(
+    shadow_pool: &PgPool,
+    baselines_dir: &Path,
+    migrations_dir: &Path,
+    roles_file: &Path,
+    baseline_config: &BaselineConfig,
+    config: &Config,
+) -> Result<(Catalog, HistoricalAttribution)> {
+    let mut attribution = HistoricalAttribution::default();
+    let catalog = get_migration_starting_state_inner(
+        shadow_pool,
+        baselines_dir,
+        migrations_dir,
+        roles_file,
+        baseline_config,
+        config,
+        Some(&mut attribution),
+    )
+    .await?;
+    Ok((catalog, attribution))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn get_migration_starting_state_inner(
+    shadow_pool: &PgPool,
+    baselines_dir: &Path,
+    migrations_dir: &Path,
+    roles_file: &Path,
+    baseline_config: &BaselineConfig,
+    config: &Config,
+    mut attribution: Option<&mut HistoricalAttribution>,
+) -> Result<Catalog> {
     let all_migrations = discover_migrations(migrations_dir)?;
 
     let migrations_to_replay = if let Some(baseline) = find_latest_baseline(baselines_dir)? {
         if baseline_config.verbose {
             info!("Loading baseline: {}", baseline.path.display());
         }
-        load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
+        load_baseline_into_shadow_inner(
+            shadow_pool,
+            &baseline.path,
+            roles_file,
+            config,
+            attribution.as_deref_mut(),
+        )
+        .await?;
         warn_pre_baseline_migrations(&all_migrations, baseline.version);
 
         let after_baseline: Vec<_> = all_migrations
@@ -300,6 +386,7 @@ pub async fn get_migration_starting_state(
         &migrations_to_replay,
         config,
         baseline_config.verbose,
+        attribution,
     )
     .await?;
     load_managed_catalog(shadow_pool, config).await
@@ -308,6 +395,7 @@ pub async fn get_migration_starting_state(
 /// Get the starting catalog state for updating a specific migration version:
 /// the baseline before the target version (or empty schema) plus the
 /// migrations between them.
+#[allow(clippy::too_many_arguments)]
 pub async fn get_migration_update_starting_state(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
@@ -316,6 +404,7 @@ pub async fn get_migration_update_starting_state(
     roles_file: &Path,
     baseline_config: &BaselineConfig,
     config: &Config,
+    mut attribution: Option<&mut HistoricalAttribution>,
 ) -> Result<Catalog> {
     let all_migrations = discover_migrations(migrations_dir)?;
 
@@ -324,7 +413,14 @@ pub async fn get_migration_update_starting_state(
             if baseline_config.verbose {
                 info!("Loading previous baseline: {}", baseline.path.display());
             }
-            load_baseline_into_shadow(shadow_pool, &baseline.path, roles_file, config).await?;
+            load_baseline_into_shadow_inner(
+                shadow_pool,
+                &baseline.path,
+                roles_file,
+                config,
+                attribution.as_deref_mut(),
+            )
+            .await?;
 
             let in_range: Vec<_> = all_migrations
                 .into_iter()
@@ -371,6 +467,7 @@ pub async fn get_migration_update_starting_state(
         &migrations_to_replay,
         config,
         baseline_config.verbose,
+        attribution,
     )
     .await?;
     load_managed_catalog(shadow_pool, config).await

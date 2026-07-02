@@ -9,8 +9,9 @@ pub use parsing::{
 };
 
 pub use baseline::{
-    BaselineConfig, get_migration_starting_state, get_migration_update_starting_state,
-    should_manage_baseline_for_migration, validate_baseline_against_catalog,
+    BaselineConfig, get_migration_starting_state, get_migration_starting_state_with_attribution,
+    get_migration_update_starting_state, should_manage_baseline_for_migration,
+    validate_baseline_against_catalog,
 };
 
 pub use section_parser::parse_migration_sections;

@@ -9,6 +9,7 @@ mod docker;
 mod migrate;
 mod migration;
 mod migration_tracking;
+mod modules;
 mod progress;
 mod prompts;
 mod render;
