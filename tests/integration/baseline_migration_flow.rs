@@ -42,12 +42,13 @@ CREATE INDEX idx_users_email ON users (email);
 
         let checksum = pgmt::migration_tracking::calculate_checksum(baseline_sql);
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             baseline_version,
             "initial baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -160,12 +161,13 @@ CREATE TABLE customers (
         let checksum = pgmt::migration_tracking::calculate_checksum(baseline_sql);
 
         // This is what the enhanced init command would do
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             baseline_version,
             "initial schema baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -216,12 +218,13 @@ CREATE TABLE customers (
 
         // If we were to apply the new migration, it would be version 2
         let new_migration_version = 2000000000u64;
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             new_migration_version,
             "add invoices and index",
             "new_checksum",
+            &[],
         )
         .await?;
 
@@ -258,12 +261,13 @@ async fn test_empty_database_baseline_no_steps() -> Result<()> {
 
         // Step 2: Record empty baseline
         let baseline_version = 1000u64;
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             baseline_version,
             "empty baseline",
             "empty_checksum",
+            &[],
         )
         .await?;
 
@@ -311,12 +315,13 @@ async fn test_complex_schema_changes_after_baseline() -> Result<()> {
         let baseline_sql = "Complex baseline with schema, enum, table, function";
         let checksum = pgmt::migration_tracking::calculate_checksum(baseline_sql);
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             baseline_version,
             "complex schema baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -377,6 +382,7 @@ async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
             1,
             baseline_sql,
             "baseline_1.sql",
+            |_| true,
         )
         .await?;
 
@@ -409,6 +415,7 @@ async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
             1,
             baseline_sql,
             "bad.sql",
+            |_| true,
         )
         .await;
         assert!(result.is_err(), "duplicate table should fail the baseline");

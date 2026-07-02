@@ -3,7 +3,7 @@ use anyhow::Result;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::{
     calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    record_baseline_as_applied, register_migration_start, version_to_db,
+    register_baseline_start, register_migration_start, version_to_db,
 };
 use sqlx::Row;
 
@@ -116,7 +116,7 @@ async fn test_same_version_migration_and_baseline_rows() -> Result<()> {
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
 
         register_migration_start(db.pool(), &tracking_table, 1234, "migration", "aaa", &[]).await?;
-        record_baseline_as_applied(db.pool(), &tracking_table, 1234, "baseline", "bbb").await?;
+        register_baseline_start(db.pool(), &tracking_table, 1234, "baseline", "bbb", &[]).await?;
 
         let rows: Vec<(i64, bool)> = sqlx::query_as(
             "SELECT version, is_baseline FROM \"public\".\"paired_migrations\" ORDER BY is_baseline",
@@ -204,7 +204,7 @@ async fn test_ensure_section_table_migrates_legacy_schema() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_record_baseline_as_applied() -> Result<()> {
+async fn test_register_baseline_start() -> Result<()> {
     with_test_db(async |db| {
         let tracking_table = TrackingTable {
             schema: "public".to_string(),
@@ -213,12 +213,13 @@ async fn test_record_baseline_as_applied() -> Result<()> {
 
         let checksum = calculate_checksum("CREATE TABLE test (id INT);");
 
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             1234567890,
             "baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -246,12 +247,13 @@ async fn test_get_applied_migrations() -> Result<()> {
 
         // Record a baseline
         let checksum = calculate_checksum("CREATE TABLE test (id INT);");
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             1234567890,
             "baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -292,12 +294,13 @@ async fn test_baseline_creation_prevents_recreation() -> Result<()> {
         let baseline_sql = "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
         let checksum = calculate_checksum(baseline_sql);
 
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             version,
             "initial baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -360,30 +363,33 @@ async fn test_multiple_baselines_ordering() -> Result<()> {
         let version2 = 2000u64;
         let version3 = 1500u64; // Out of order insertion
 
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             version1,
             "first baseline",
             "checksum1",
+            &[],
         )
         .await?;
 
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             version2,
             "second baseline",
             "checksum2",
+            &[],
         )
         .await?;
 
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             version3,
             "third baseline",
             "checksum3",
+            &[],
         )
         .await?;
 
@@ -422,12 +428,13 @@ async fn test_tracking_table_custom_schema() -> Result<()> {
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
 
         let version = 1234567890u64;
-        record_baseline_as_applied(
+        register_baseline_start(
             db.pool(),
             &tracking_table,
             version,
             "custom schema baseline",
             "test_checksum",
+            &[],
         )
         .await?;
 

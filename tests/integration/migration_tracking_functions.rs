@@ -22,12 +22,13 @@ async fn test_migration_tracking_functions() -> Result<()> {
         let version = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let checksum = pgmt::migration_tracking::calculate_checksum("CREATE TABLE test (id INT);");
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version,
             "test baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -76,12 +77,13 @@ async fn test_baseline_creation_prevents_recreation() -> Result<()> {
         let baseline_sql = "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
         let checksum = pgmt::migration_tracking::calculate_checksum(baseline_sql);
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version,
             "initial baseline",
             &checksum,
+            &[],
         )
         .await?;
 
@@ -144,30 +146,33 @@ async fn test_multiple_baselines_ordering() -> Result<()> {
         let version2 = 2000u64;
         let version3 = 1500u64; // Out of order insertion
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version1,
             "first baseline",
             "checksum1",
+            &[],
         )
         .await?;
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version2,
             "second baseline",
             "checksum2",
+            &[],
         )
         .await?;
 
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version3,
             "third baseline",
             "checksum3",
+            &[],
         )
         .await?;
 
@@ -206,12 +211,13 @@ async fn test_tracking_table_custom_schema() -> Result<()> {
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
 
         let version = 1234567890u64;
-        pgmt::migration_tracking::record_baseline_as_applied(
+        pgmt::migration_tracking::register_baseline_start(
             db.pool(),
             &tracking_table,
             version,
             "custom schema baseline",
             "test_checksum",
+            &[],
         )
         .await?;
 

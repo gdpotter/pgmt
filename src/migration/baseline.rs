@@ -228,8 +228,12 @@ pub async fn apply_baseline_to_target(
     version: u64,
     baseline_sql: &str,
     source: &str,
+    select_section: impl Fn(&MigrationSection) -> bool,
 ) -> Result<()> {
-    let sections = parse_baseline_sections(baseline_sql, source)?;
+    let sections: Vec<MigrationSection> = parse_baseline_sections(baseline_sql, source)?
+        .into_iter()
+        .filter(select_section)
+        .collect();
 
     ensure_section_tracking_table(pool, tracking_table).await?;
     initialize_sections(pool, tracking_table, version, true, &sections).await?;

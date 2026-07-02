@@ -179,6 +179,7 @@ CREATE TABLE users (
             1,
             invalid_migration_sql,
             "V001__test_migration.sql",
+            |_| true,
         )
         .await;
 

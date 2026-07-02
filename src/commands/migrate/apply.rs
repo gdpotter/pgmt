@@ -6,12 +6,16 @@ use crate::migration::{
 use crate::migration_tracking::section_tracking::{SectionStatus, section_statuses};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    format_tracking_table_name, register_migration_start, version_from_db,
+    format_tracking_table_name, initialize_sections, register_migration_start, version_from_db,
+};
+use crate::modules::{
+    ModuleSelection, literal_established_modules, modules_needing_baseline_content,
+    parse_section_files,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::Instant;
 use tracing::debug;
@@ -20,6 +24,7 @@ pub async fn cmd_migrate_apply(
     config: &Config,
     root_dir: &Path,
     target: &crate::config::TargetUrl,
+    selection: ModuleSelection,
 ) -> Result<()> {
     println!("Applying migrations to target database");
 
@@ -40,9 +45,47 @@ pub async fn cmd_migrate_apply(
 
     let migrations = discover_migrations(&migrations_dir)?;
 
-    let result = apply_pending_migrations(&pool, config, &migrations).await;
+    let result = apply_with_module_guard(config, root_dir, &pool, &migrations, &selection).await;
     lock.release().await?;
     result
+}
+
+/// The module-aware body of `migrate apply`, split out so the advisory lock
+/// wraps every path (including the adoption refusal) with a single release.
+async fn apply_with_module_guard(
+    config: &Config,
+    root_dir: &Path,
+    pool: &PgPool,
+    migrations: &[ParsedMigration],
+    selection: &ModuleSelection,
+) -> Result<()> {
+    // Module projects: derive what's established here and refuse adoptions
+    // that need baseline content — `apply` only ever replays sections; a
+    // module whose pre-baseline state lives in a committed baseline must be
+    // adopted via `provision --modules`.
+    let established = if selection.named().is_some() {
+        ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
+        ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
+        let files =
+            parse_section_files(migrations, &root_dir.join(&config.directories.baselines))?;
+        let established =
+            literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
+        let needs_baseline = modules_needing_baseline_content(selection, &established, &files);
+        if !needs_baseline.is_empty() {
+            anyhow::bail!(
+                "adopting module(s) {} here requires baseline content — their pre-baseline \
+                 state lives in the committed baseline, not the migrations.\n\
+                 Adopt via: pgmt migrate provision --modules {}",
+                needs_baseline.join(", "),
+                needs_baseline.join(",")
+            );
+        }
+        established
+    } else {
+        BTreeSet::new()
+    };
+
+    apply_pending_migrations(pool, config, migrations, selection, &established).await
 }
 
 /// Apply migration files to a database, skipping any already recorded in the
@@ -57,6 +100,8 @@ pub(crate) async fn apply_pending_migrations(
     pool: &PgPool,
     config: &Config,
     migrations: &[ParsedMigration],
+    selection: &ModuleSelection,
+    established: &BTreeSet<String>,
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
@@ -169,53 +214,148 @@ pub(crate) async fn apply_pending_migrations(
             )
         })?;
 
-        if registered.is_some() {
-            // The version row is written at start (register_migration_start),
-            // so its existence doesn't mean "done" — completeness is derived:
-            // every section in the file has a Completed row. Legacy rows with
-            // NO section rows were recorded on completion by older pgmt and
-            // are fully applied by construction (the registration insert is
-            // atomic, so a crash can't produce that shape).
-            let statuses = section_statuses(
+        // Module selection: run the selected modules' (+ base) sections; the
+        // rest are skipped and leave NO rows (design §9: derived skipped-ness,
+        // no trace of unrequested work). Skips are signalled two-tier: an
+        // established module being left behind is schema drift (warning); a
+        // never-established one is expected on subset targets (info).
+        let selected: Vec<&crate::migration::section_parser::MigrationSection> = sections
+            .iter()
+            .filter(|section| selection.selects(section.module.as_deref()))
+            .collect();
+        let mut skipped_modules: BTreeSet<&str> = BTreeSet::new();
+        for section in &sections {
+            if let Some(module) = section.module.as_deref()
+                && !selection.selects(Some(module))
+            {
+                skipped_modules.insert(module);
+            }
+        }
+        for module in &skipped_modules {
+            if established.contains(*module) {
+                eprintln!(
+                    "Warning: module '{}' is established on this target but not in the \\
+                     requested set — its sections in migration {} were skipped. This is \\
+                     schema drift until a deploy names it (--modules ...,{}).",
+                    module, migration.version, module
+                );
+            } else {
+                println!(
+                    "Skipping module '{}' sections in migration {} (not established here)",
+                    module, migration.version
+                );
+            }
+        }
+
+        let statuses = if registered.is_some() {
+            section_statuses(
                 pool,
                 &config.migration.tracking_table,
                 migration.version,
                 false,
             )
-            .await?;
+            .await?
+        } else {
+            Default::default()
+        };
+
+        // Conservative intra-migration coupling check: section order encodes
+        // potential dependency, so a selected section must not run while an
+        // EARLIER unselected section of an established module is still
+        // pending — its objects may be prerequisites. (Never-established
+        // modules' objects don't exist here; real cross-module needs are
+        // covered by the dependency-closure guard.)
+        for (idx, section) in sections.iter().enumerate() {
+            if !selection.selects(section.module.as_deref()) {
+                continue;
+            }
+            for earlier in &sections[..idx] {
+                if let Some(module) = earlier.module.as_deref()
+                    && !selection.selects(Some(module))
+                    && established.contains(module)
+                    && statuses.get(&earlier.name) != Some(&SectionStatus::Completed)
+                {
+                    anyhow::bail!(
+                        "migration {} couples module '{}' (section '{}') ahead of selected \\
+                         section '{}'; deploy them together (--modules ...,{})",
+                        migration.version,
+                        module,
+                        earlier.name,
+                        section.name,
+                        module
+                    );
+                }
+            }
+        }
+
+        if registered.is_some() {
+            // The version row is written at start (register_migration_start),
+            // so its existence doesn't mean "done" — completeness is derived.
+            // Legacy rows with NO section rows were recorded on completion by
+            // older pgmt and are fully applied by construction (registration
+            // is atomic, so a crash can't produce that shape). Under module
+            // selection, "done" means every SELECTED section is Completed —
+            // unselected modules' sections stay unrecorded until adopted.
             let fully_applied = statuses.is_empty()
-                || sections
+                || selected
                     .iter()
                     .all(|s| statuses.get(&s.name) == Some(&SectionStatus::Completed));
             if fully_applied {
                 debug!("Migration {} already applied, skipping", migration.version);
                 continue;
             }
-            let done = statuses
-                .values()
-                .filter(|s| **s == SectionStatus::Completed)
+            let done = selected
+                .iter()
+                .filter(|s| statuses.get(&s.name) == Some(&SectionStatus::Completed))
                 .count();
             println!(
                 "\nResuming migration {} - {} ({}/{} sections already complete)",
                 migration.version,
                 migration.description,
                 done,
-                sections.len()
+                selected.len()
             );
+            // Register any selected sections this target hasn't seen yet
+            // (adopting a module completes past versions' sections).
+            let missing: Vec<crate::migration::section_parser::MigrationSection> = selected
+                .iter()
+                .filter(|s| !statuses.contains_key(&s.name))
+                .map(|s| (*s).clone())
+                .collect();
+            if !missing.is_empty() {
+                initialize_sections(
+                    pool,
+                    &config.migration.tracking_table,
+                    migration.version,
+                    false,
+                    &missing,
+                )
+                .await?;
+            }
         } else {
+            // Nothing selected and nothing recorded: leave zero trace (§9).
+            if selected.is_empty() {
+                debug!(
+                    "Migration {} has no selected sections, skipping",
+                    migration.version
+                );
+                continue;
+            }
             println!(
                 "\nApplying migration {} - {}",
                 migration.version, migration.description
             );
-            // Register the version row + Pending section rows atomically,
-            // before anything executes.
+            // Register the version row + the SELECTED Pending section rows
+            // atomically, before anything executes.
+            let selected_owned: Vec<crate::migration::section_parser::MigrationSection> =
+                selected.iter().map(|s| (*s).clone()).collect();
             register_migration_start(
                 pool,
                 &config.migration.tracking_table,
                 migration.version,
                 &migration.description,
                 &checksum,
-                &sections,
+                &selected_owned,
             )
             .await?;
         }
@@ -223,7 +363,7 @@ pub(crate) async fn apply_pending_migrations(
         let start = Instant::now();
 
         // Create section executor
-        let reporter = SectionReporter::new(sections.len(), false); // TODO: Add verbose flag to config
+        let reporter = SectionReporter::new(selected.len(), false); // TODO: Add verbose flag to config
         let mut executor = SectionExecutor::new(
             pool.clone(),
             config.migration.tracking_table.clone(),
@@ -232,8 +372,8 @@ pub(crate) async fn apply_pending_migrations(
             false,
         );
 
-        // Execute each section
-        for section in &sections {
+        // Execute each selected section (already-completed ones skip inside)
+        for section in &selected {
             executor
                 .execute_section(migration.version, section)
                 .await
@@ -251,8 +391,8 @@ pub(crate) async fn apply_pending_migrations(
         // per-section completion rows drive the derived applied-state.
 
         // Report completion
-        let reporter = SectionReporter::new(sections.len(), false);
-        reporter.migration_summary(duration, sections.len());
+        let reporter = SectionReporter::new(selected.len(), false);
+        reporter.migration_summary(duration, selected.len());
     }
 
     Ok(())

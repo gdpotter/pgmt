@@ -449,6 +449,223 @@ pub fn render_sectioned_migration(sections: &[StepSection]) -> String {
     parts.join("\n\n")
 }
 
+/// Which modules a deploy names (design §13: bare `apply` = the base only;
+/// modules are always explicit — flag > `PGMT_MODULES` env).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleSelection {
+    /// Non-module project: every section runs, exactly as before modules.
+    Everything,
+    /// Module project: the named modules (dependency closure included) plus
+    /// the always-deployed base. An empty set = base sections only.
+    Named(BTreeSet<String>),
+}
+
+impl ModuleSelection {
+    /// Resolve a `--modules` list against the config. `default_all` picks the
+    /// no-selection default: `provision` provisions every declared module
+    /// (its pre-modules behavior), `apply` runs only the base.
+    pub fn resolve(requested: &[String], config: &Config, default_all: bool) -> Result<Self> {
+        // CLI flag > PGMT_MODULES env > default (matching the PGMT_* pattern
+        // connection args use).
+        let from_env: Vec<String>;
+        let requested: &[String] = if requested.is_empty() {
+            from_env = std::env::var("PGMT_MODULES")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            &from_env
+        } else {
+            requested
+        };
+
+        let declared = &config.modules.modules;
+        if !config.modules.is_enabled() {
+            if !requested.is_empty() {
+                anyhow::bail!("--modules was given but pgmt.yaml declares no `modules:`");
+            }
+            return Ok(Self::Everything);
+        }
+
+        let mut named: BTreeSet<String> = if requested.is_empty() {
+            if default_all {
+                declared.keys().cloned().collect()
+            } else {
+                BTreeSet::new()
+            }
+        } else if requested.len() == 1 && requested[0] == "all" {
+            declared.keys().cloned().collect()
+        } else {
+            let mut set = BTreeSet::new();
+            for name in requested {
+                if !declared.contains_key(name) {
+                    anyhow::bail!(
+                        "unknown module '{}' in --modules (declared: {})",
+                        name,
+                        declared.keys().cloned().collect::<Vec<_>>().join(", ")
+                    );
+                }
+                set.insert(name.clone());
+            }
+            set
+        };
+
+        // Dependency closure: deploying a module means deploying what it
+        // depends on. Pulled-in modules are announced.
+        let mut stack: Vec<String> = named.iter().cloned().collect();
+        while let Some(module) = stack.pop() {
+            for dep in &declared[&module].depends_on {
+                if named.insert(dep.clone()) {
+                    println!("Including module '{}' (required by '{}')", dep, module);
+                    stack.push(dep.clone());
+                }
+            }
+        }
+
+        Ok(Self::Named(named))
+    }
+
+    /// Whether a section owned by `module` (`None` = the base) is selected.
+    /// The base always deploys.
+    pub fn selects(&self, module: Option<&str>) -> bool {
+        match self {
+            Self::Everything => true,
+            Self::Named(set) => match module {
+                None => true,
+                Some(m) => set.contains(m),
+            },
+        }
+    }
+
+    /// The named module set, when this is a module-project selection.
+    pub fn named(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            Self::Everything => None,
+            Self::Named(set) => Some(set),
+        }
+    }
+}
+
+/// The module of a recorded section row, resolved through the version's
+/// checksummed file. Fallback when the file is gone (pruned migrations): the
+/// generated-name convention (`billing`, `billing_2` → `billing`; `default*`
+/// → the base). §18.2 of the design tracks the principled fix.
+pub fn section_module_from_files(
+    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
+    version: u64,
+    is_baseline: bool,
+    section_name: &str,
+) -> Option<String> {
+    if let Some(sections) = files.get(&(version, is_baseline))
+        && let Some(section) = sections.iter().find(|s| s.name == section_name)
+    {
+        return section.module.clone();
+    }
+    // Name-convention fallback.
+    let base_name = match section_name.rfind('_') {
+        Some(idx) if section_name[idx + 1..].chars().all(|c| c.is_ascii_digit()) => {
+            &section_name[..idx]
+        }
+        _ => section_name,
+    };
+    if base_name == "default" {
+        None
+    } else {
+        Some(base_name.to_string())
+    }
+}
+
+/// Parse every migration and baseline file into its sections, keyed by
+/// `(version, is_baseline)` — the lookup used to resolve recorded section
+/// rows back to their modules.
+pub fn parse_section_files(
+    migrations: &[crate::migration::ParsedMigration],
+    baselines_dir: &std::path::Path,
+) -> Result<BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>> {
+    let mut files = BTreeMap::new();
+    for migration in migrations {
+        let sql = std::fs::read_to_string(&migration.path)?;
+        let sections = crate::migration::parse_migration_sections(&migration.path, &sql)?;
+        files.insert((migration.version, false), sections);
+    }
+    for baseline in crate::migration::discover_baselines(baselines_dir)? {
+        let sql = std::fs::read_to_string(&baseline.path)?;
+        let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
+        files.insert((baseline.version, true), sections);
+    }
+    Ok(files)
+}
+
+/// Modules with at least one Completed section on the target — the *literal*
+/// established set. (The §13 remap walk, which carries establishment through
+/// re-tags, lands with the wholeness membranes; until then re-tagged history
+/// resolves through the re-anchoring baseline's own tagged sections once a
+/// target consumes it.)
+pub async fn literal_established_modules(
+    pool: &sqlx::PgPool,
+    tracking_table: &crate::config::types::TrackingTable,
+    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
+) -> Result<BTreeSet<String>> {
+    let sections_table = format!(
+        r#""{}"."{}_sections""#,
+        tracking_table.schema, tracking_table.name
+    );
+    let rows: Vec<(i64, bool, String)> = sqlx::query_as(&format!(
+        "SELECT migration_version, is_baseline, section_name FROM {} WHERE status = 'completed'",
+        sections_table
+    ))
+    .fetch_all(pool)
+    .await?;
+
+    let mut established = BTreeSet::new();
+    for (version, is_baseline, section_name) in rows {
+        if let Some(module) =
+            section_module_from_files(files, version as u64, is_baseline, &section_name)
+        {
+            established.insert(module);
+        }
+    }
+    Ok(established)
+}
+
+/// Of the named modules, those that are not established here and whose
+/// pre-baseline state lives in the latest committed baseline — adopting them
+/// requires that baseline's content (`provision --modules`), not replay.
+/// Modules absent from the baseline are younger than it: their whole history
+/// is in the migrations and plain `apply` can adopt them.
+pub fn modules_needing_baseline_content(
+    selection: &ModuleSelection,
+    established: &BTreeSet<String>,
+    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
+) -> Vec<String> {
+    let Some(named) = selection.named() else {
+        return Vec::new();
+    };
+    let Some(latest_baseline_sections) = files
+        .iter()
+        .filter(|((_, is_baseline), _)| *is_baseline)
+        .max_by_key(|((version, _), _)| *version)
+        .map(|(_, sections)| sections)
+    else {
+        return Vec::new();
+    };
+
+    named
+        .iter()
+        .filter(|m| !established.contains(*m))
+        .filter(|m| {
+            latest_baseline_sections
+                .iter()
+                .any(|s| s.module.as_deref() == Some(m.as_str()))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Module context for one generation run (migrate new / update).
 pub struct ModuleGeneration {
     pub partition: ModulePartition,

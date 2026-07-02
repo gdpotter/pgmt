@@ -196,6 +196,11 @@ enum MigrateCommands {
     Apply {
         #[command(flatten)]
         target: config::TargetUrlArgs,
+
+        /// Modules to apply (comma-separated, or "all"). Default: only the
+        /// unmoduled base. Falls back to PGMT_MODULES.
+        #[arg(long, value_delimiter = ',')]
+        modules: Vec<String>,
     },
 
     /// Provision a fresh database from a baseline + migrations
@@ -206,6 +211,11 @@ enum MigrateCommands {
         /// Preview what would be applied without changing the database
         #[arg(long)]
         dry_run: bool,
+
+        /// Modules to provision/adopt (comma-separated, or "all"). Default:
+        /// all declared modules on a fresh target. Falls back to PGMT_MODULES.
+        #[arg(long, value_delimiter = ',')]
+        modules: Vec<String>,
     },
 
     /// Check migration status
@@ -475,23 +485,32 @@ async fn run_main(cli: Cli) -> Result<()> {
                             .await
                         }
                     }
-                    MigrateCommands::Apply { target } => {
+                    MigrateCommands::Apply { target, modules } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
                             .resolve()?;
                         let target = target.resolve(&file_config)?;
+                        let selection = modules::ModuleSelection::resolve(modules, &config, false)?;
 
                         info!("Applying explicit migrations");
-                        commands::cmd_migrate_apply(&config, &root_dir, &target).await
+                        commands::cmd_migrate_apply(&config, &root_dir, &target, selection).await
                     }
-                    MigrateCommands::Provision { target, dry_run } => {
+                    MigrateCommands::Provision {
+                        target,
+                        dry_run,
+                        modules,
+                    } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
                             .resolve()?;
                         let target = target.resolve(&file_config)?;
+                        let selection = modules::ModuleSelection::resolve(modules, &config, true)?;
 
                         info!("Provisioning database");
-                        commands::cmd_migrate_provision(&config, &root_dir, &target, *dry_run).await
+                        commands::cmd_migrate_provision(
+                            &config, &root_dir, &target, *dry_run, selection,
+                        )
+                        .await
                     }
                     MigrateCommands::Status { dev } => {
                         let config = config::ConfigBuilder::new()

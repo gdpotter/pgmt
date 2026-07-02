@@ -258,32 +258,56 @@ async fn migrate_tracking_table_schema(
     Ok(())
 }
 
-/// Insert a baseline record into the migration tracking table (is_baseline = TRUE).
-///
-/// Written by `migrate provision` after it applies a baseline to a fresh target.
-pub async fn record_baseline_as_applied(
+/// Register a baseline as started on a target: insert its tracking row
+/// (is_baseline = TRUE) and the Pending section rows for the sections being
+/// applied, in ONE transaction, before anything executes — the same
+/// first-touch semantics migrations use. Idempotent (`ON CONFLICT DO
+/// NOTHING`): a resumed provision or a later module adoption re-registers
+/// harmlessly, preserving existing section statuses.
+pub async fn register_baseline_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
     description: &str,
     checksum: &str,
+    sections: &[crate::migration::section_parser::MigrationSection],
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
+    let sections_table = section_tracking::format_sections_table_name(tracking_table);
 
-    // First ensure the tracking table exists
     ensure_tracking_table_exists(pool, tracking_table).await?;
 
-    // Insert the baseline record (is_baseline = TRUE)
+    let mut tx = pool.begin().await?;
     sqlx::query(&format!(
-        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, TRUE)",
+        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, TRUE)
+         ON CONFLICT (version, is_baseline) DO NOTHING",
         tracking_table_name
     ))
     .bind(version_to_db(version)?)
     .bind(description)
     .bind(checksum)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
+
+    for (order, section) in sections.iter().enumerate() {
+        sqlx::query(&format!(
+            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
+             VALUES ($1, TRUE, $2, $3, $4, 0)
+             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
+            sections_table
+        ))
+        .bind(version_to_db(version)?)
+        .bind(&section.name)
+        .bind(order as i32)
+        .bind(section_tracking::SectionStatus::Pending.as_str())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .with_context(|| format!("Failed to register baseline {} start", version))?;
 
     Ok(())
 }

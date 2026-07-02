@@ -77,10 +77,18 @@ async fn test_module_project_generates_sectioned_migration() -> Result<()> {
         let billing_pos = sql.find(r#"name="billing""#).unwrap();
         assert!(core_pos < billing_pos, "core section precedes billing");
 
-        // The sectioned migration applies cleanly...
+        // The sectioned migration applies cleanly (naming the modules —
+        // bare apply deploys only the base)...
         helper
             .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
             .assert()
             .success();
         assert!(helper.table_exists_in_dev("public", "invoices").await?);
