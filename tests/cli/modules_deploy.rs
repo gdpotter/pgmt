@@ -331,6 +331,47 @@ async fn test_coupled_migration_refuses_partial_deploy() -> Result<()> {
     .await
 }
 
+/// Bare `provision` on a module project deploys only the base — the same
+/// explicit-modules rule as `apply` (nothing is inferred).
+#[tokio::test]
+async fn test_bare_provision_deploys_base_only() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+        helper.write_schema_file("meta.sql", "CREATE TABLE meta (k TEXT PRIMARY KEY);")?;
+
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "provisioning the unmoduled base only",
+            ));
+
+        assert!(helper.table_exists_in_dev("public", "meta").await?);
+        assert!(
+            !helper.table_exists_in_dev("public", "users").await?,
+            "modules never deploy implicitly — provision included"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
 /// --modules validation: unknown names and non-module projects error clearly.
 #[tokio::test]
 async fn test_modules_flag_validation() -> Result<()> {

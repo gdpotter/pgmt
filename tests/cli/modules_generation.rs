@@ -199,6 +199,8 @@ async fn test_cross_module_drop_requires_baseline() -> Result<()> {
             .success();
 
         // Drop accounts; billing keeps invoices but loses the FK.
+        // (Sleep first: versions are second-resolution timestamps.)
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
         std::fs::remove_file(helper.project_root.join("schema/core/accounts.sql"))?;
         helper.write_schema_file(
             "billing/invoices.sql",

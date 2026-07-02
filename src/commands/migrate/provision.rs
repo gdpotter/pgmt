@@ -65,6 +65,16 @@ async fn provision_inner(
     let migrations = discover_migrations(&migrations_dir)?;
     let latest_baseline = find_latest_baseline(&baselines_dir)?;
 
+    if let Some(named) = selection.named()
+        && named.is_empty()
+    {
+        println!(
+            "No --modules given: provisioning the unmoduled base only ({} declared module(s) \
+             not included; use --modules all for everything).",
+            config.modules.modules.len()
+        );
+    }
+
     let (files, established_modules) = if selection.named().is_some() {
         let files = parse_section_files(&migrations, &baselines_dir)?;
         let established_modules =

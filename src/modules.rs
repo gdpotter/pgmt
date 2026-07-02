@@ -461,10 +461,10 @@ pub enum ModuleSelection {
 }
 
 impl ModuleSelection {
-    /// Resolve a `--modules` list against the config. `default_all` picks the
-    /// no-selection default: `provision` provisions every declared module
-    /// (its pre-modules behavior), `apply` runs only the base.
-    pub fn resolve(requested: &[String], config: &Config, default_all: bool) -> Result<Self> {
+    /// Resolve a `--modules` list against the config. With nothing supplied
+    /// (flag or env), only the base deploys — modules are always explicit,
+    /// for `apply` and `provision` alike; `--modules all` names everything.
+    pub fn resolve(requested: &[String], config: &Config) -> Result<Self> {
         // CLI flag > PGMT_MODULES env > default (matching the PGMT_* pattern
         // connection args use).
         let from_env: Vec<String>;
@@ -492,11 +492,7 @@ impl ModuleSelection {
         }
 
         let mut named: BTreeSet<String> = if requested.is_empty() {
-            if default_all {
-                declared.keys().cloned().collect()
-            } else {
-                BTreeSet::new()
-            }
+            BTreeSet::new()
         } else if requested.len() == 1 && requested[0] == "all" {
             declared.keys().cloned().collect()
         } else {

@@ -100,7 +100,7 @@ pgmt migrate apply --modules all              # every declared module
 PGMT_MODULES=core,billing pgmt migrate apply  # env var fallback
 ```
 
-Resolution order matches pgmt's connection settings: `--modules` flag > `PGMT_MODULES` env var > default. The default for `apply` is base-only; `migrate provision` without `--modules` provisions **all** declared modules on a fresh target.
+Resolution order matches pgmt's connection settings: `--modules` flag > `PGMT_MODULES` env var > default. The default — for `apply` and `provision` alike — is **base-only**: modules deploy only when named. Use `--modules all` when a target should receive everything.
 
 Dependency closure is automatic and announced:
 

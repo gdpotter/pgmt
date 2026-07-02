@@ -213,7 +213,7 @@ enum MigrateCommands {
         dry_run: bool,
 
         /// Modules to provision/adopt (comma-separated, or "all"). Default:
-        /// all declared modules on a fresh target. Falls back to PGMT_MODULES.
+        /// only the unmoduled base. Falls back to PGMT_MODULES.
         #[arg(long, value_delimiter = ',')]
         modules: Vec<String>,
     },
@@ -490,7 +490,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                             .with_file(file_config.clone())
                             .resolve()?;
                         let target = target.resolve(&file_config)?;
-                        let selection = modules::ModuleSelection::resolve(modules, &config, false)?;
+                        let selection = modules::ModuleSelection::resolve(modules, &config)?;
 
                         info!("Applying explicit migrations");
                         commands::cmd_migrate_apply(&config, &root_dir, &target, selection).await
@@ -504,7 +504,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                             .with_file(file_config.clone())
                             .resolve()?;
                         let target = target.resolve(&file_config)?;
-                        let selection = modules::ModuleSelection::resolve(modules, &config, true)?;
+                        let selection = modules::ModuleSelection::resolve(modules, &config)?;
 
                         info!("Provisioning database");
                         commands::cmd_migrate_provision(
