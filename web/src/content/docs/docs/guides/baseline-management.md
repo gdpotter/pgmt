@@ -56,7 +56,9 @@ If there's no baseline yet, `migrate provision` simply replays all migrations an
 pgmt migrate baseline
 ```
 
-This creates a baseline from your current schema files and deletes all existing migrations and old baselines. The baseline version matches the latest migration's version.
+This **checkpoints the migration log**: pgmt replays your existing baseline plus every migration, snapshots the result as a new baseline at the latest migration's version, and deletes the collapsed migrations and old baselines.
+
+The checkpoint is built from history — never from your schema files. Schema edits you haven't generated a migration for stay out of the baseline and surface in your next `migrate new`, where they belong. This also means there must be a log to checkpoint: running `migrate baseline` with zero migrations is an error. To create a baseline directly from schema files, use `pgmt migrate new <description> --create-baseline` (or `pgmt init` for a new project).
 
 **Create a baseline but keep migration files:**
 
@@ -81,6 +83,12 @@ pgmt migrate new "v2.0 release" --create-baseline
 ```bash
 pgmt migrate baseline list
 ```
+
+## Baselines and Sections
+
+Baselines support the same `-- pgmt:section` headers as [multi-section migrations](/docs/guides/multi-section-migrations) and are applied section-by-section with real execution modes — a baseline containing `CREATE INDEX CONCURRENTLY` works. A baseline without headers runs as a single transactional section, so existing baselines behave exactly as before.
+
+Projects using [modules](/docs/guides/modules) generate module-tagged sections automatically, and `migrate baseline` preserves each object's module tag through a checkpoint.
 
 ## Working with Branches
 

@@ -84,6 +84,10 @@ export default defineConfig({
               label: 'Baseline Management',
               link: '/docs/guides/baseline-management',
             },
+            {
+              label: 'Modules',
+              link: '/docs/guides/modules',
+            },
           ],
         },
         {

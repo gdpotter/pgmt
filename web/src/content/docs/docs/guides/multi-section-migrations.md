@@ -242,6 +242,12 @@ pgmt migrate validate --sections
 
 - Change `mode="transactional"` to `mode="non-transactional"`
 
+## Sections in Baselines
+
+Baseline files support the same section headers and execute section-by-section with the same modes — so a baseline containing `CREATE INDEX CONCURRENTLY` works (it gets its own `non-transactional` section instead of failing inside one big transaction). A baseline without headers runs as a single transactional section.
+
+Projects using [modules](/docs/guides/modules) get sectioned files automatically: generated migrations and baselines are partitioned into module-tagged sections (`-- pgmt:section name="billing" module="billing"`).
+
 ## Best Practices
 
 - Use descriptive section names (`add_priority_column` not `section1`)
