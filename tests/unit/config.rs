@@ -16,6 +16,7 @@ mod config_integration_tests {
     #[test]
     fn test_config_merge_cli_overrides_file() -> Result<()> {
         let file_config = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://localhost/file_dev".to_string()),
                 shadow_url: None,
@@ -73,6 +74,7 @@ mod config_integration_tests {
     async fn test_shadow_database_auto_url_generation() -> Result<()> {
         with_docker_cleanup(async {
             let config_input = ConfigInput {
+                modules: None,
                 databases: Some(DatabasesInput {
                     dev_url: Some("postgres://user:pass@localhost:5432/myapp".to_string()),
                     shadow_url: None,
@@ -126,6 +128,7 @@ mod config_integration_tests {
     #[tokio::test]
     async fn test_shadow_database_manual_url() -> Result<()> {
         let config_input = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://localhost/dev".to_string()),
                 shadow_url: None,
@@ -162,6 +165,7 @@ mod config_integration_tests {
     #[test]
     fn test_object_filtering_configuration() -> Result<()> {
         let config_input = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://localhost/dev".to_string()),
                 shadow_url: None,
@@ -243,6 +247,7 @@ mod config_integration_tests {
     fn test_config_partial_override() -> Result<()> {
         // Test that partial config input properly merges with defaults
         let partial_config = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://custom/dev".to_string()),
                 shadow_url: None,
@@ -335,6 +340,7 @@ migration:
     fn test_config_validation_edge_cases() -> Result<()> {
         // Test with minimal valid config
         let minimal_config = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://localhost/minimal".to_string()),
                 shadow_url: None,

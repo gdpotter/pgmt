@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Raw configuration input - all fields Optional for merging
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -10,6 +10,8 @@ pub struct ConfigInput {
     pub directories: Option<DirectoriesInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objects: Option<ObjectsInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modules: Option<BTreeMap<String, ModuleSpecInput>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub migration: Option<MigrationInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,9 +30,49 @@ pub struct ConfigInput {
 pub struct Config {
     pub directories: Directories,
     pub objects: Objects,
+    pub modules: Modules,
     pub migration: Migration,
     pub schema: Schema,
     pub docker: Docker,
+}
+
+/// One module declaration as written in `pgmt.yaml`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ModuleSpecInput {
+    /// Project-root-relative globs mapping files to this module (required).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+    /// Modules this one may reference (the module DAG; acyclic).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<Vec<String>>,
+    /// Mutually-exclusive modules (never co-deployed on one target).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflicts_with: Option<Vec<String>>,
+}
+
+/// Resolved, validated module declarations. Empty map = the feature is off
+/// (no `modules:` in pgmt.yaml) and pgmt behaves exactly as before modules
+/// existed. Files matching no module belong to the unmoduled base, which is
+/// not a module and has no entry here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Modules {
+    pub modules: BTreeMap<String, ModuleSpec>,
+}
+
+impl Modules {
+    /// Whether the project declares modules at all.
+    pub fn is_enabled(&self) -> bool {
+        !self.modules.is_empty()
+    }
+}
+
+/// A resolved module declaration (validated: name grammar, existing
+/// dependency references, acyclic DAG, symmetric conflicts).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModuleSpec {
+    pub paths: Vec<String>,
+    pub depends_on: Vec<String>,
+    pub conflicts_with: Vec<String>,
 }
 
 // Database configuration

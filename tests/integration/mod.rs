@@ -6,5 +6,6 @@ pub mod init;
 pub mod migrate_new_branch_shadow;
 pub mod migration_tracking;
 pub mod migration_tracking_functions;
+pub mod modules_attribution;
 pub mod multi_file_schema;
 pub mod schema_loader;

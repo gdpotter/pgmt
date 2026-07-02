@@ -12,6 +12,7 @@ fn test_tracking_table_defaults() {
 #[test]
 fn test_tracking_table_configuration_parsing() -> Result<()> {
     let config_input = ConfigInput {
+        modules: None,
         databases: None,
         directories: None,
         objects: None,
@@ -42,6 +43,7 @@ fn test_tracking_table_configuration_parsing() -> Result<()> {
 fn test_tracking_table_partial_configuration() -> Result<()> {
     // Test with only schema specified
     let config_input = ConfigInput {
+        modules: None,
         databases: None,
         directories: None,
         objects: None,
@@ -72,6 +74,7 @@ fn test_tracking_table_partial_configuration() -> Result<()> {
 fn test_tracking_table_fallback_to_defaults() -> Result<()> {
     // Test with no tracking table configuration
     let config_input = ConfigInput {
+        modules: None,
         databases: None,
         directories: None,
         objects: None,

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod migration_discovery;
+pub mod modules;
 pub mod schema_generator;
 pub mod shared_constraint_rendering;
 pub mod shared_grant_rendering;

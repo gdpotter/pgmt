@@ -39,6 +39,7 @@ fn test_apply_command_signature() {
 
         // Create minimal config for signature test
         let config_input = ConfigInput {
+            modules: None,
             databases: Some(DatabasesInput {
                 dev_url: Some("postgres://test".to_string()),
                 shadow_url: None,
@@ -92,6 +93,7 @@ async fn test_apply_command_error_handling() -> Result<()> {
 
     // Create minimal config with invalid database URL to test error handling
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://invalid-host:9999/invalid-db".to_string()),
             shadow_url: None,
@@ -143,6 +145,7 @@ fn test_apply_command_configuration_requirements() -> Result<()> {
 
     // Test that configuration can be created for apply command
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/test_dev".to_string()),
             shadow_url: None,

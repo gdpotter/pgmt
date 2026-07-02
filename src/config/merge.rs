@@ -32,6 +32,10 @@ impl Merge<ConfigInput> for ConfigInput {
                 (None, Some(b)) => Some(b),
                 (Some(a), Some(b)) => Some(a.merge_with(b)),
             },
+            // An overlay's `modules:` map replaces the whole map: partial
+            // per-module merging would silently combine two different
+            // partitions of the schema.
+            modules: self.modules.merge(other.modules),
             migration: self.migration.merge(other.migration),
             schema: self.schema.merge(other.schema),
             docker: self.docker.merge(other.docker),

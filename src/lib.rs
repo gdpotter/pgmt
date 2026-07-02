@@ -9,6 +9,7 @@ pub mod docker;
 pub mod migrate;
 pub mod migration;
 pub mod migration_tracking;
+pub mod modules;
 pub mod progress;
 pub mod prompts;
 pub mod render;

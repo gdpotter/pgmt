@@ -135,6 +135,7 @@ async fn test_shadow_database_config_docker() -> Result<()> {
     };
 
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(databases_input),
         directories: None,
         objects: None,

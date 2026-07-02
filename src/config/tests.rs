@@ -5,6 +5,7 @@ use crate::config::types::*;
 #[test]
 fn test_config_input_merge() {
     let file_config = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/dev".to_string()),
             shadow_url: None,
@@ -29,6 +30,7 @@ fn test_config_input_merge() {
     };
 
     let cli_config = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: None, // CLI doesn't override this
             shadow_url: Some("postgres://localhost/shadow_override".to_string()),
@@ -101,6 +103,7 @@ fn test_config_input_merge() {
 #[test]
 fn test_config_builder_resolve() {
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/dev".to_string()),
             shadow_url: None,
@@ -288,6 +291,7 @@ fn test_shadow_docker_version_resolution() {
 fn test_config_builder_shadow_docker_version() {
     // Test version configuration through ConfigBuilder
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/dev".to_string()),
             shadow_url: None,
@@ -329,6 +333,7 @@ fn test_config_builder_shadow_docker_version() {
 fn test_config_builder_shadow_docker_explicit_image() {
     // Test explicit image configuration (should take precedence)
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/dev".to_string()),
             shadow_url: None,
@@ -379,6 +384,7 @@ fn test_default_shadow_docker_version() {
 fn test_config_builder_shadow_docker_platform() {
     // Platform flows through the builder for single-arch images (e.g. PostGIS).
     let config_input = ConfigInput {
+        modules: None,
         databases: Some(DatabasesInput {
             dev_url: Some("postgres://localhost/dev".to_string()),
             shadow_url: None,
