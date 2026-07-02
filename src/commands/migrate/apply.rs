@@ -223,30 +223,6 @@ pub(crate) async fn apply_pending_migrations(
             .iter()
             .filter(|section| selection.selects(section.module.as_deref()))
             .collect();
-        let mut skipped_modules: BTreeSet<&str> = BTreeSet::new();
-        for section in &sections {
-            if let Some(module) = section.module.as_deref()
-                && !selection.selects(Some(module))
-            {
-                skipped_modules.insert(module);
-            }
-        }
-        for module in &skipped_modules {
-            if established.contains(*module) {
-                eprintln!(
-                    "Warning: module '{}' is established on this target but not in the \\
-                     requested set — its sections in migration {} were skipped. This is \\
-                     schema drift until a deploy names it (--modules ...,{}).",
-                    module, migration.version, module
-                );
-            } else {
-                println!(
-                    "Skipping module '{}' sections in migration {} (not established here)",
-                    module, migration.version
-                );
-            }
-        }
-
         let statuses = if registered.is_some() {
             section_statuses(
                 pool,
@@ -258,6 +234,34 @@ pub(crate) async fn apply_pending_migrations(
         } else {
             Default::default()
         };
+
+        // Only sections that have NOT already completed here are actually
+        // being skipped — an unselected module whose sections ran in an
+        // earlier deploy is up to date, not drifting.
+        let mut skipped_modules: BTreeSet<&str> = BTreeSet::new();
+        for section in &sections {
+            if let Some(module) = section.module.as_deref()
+                && !selection.selects(Some(module))
+                && statuses.get(&section.name) != Some(&SectionStatus::Completed)
+            {
+                skipped_modules.insert(module);
+            }
+        }
+        for module in &skipped_modules {
+            if established.contains(*module) {
+                eprintln!(
+                    "Warning: module '{}' is established on this target but not in the \
+                     requested set — its sections in migration {} were skipped. This is \
+                     schema drift until a deploy names it (--modules ...,{}).",
+                    module, migration.version, module
+                );
+            } else {
+                println!(
+                    "Skipping module '{}' sections in migration {} (not established here)",
+                    module, migration.version
+                );
+            }
+        }
 
         // Conservative intra-migration coupling check: section order encodes
         // potential dependency, so a selected section must not run while an
@@ -276,7 +280,7 @@ pub(crate) async fn apply_pending_migrations(
                     && statuses.get(&earlier.name) != Some(&SectionStatus::Completed)
                 {
                     anyhow::bail!(
-                        "migration {} couples module '{}' (section '{}') ahead of selected \\
+                        "migration {} couples module '{}' (section '{}') ahead of selected \
                          section '{}'; deploy them together (--modules ...,{})",
                         migration.version,
                         module,

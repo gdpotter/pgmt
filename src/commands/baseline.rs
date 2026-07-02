@@ -240,6 +240,13 @@ pub async fn cmd_migrate_baseline(
 
         let mut deleted_baselines = 0;
         for b in &existing_baselines {
+            // The checkpoint may share its version with a pre-existing PAIRED
+            // baseline (migrate new --create-baseline) and therefore its PATH:
+            // create_baseline just overwrote that file. Deleting it as an "old"
+            // baseline would destroy the checkpoint we just wrote.
+            if b.path == result.path {
+                continue;
+            }
             match fs::remove_file(&b.path) {
                 Ok(()) => deleted_baselines += 1,
                 Err(e) => eprintln!("Failed to delete old baseline {}: {}", b.version, e),

@@ -307,9 +307,11 @@ async fn replay_migrations(
     Ok(())
 }
 
-/// Warn about migrations that predate the baseline and will never replay
+/// Warn about migrations that predate the baseline and will never replay.
+/// Strictly-less: a migration at the baseline's own version is its PAIRED
+/// migration (`migrate new --create-baseline`) — covered by design, not stale.
 fn warn_pre_baseline_migrations(migrations: &[ParsedMigration], baseline_version: u64) {
-    for m in migrations.iter().filter(|m| m.version <= baseline_version) {
+    for m in migrations.iter().filter(|m| m.version < baseline_version) {
         eprintln!(
             "Warning: Migration {} predates baseline {} and will be skipped. \
              Run 'pgmt migrate update {}' to renumber it.",

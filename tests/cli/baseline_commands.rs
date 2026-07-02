@@ -443,6 +443,50 @@ mod baseline_tests {
         .await
     }
 
+    /// Regression: when the latest migration has a PAIRED baseline (created by
+    /// `migrate new --create-baseline`), the checkpoint shares its version and
+    /// therefore its file path. The cleanup phase must not delete the freshly
+    /// written checkpoint as an "old" baseline — that destroyed the entire
+    /// history (migrations deleted, zero baselines left).
+    #[tokio::test]
+    async fn test_migrate_baseline_survives_paired_baseline_at_same_version() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+
+            helper
+                .command()
+                .args(["migrate", "new", "initial", "--create-baseline"])
+                .assert()
+                .success();
+
+            helper
+                .command()
+                .args(["migrate", "baseline"])
+                .assert()
+                .success();
+
+            assert_eq!(helper.list_migration_files()?.len(), 0, "log collapsed");
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(
+                baselines.len(),
+                1,
+                "the checkpoint must survive its own cleanup"
+            );
+
+            // And the project still reconstructs from it.
+            helper
+                .command()
+                .args(["migrate", "new", "noop"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("No changes detected"));
+
+            Ok(())
+        })
+        .await
+    }
+
     /// With no migrations there is no log to checkpoint: refuse with guidance
     /// instead of snapshotting the schema files under a made-up version.
     #[tokio::test]
