@@ -72,25 +72,6 @@ pub async fn build_desired_state(
     Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
 }
 
-/// Like [`build_desired_state`], but also returns the **base** catalog: the
-/// shadow's contents after clean+roles but before any schema files are applied
-/// (image-provided substrate). Diffing the *unfiltered* desired catalog against
-/// this base subtracts substrate out structurally, instead of relying on the
-/// `objects` predicate to name it. Used by baseline generation.
-pub async fn build_desired_state_with_base(
-    config: &Config,
-    root_dir: &Path,
-    shadow_pool: &PgPool,
-) -> Result<(Catalog, Catalog)> {
-    clean_shadow_for_schema(config, root_dir, shadow_pool).await?;
-    // Whatever the shadow already provides is the base: for a docker/branch
-    // shadow that's the pristine image substrate; for a clean-mode shadow it's
-    // the post-clean state. Loaded unfiltered so substrate cancels in the diff.
-    let base = Catalog::load_unfiltered(shadow_pool).await?;
-    let (desired, _) = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
-    Ok((base, desired))
-}
-
 /// Clean the shadow database and apply the roles file, leaving it ready for
 /// schema files. (For docker/branch shadows the clean is a no-op.)
 async fn clean_shadow_for_schema(
@@ -171,22 +152,6 @@ pub async fn apply_current_schema_to_shadow(
     // for long-running callers like `apply --watch`); no-op for external URLs.
     crate::db::branch::drop_branch(shadow_pool).await?;
     Ok(catalog)
-}
-
-/// Like [`apply_current_schema_to_shadow`], but returns the
-/// `(base, unfiltered desired)` pair for baseline generation. See
-/// [`build_desired_state_with_base`].
-pub async fn apply_current_schema_to_shadow_with_base(
-    config: &Config,
-    root_dir: &Path,
-    shadow: &crate::config::ShadowDatabase,
-) -> Result<(Catalog, Catalog)> {
-    let shadow_pool = shadow.connect_fresh().await?;
-
-    let pair = build_desired_state_with_base(config, root_dir, &shadow_pool).await?;
-
-    crate::db::branch::drop_branch(shadow_pool).await?;
-    Ok(pair)
 }
 
 /// Like [`apply_current_schema_to_shadow`], but also returns the file→object

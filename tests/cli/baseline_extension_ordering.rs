@@ -17,6 +17,12 @@ async fn test_baseline_extension_first() -> Result<()> {
 
         // Create baseline from schema files
         // Use --force because extensions can cause minor validation inconsistencies
+        // `migrate baseline` checkpoints the migration log, so create it first.
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
         helper
             .command()
             .args(["migrate", "baseline", "--force", "--keep-migrations"])
@@ -92,6 +98,12 @@ async fn test_baseline_multiple_extensions_ordering() -> Result<()> {
 
         // Create baseline from schema files
         // Use --force because extensions can cause minor validation inconsistencies
+        // `migrate baseline` checkpoints the migration log, so create it first.
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
         helper
             .command()
             .args(["migrate", "baseline", "--force", "--keep-migrations"])
@@ -251,6 +263,12 @@ async fn test_extension_with_schema_ordering() -> Result<()> {
 
         // Create baseline - should order by dependencies
         // Use --force because extensions can cause minor validation inconsistencies
+        // `migrate baseline` checkpoints the migration log, so create it first.
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
         helper
             .command()
             .args(["migrate", "baseline", "--force", "--keep-migrations"])

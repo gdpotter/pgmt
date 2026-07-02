@@ -341,26 +341,61 @@ async fn test_module_update_stays_sectioned() -> Result<()> {
     .await
 }
 
-/// `migrate baseline` (full reset) is not yet module-aware: a header-less
-/// baseline would erase module ownership on replay, so it refuses with
-/// guidance instead.
+/// `migrate baseline` checkpoints the log with module tags preserved: the
+/// collapsed baseline's sections carry each object's historical module, and —
+/// being a pure checkpoint that never changes ownership — no `remaps`.
 #[tokio::test]
-async fn test_migrate_baseline_refuses_on_module_projects() -> Result<()> {
+async fn test_migrate_baseline_checkpoint_keeps_module_sections() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         enable_modules(helper, MODULES_YAML)?;
+
         helper.write_schema_file(
             "core/users.sql",
             "CREATE TABLE users (id SERIAL PRIMARY KEY);",
         )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "-- require: core/users.sql\n\
+             CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
 
         helper
             .command()
             .args(["migrate", "baseline"])
             .assert()
-            .failure()
-            .stderr(predicate::str::contains("not yet module-aware"))
-            .stderr(predicate::str::contains("--create-baseline"));
+            .success();
+
+        let baselines = helper.list_baseline_files()?;
+        assert_eq!(baselines.len(), 1);
+        let baseline = helper.read_baseline_file(&baselines[0])?;
+        assert!(
+            baseline.contains(r#"module="core""#),
+            "checkpoint must keep core's module tag:\n{baseline}"
+        );
+        assert!(
+            baseline.contains(r#"module="billing""#),
+            "checkpoint must keep billing's module tag:\n{baseline}"
+        );
+        assert!(
+            !baseline.contains("remaps="),
+            "a checkpoint never changes ownership — no remaps:\n{baseline}"
+        );
+
+        // The checkpoint replaces the migrations and replays cleanly: a fresh
+        // `migrate new` reconstructs from it without spurious diffs.
+        assert_eq!(helper.list_migration_files()?.len(), 0);
+        helper
+            .command()
+            .args(["migrate", "new", "noop"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("No changes detected"));
 
         Ok(())
     })

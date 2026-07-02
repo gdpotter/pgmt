@@ -1,16 +1,24 @@
 use crate::baseline::operations::{
     BaselineCreationRequest, create_baseline, display_baseline_summary, display_baseline_usage_info,
 };
+use crate::catalog::file_dependencies::FileToObjectMapping;
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::diff::operations::SqlRenderer;
-use crate::migration::{discover_baselines, discover_migrations};
-use anyhow::{Result, anyhow};
+use crate::migration::{discover_baselines, discover_migrations, replay_history_for_checkpoint};
+use crate::modules::{ModulePartition, render_sectioned_migration, sectionize_steps};
+use anyhow::Result;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
-/// Create a baseline from the current schema and delete all migrations by default.
+/// Checkpoint the migration log: collapse the existing baseline + migrations
+/// into a single baseline at the latest version, deleting the collapsed
+/// migrations by default.
+///
+/// A baseline asserts "replaying history through V produces exactly this", so
+/// it is generated FROM a replay of history — never from the schema files,
+/// which may have drifted ahead. Un-migrated schema drift stays out of the
+/// checkpoint and surfaces in the next `migrate new`, where it belongs.
 ///
 /// When `keep_migrations` is true, migrations are preserved (baseline-only mode).
 /// When `dry_run` is true, shows what would happen without making changes.
@@ -22,34 +30,25 @@ pub async fn cmd_migrate_baseline(
     dry_run: bool,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
-    // A header-less baseline attributes everything to the unmoduled base on
-    // replay, which would erase the project's module ownership and force a
-    // mass re-anchor on the next `migrate new`. Refuse until this command
-    // learns to emit module-tagged sections.
-    if config.modules.is_enabled() {
-        anyhow::bail!(
-            "`migrate baseline` is not yet module-aware; on a module project use \
-             `pgmt migrate new <description> --create-baseline`, which emits a \
-             module-sectioned baseline alongside the migration"
-        );
-    }
-
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
+    let roles_file = root_dir.join(&config.directories.roles);
 
     // Discover existing files before creating the baseline
     let migrations = discover_migrations(&migrations_dir)?;
     let existing_baselines = discover_baselines(&baselines_dir)?;
 
-    // Use latest migration version if available, otherwise generate a fresh timestamp
-    let version = if let Some(latest) = migrations.last() {
-        latest.version
-    } else {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| anyhow!("System time is before Unix epoch: {}", e))?
-            .as_secs()
-    };
+    // There is no log to checkpoint without migrations. Creating a baseline
+    // from schema files is a different operation with its own on-ramps.
+    if migrations.is_empty() {
+        anyhow::bail!(
+            "no migrations to checkpoint: `migrate baseline` collapses the migration log \
+             into a baseline. To create a baseline from your schema files, use \
+             `pgmt migrate new <description> --create-baseline` (or `pgmt init` for a \
+             new project)."
+        );
+    }
+    let version = migrations.last().expect("checked non-empty").version;
 
     if dry_run && !keep_migrations {
         // Show what would happen
@@ -85,25 +84,33 @@ pub async fn cmd_migrate_baseline(
         return Ok(());
     }
 
-    // Create the baseline from current schema files. Capture the shadow's base
-    // (image-provided substrate) and diff the unfiltered desired state against
-    // it, so substrate is subtracted out structurally rather than via the
-    // `objects` predicate.
-    debug!("Loading schema files into shadow database");
-    let (base_catalog, desired) =
-        crate::schema_ops::apply_current_schema_to_shadow_with_base(config, root_dir, shadow)
-            .await?;
+    // Checkpoint: replay the full history onto a pristine shadow. The shadow's
+    // pre-history base (image-provided substrate) is captured so the baseline
+    // diff subtracts substrate structurally rather than via the `objects`
+    // predicate; module projects also collect per-section attribution so the
+    // checkpoint keeps every object's module tag.
+    debug!("Replaying migration history into shadow database");
+    let replay_pool = shadow.connect_fresh().await?;
+    let (base_catalog, replayed, historical) = replay_history_for_checkpoint(
+        &replay_pool,
+        &baselines_dir,
+        &migrations_dir,
+        &roles_file,
+        config,
+    )
+    .await?;
+    crate::db::branch::drop_branch(replay_pool).await?;
 
-    // The managed view of the desired state — used for the dependency debug
+    // The managed view of the replayed state — used for the dependency debug
     // output below and for baseline validation. The baseline itself is
-    // desired-minus-base; re-applied onto a substrate-bearing shadow it
+    // replayed-minus-base; re-applied onto a substrate-bearing shadow it
     // reproduces this view, so validating against it holds whether or not the
     // user scoped `objects`.
-    let catalog = ObjectFilter::from_config(config).filter_catalog(desired.clone());
+    let catalog = ObjectFilter::from_config(config).filter_catalog(replayed.clone());
 
     let request = BaselineCreationRequest {
-        catalog: desired,
-        base_catalog,
+        catalog: replayed.clone(),
+        base_catalog: base_catalog.clone(),
         version,
         description: "baseline".to_string(),
         baselines_dir: baselines_dir.clone(),
@@ -111,6 +118,24 @@ pub async fn cmd_migrate_baseline(
     };
 
     let result = create_baseline(request).await?;
+
+    // Module projects: rewrite the checkpoint into module-tagged sections.
+    // Attribution comes from the replayed history alone (a checkpoint has no
+    // \"desired\" side), and ownership never changes across a checkpoint, so
+    // these baselines carry no `remaps` — re-anchoring is exclusively
+    // `migrate new --create-baseline`'s job.
+    if config.modules.is_enabled() {
+        let partition = ModulePartition::from_config(config)?;
+        let sections = sectionize_steps(
+            &result.steps,
+            &base_catalog,
+            &replayed,
+            &partition,
+            &FileToObjectMapping::new(),
+            &historical,
+        )?;
+        std::fs::write(&result.path, render_sectioned_migration(&sections))?;
+    }
 
     if tracing::enabled!(tracing::Level::DEBUG) {
         debug!(
@@ -173,9 +198,8 @@ pub async fn cmd_migrate_baseline(
             verbose: false,
         };
 
-        let roles_file = root_dir.join(&config.directories.roles);
         // Baseline validation replays into a pristine shadow, so it needs its
-        // own fresh branch — the desired-state build above dirtied its own.
+        // own fresh branch — the checkpoint replay above dirtied its own.
         let validate_pool = shadow.connect_fresh().await?;
         let validation_result = validate_baseline_against_catalog(
             &validate_pool,

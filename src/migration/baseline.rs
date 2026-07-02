@@ -113,20 +113,28 @@ pub async fn load_baseline_into_shadow(
     load_baseline_into_shadow_inner(shadow_pool, baseline_path, roles_file, config, None).await
 }
 
-/// Section-by-section baseline replay (validation mode), optionally
-/// collecting object→module attribution from the baseline's section tags.
-async fn load_baseline_into_shadow_inner(
+/// Clean the shadow and apply the roles file: the pristine pre-history state
+/// every replay starts from. (For docker/branch shadows the clean is a no-op
+/// and this state is the image substrate.)
+async fn prepare_shadow_for_replay(
     shadow_pool: &PgPool,
-    baseline_path: &Path,
     roles_file: &Path,
     config: &Config,
-    attribution: Option<&mut HistoricalAttribution>,
-) -> Result<Catalog> {
+) -> Result<()> {
     cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
-
-    // Apply roles before baseline (handles non-existent files gracefully)
+    // Apply roles before any history (handles non-existent files gracefully)
     crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
+    Ok(())
+}
 
+/// Parse and execute a baseline file's sections against an already-prepared
+/// shadow (validation mode), optionally collecting per-section attribution.
+async fn apply_baseline_file_sections(
+    shadow_pool: &PgPool,
+    baseline_path: &Path,
+    config: &Config,
+    attribution: Option<&mut HistoricalAttribution>,
+) -> Result<()> {
     let baseline_sql = std::fs::read_to_string(baseline_path)
         .with_context(|| format!("Failed to read baseline file: {}", baseline_path.display()))?;
     let source = baseline_path
@@ -137,9 +145,69 @@ async fn load_baseline_into_shadow_inner(
     let sections = parse_baseline_sections(&baseline_sql, source)?;
     execute_validation_sections(shadow_pool, &sections, config, attribution)
         .await
-        .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))?;
+        .with_context(|| format!("Failed to apply baseline SQL: {}", baseline_path.display()))
+}
 
+/// Section-by-section baseline replay (validation mode), optionally
+/// collecting object→module attribution from the baseline's section tags.
+async fn load_baseline_into_shadow_inner(
+    shadow_pool: &PgPool,
+    baseline_path: &Path,
+    roles_file: &Path,
+    config: &Config,
+    attribution: Option<&mut HistoricalAttribution>,
+) -> Result<Catalog> {
+    prepare_shadow_for_replay(shadow_pool, roles_file, config).await?;
+    apply_baseline_file_sections(shadow_pool, baseline_path, config, attribution).await?;
     load_managed_catalog(shadow_pool, config).await
+}
+
+/// Checkpoint the migration log: replay the full history (latest baseline +
+/// subsequent migrations) onto a pristine shadow and return the shadow's
+/// pre-history **base** (image substrate — baseline generation diffs against
+/// it), the **unfiltered** replayed catalog, and per-section attribution
+/// (populated only when the project declares modules).
+///
+/// This is `migrate baseline`'s source: a baseline asserts "replaying history
+/// through V produces exactly this", so it is generated FROM that replay —
+/// never from the schema files, which may have drifted ahead. Drift belongs
+/// in the next `migrate new`, not smuggled into history.
+pub async fn replay_history_for_checkpoint(
+    shadow_pool: &PgPool,
+    baselines_dir: &Path,
+    migrations_dir: &Path,
+    roles_file: &Path,
+    config: &Config,
+) -> Result<(Catalog, Catalog, HistoricalAttribution)> {
+    let all_migrations = discover_migrations(migrations_dir)?;
+    let mut attribution = HistoricalAttribution::default();
+    let mut collector: Option<&mut HistoricalAttribution> =
+        config.modules.is_enabled().then_some(&mut attribution);
+
+    prepare_shadow_for_replay(shadow_pool, roles_file, config).await?;
+    let base = Catalog::load_unfiltered(shadow_pool).await?;
+
+    let migrations_to_replay = if let Some(baseline) = find_latest_baseline(baselines_dir)? {
+        apply_baseline_file_sections(
+            shadow_pool,
+            &baseline.path,
+            config,
+            collector.as_deref_mut(),
+        )
+        .await?;
+        warn_pre_baseline_migrations(&all_migrations, baseline.version);
+        all_migrations
+            .into_iter()
+            .filter(|m| m.version > baseline.version)
+            .collect()
+    } else {
+        all_migrations
+    };
+
+    replay_migrations(shadow_pool, &migrations_to_replay, config, false, collector).await?;
+
+    let catalog = Catalog::load_unfiltered(shadow_pool).await?;
+    Ok((base, catalog, attribution))
 }
 
 /// Apply baseline SQL to a real target database (used by `migrate provision`).
@@ -367,8 +435,7 @@ async fn get_migration_starting_state_inner(
         if baseline_config.verbose {
             info!("No existing baseline found, reconstructing from existing migrations");
         }
-        cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
-        crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
+        prepare_shadow_for_replay(shadow_pool, roles_file, config).await?;
 
         if all_migrations.is_empty() {
             println!("No existing migrations found, starting from empty schema");
@@ -440,8 +507,7 @@ pub async fn get_migration_update_starting_state(
                     target_version
                 );
             }
-            cleaner::clean_shadow_db(shadow_pool, &config.objects).await?;
-            crate::schema_ops::apply_roles_file(shadow_pool, roles_file).await?;
+            prepare_shadow_for_replay(shadow_pool, roles_file, config).await?;
 
             let before_target: Vec<_> = all_migrations
                 .into_iter()

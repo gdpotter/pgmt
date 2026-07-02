@@ -127,6 +127,12 @@ mod baseline_tests {
                 .assert()
                 .success();
 
+            // `migrate baseline` checkpoints the migration log, so create it first.
+            helper
+                .command()
+                .args(["migrate", "new", "initial"])
+                .assert()
+                .success();
             helper
                 .command()
                 .args(["migrate", "baseline", "--keep-migrations"])
@@ -199,10 +205,15 @@ mod baseline_tests {
 
             helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL);")?;
 
-            // Create first baseline
+            // Create first baseline (checkpointing the initial migration)
             helper
                 .command()
                 .args(["apply", "--force"])
+                .assert()
+                .success();
+            helper
+                .command()
+                .args(["migrate", "new", "initial"])
                 .assert()
                 .success();
             helper
@@ -366,6 +377,87 @@ mod baseline_tests {
                 baseline.contains("posts"),
                 "updated baseline must include the newly added posts table:\n{baseline}"
             );
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Checkpoint semantics: `migrate baseline` collapses the migration LOG,
+    /// never the schema files. Un-migrated schema drift stays out of the
+    /// baseline and surfaces in the next `migrate new` instead.
+    #[tokio::test]
+    async fn test_migrate_baseline_checkpoints_history_not_files() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            // History: users only.
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "add_users"])
+                .assert()
+                .success();
+
+            // Drift: posts exists in the files but in no migration.
+            helper.write_schema_file("posts.sql", "CREATE TABLE posts (id SERIAL PRIMARY KEY);")?;
+
+            helper
+                .command()
+                .args(["migrate", "baseline"])
+                .assert()
+                .success();
+
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(baselines.len(), 1);
+            let baseline = helper.read_baseline_file(&baselines[0])?;
+            assert!(
+                baseline.contains("users"),
+                "checkpoint must contain what history created:\n{baseline}"
+            );
+            assert!(
+                !baseline.contains("posts"),
+                "un-migrated drift must NOT be smuggled into the checkpoint:\n{baseline}"
+            );
+
+            // The drift lands where it belongs: the next migration.
+            helper
+                .command()
+                .args(["migrate", "new", "add_posts"])
+                .assert()
+                .success();
+            let migrations = helper.list_migration_files()?;
+            assert_eq!(
+                migrations.len(),
+                1,
+                "old migrations collapsed, drift is new"
+            );
+            let migration = helper.read_migration_file(&migrations[0])?;
+            assert!(
+                migration.contains("posts") && !migration.contains("users"),
+                "the next migration captures exactly the drift:\n{migration}"
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// With no migrations there is no log to checkpoint: refuse with guidance
+    /// instead of snapshotting the schema files under a made-up version.
+    #[tokio::test]
+    async fn test_migrate_baseline_errors_without_migrations() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL);")?;
+
+            helper
+                .command()
+                .args(["migrate", "baseline"])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("no migrations to checkpoint"))
+                .stderr(predicate::str::contains("--create-baseline"));
 
             Ok(())
         })

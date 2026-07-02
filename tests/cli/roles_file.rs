@@ -233,13 +233,18 @@ GRANT SELECT ON items TO test_apply_role;"#,
 GRANT SELECT ON orders TO test_validate_role;"#,
             )?;
 
-            // Apply and create baseline
+            // Apply and create baseline (checkpointing the initial migration)
             helper
                 .command()
                 .args(["apply", "--force"])
                 .assert()
                 .success();
 
+            helper
+                .command()
+                .args(["migrate", "new", "initial"])
+                .assert()
+                .success();
             helper
                 .command()
                 .args(["migrate", "baseline", "--keep-migrations"])

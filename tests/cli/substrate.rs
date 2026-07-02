@@ -67,6 +67,10 @@ fn baseline_for(config_yaml: &str, schema_files: &[(&str, &str)]) -> Result<Stri
         fs::write(root.join("schema").join(name), content)?;
     }
 
+    // `migrate baseline` checkpoints the migration log, so create it first.
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
+    cmd.current_dir(root).args(["migrate", "new", "initial"]);
+    cmd.assert().success();
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("pgmt");
     cmd.current_dir(root).args(["migrate", "baseline"]);
     cmd.assert().success();
