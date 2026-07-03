@@ -314,16 +314,14 @@ pub fn compute_baseline_remaps(sections: &mut [StepSection], historical: &Histor
     }
 }
 
-/// Cut topologically-ordered migration steps into contiguous same-module
-/// sections (§8 of the modules design).
+/// Section migration steps by module: annotate each step with its owning
+/// module and dependency edges (one graph — `planning::annotate`), order it
+/// with module affinity so each module's steps stay contiguous whenever
+/// dependencies allow, and cut the result at module boundaries.
 ///
-/// Each step is attributed via its anchor object: desired-state objects
-/// resolve through the current file mapping, objects that exist only in the
-/// starting state (drops) resolve through the replayed history's attribution,
-/// grants and comments follow the object they attach to. The step order is
-/// preserved exactly as `diff_order` produced it — drops already precede the
-/// drops they unblock — so a module may legitimately recur
-/// (`billing`, `core`, `billing_2`).
+/// Interleaving (`billing`, `core`, `billing_2`) therefore appears exactly
+/// when real cross-module coupling forces it — a drop in one module
+/// unblocking a drop in another — never as an artifact of emission order.
 pub fn sectionize_steps(
     steps: &[crate::diff::operations::MigrationStep],
     old_catalog: &Catalog,
@@ -333,6 +331,7 @@ pub fn sectionize_steps(
     historical: &HistoricalAttribution,
 ) -> Result<Vec<StepSection>> {
     use crate::diff::operations::SqlRenderer;
+    use crate::diff::planning;
 
     // Grant ids are opaque strings; recover their target objects from the
     // catalogs so grant steps can follow their targets.
@@ -388,22 +387,27 @@ pub fn sectionize_steps(
         Ok(None)
     }
 
-    let mut sections: Vec<StepSection> = Vec::new();
-    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
-
-    for step in steps {
-        let module = resolve_module(
+    let mut module_of = |step: &crate::diff::operations::MigrationStep| {
+        resolve_module(
             &step.db_object_id(),
             partition,
             desired_mapping,
             historical,
             &grant_targets,
-        )?;
+        )
+    };
 
+    let planned = planning::annotate(steps.to_vec(), old_catalog, new_catalog, &mut module_of)?;
+    let ordered = planning::affinity_order(planned)?;
+
+    // Cut the (now maximally contiguous) order at module boundaries.
+    let mut sections: Vec<StepSection> = Vec::new();
+    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for node in ordered {
         match sections.last_mut() {
-            Some(last) if last.module == module => last.steps.push(step.clone()),
+            Some(last) if last.module == node.module => last.steps.push(node.step),
             _ => {
-                let base_name = module.as_deref().unwrap_or("default").to_string();
+                let base_name = node.module.as_deref().unwrap_or("default").to_string();
                 let count = name_counts.entry(base_name.clone()).or_insert(0);
                 *count += 1;
                 let name = if *count == 1 {
@@ -413,9 +417,9 @@ pub fn sectionize_steps(
                 };
                 sections.push(StepSection {
                     name,
-                    module,
+                    module: node.module,
                     remaps: Vec::new(),
-                    steps: vec![step.clone()],
+                    steps: vec![node.step],
                 });
             }
         }

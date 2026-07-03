@@ -76,6 +76,13 @@ async fn test_module_project_generates_sectioned_migration() -> Result<()> {
         let core_pos = sql.find(r#"name="core""#).unwrap();
         let billing_pos = sql.find(r#"name="billing""#).unwrap();
         assert!(core_pos < billing_pos, "core section precedes billing");
+        // Contiguity: nothing here forces interleaving, so each module gets
+        // exactly ONE section — no core_2/billing_2 artifacts of emission order.
+        assert!(
+            !sql.contains(r#"name="core_2""#) && !sql.contains(r#"name="billing_2""#),
+            "independent modules must be contiguous:
+{sql}"
+        );
 
         // The sectioned migration applies cleanly (naming the modules —
         // bare apply deploys only the base)...
