@@ -667,6 +667,78 @@ pub fn modules_needing_baseline_content(
         .collect()
 }
 
+/// Migration versions `≤ through_version` whose base/established-module
+/// sections are NOT yet applied on the target — i.e. versions the established
+/// set still needs before it is caught up to `through_version`. An empty
+/// result means caught up.
+///
+/// Adopting a module from a baseline at version V writes a tracking row that
+/// claims coverage through V. That claim is only honest if the target's other
+/// modules are actually at V, so adoption checks this first and refuses when
+/// it isn't — rolling an established (possibly-destructive) module forward is
+/// an explicit `apply`, never a side effect of adopting a different module.
+///
+/// Migrations at or below a *fully-completed* baseline the target already
+/// holds are covered and excluded (an honest watermark — a crashed baseline,
+/// with a non-completed section, does not count).
+pub async fn established_pending_through(
+    pool: &sqlx::PgPool,
+    tracking_table: &crate::config::types::TrackingTable,
+    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
+    established: &BTreeSet<String>,
+    through_version: u64,
+) -> Result<Vec<u64>> {
+    let main = crate::migration_tracking::format_tracking_table_name(tracking_table)?;
+    let sections = format!(
+        r#""{}"."{}_sections""#,
+        tracking_table.schema, tracking_table.name
+    );
+
+    // Honest baseline watermark: the highest baseline version all of whose
+    // registered sections completed. Migrations ≤ it are already covered.
+    let watermark: u64 = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT COALESCE(MAX(m.version), 0) FROM {main} m
+         WHERE m.is_baseline AND NOT EXISTS (
+             SELECT 1 FROM {sections} s
+             WHERE s.is_baseline AND s.migration_version = m.version
+               AND s.status <> 'completed')",
+        main = main,
+        sections = sections,
+    ))
+    .fetch_one(pool)
+    .await?
+    .max(0) as u64;
+
+    let done: BTreeSet<(u64, String)> = sqlx::query_as::<_, (i64, String)>(&format!(
+        "SELECT migration_version, section_name FROM {} WHERE NOT is_baseline AND status = 'completed'",
+        sections
+    ))
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(v, n)| (v as u64, n))
+    .collect();
+
+    let mut pending = Vec::new();
+    for ((version, is_baseline), file_sections) in files {
+        if *is_baseline || *version > through_version || *version <= watermark {
+            continue;
+        }
+        let has_pending = file_sections.iter().any(|s| {
+            let relevant = match &s.module {
+                None => true, // the base is always deployed everywhere
+                Some(m) => established.contains(m),
+            };
+            relevant && !done.contains(&(*version, s.name.clone()))
+        });
+        if has_pending {
+            pending.push(*version);
+        }
+    }
+    pending.sort_unstable();
+    Ok(pending)
+}
+
 /// Module context for one generation run (migrate new / update).
 pub struct ModuleGeneration {
     pub partition: ModulePartition,

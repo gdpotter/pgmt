@@ -322,6 +322,24 @@ pub async fn record_section_failed(
     Ok(())
 }
 
+/// Baseline versions with at least one non-completed registered section — a
+/// crashed or otherwise incomplete provision. A *subset* provision registers
+/// only the selected sections, so a subset baseline whose selected sections
+/// all completed is NOT incomplete; only a genuinely interrupted apply is.
+pub async fn incomplete_baseline_versions(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+) -> Result<Vec<u64>> {
+    let sections_table = format_sections_table_name(tracking_table);
+    let rows: Vec<i64> = sqlx::query_scalar(&format!(
+        "SELECT DISTINCT migration_version FROM {} WHERE is_baseline AND status <> 'completed'",
+        sections_table
+    ))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|v| v as u64).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

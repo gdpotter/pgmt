@@ -51,7 +51,7 @@ pub async fn cmd_migrate_apply(
 }
 
 /// The module-aware body of `migrate apply`, split out so the advisory lock
-/// wraps every path (including the adoption refusal) with a single release.
+/// wraps every path (including the guards' refusals) with a single release.
 async fn apply_with_module_guard(
     config: &Config,
     root_dir: &Path,
@@ -59,6 +59,26 @@ async fn apply_with_module_guard(
     migrations: &[ParsedMigration],
     selection: &ModuleSelection,
 ) -> Result<()> {
+    // A baseline row whose registered sections aren't all completed is a
+    // crashed/incomplete `provision`. Its version must NOT be trusted as
+    // "covers everything ≤ V" — doing so would skip migrations onto a
+    // half-built schema. Refuse and point at provision to finish it (apply
+    // never resumes a baseline). Provision itself resumes such baselines, so
+    // this guard lives on the apply command, not the shared apply loop.
+    ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
+    ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
+    let incomplete = crate::migration_tracking::section_tracking::incomplete_baseline_versions(
+        pool,
+        &config.migration.tracking_table,
+    )
+    .await?;
+    if let Some(version) = incomplete.iter().max() {
+        anyhow::bail!(
+            "baseline {version} is only partially applied — a `migrate provision` did not \
+             finish. Complete it with `pgmt migrate provision` before applying migrations."
+        );
+    }
+
     // Module projects: derive what's established here and refuse adoptions
     // that need baseline content — `apply` only ever replays sections; a
     // module whose pre-baseline state lives in a committed baseline must be

@@ -514,6 +514,123 @@ async fn test_split_registration_keeps_distinct_section_order() -> Result<()> {
     .await
 }
 
+/// Bug-2 guard: adopting a module from a baseline requires the target's
+/// ESTABLISHED modules to be caught up to that baseline version first — else
+/// the baseline row would claim coverage the target doesn't have and later
+/// applies would silently skip the established modules' pending migrations.
+#[tokio::test]
+async fn test_adoption_requires_established_modules_caught_up() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(
+            helper,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  billing:\n    paths: [\"schema/billing/**\"]\n    depends_on: [core]\n",
+        )?;
+
+        // Migration v1: core only. Provision the target with core (billing not
+        // deployed) — the target is now established at v1 with core.
+        helper.write_schema_file("core/users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+
+        // Migration v2 (+ paired baseline): a core change AND billing's first
+        // appearance. billing now lives in a baseline, so adopting it needs
+        // baseline content. The target is still at v1 — it never applied v2.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        helper.write_schema_file(
+            "core/users.sql",
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT);",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "-- require: core/users.sql\n\
+             CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "second", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Adopting billing must refuse: core is not caught up to the baseline
+        // version, and rolling it forward is an explicit apply, not a side
+        // effect of adopting billing.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("not caught up"))
+            .stderr(predicate::str::contains("migrate apply --modules core"));
+        assert!(
+            !helper.table_exists_in_dev("public", "invoices").await?,
+            "billing must not have been adopted while core is behind"
+        );
+
+        // Catch core up, then adoption succeeds.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .success();
+        assert!(helper.table_exists_in_dev("public", "invoices").await?);
+        // And core's v2 change landed (it was rolled forward, not skipped).
+        let pool = helper.connect_to_dev_db().await?;
+        let has_email: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'email')",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(has_email, "core's v2 column must be present, not skipped");
+        pool.close().await;
+
+        Ok(())
+    })
+    .await
+}
+
 /// --modules validation: unknown names and non-module projects error clearly.
 #[tokio::test]
 async fn test_modules_flag_validation() -> Result<()> {

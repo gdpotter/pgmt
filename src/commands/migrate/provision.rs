@@ -114,6 +114,48 @@ async fn provision_inner(
                 }
             }
 
+            // The adopted module's baseline sections assume the rest of the
+            // target is at the baseline version. Refuse to write a baseline
+            // row that would claim coverage the target doesn't have — require
+            // the operator to roll its established modules forward first, via
+            // an explicit `apply` (so any destructive established-module
+            // migrations are surfaced), then re-run provision.
+            let pending = crate::modules::established_pending_through(
+                pool,
+                &config.migration.tracking_table,
+                &files,
+                &established_modules,
+                baseline.version,
+            )
+            .await?;
+            if !pending.is_empty() {
+                let catch_up = if established_modules.is_empty() {
+                    "pgmt migrate apply".to_string()
+                } else {
+                    format!(
+                        "pgmt migrate apply --modules {}",
+                        established_modules
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                anyhow::bail!(
+                    "cannot adopt module(s) {} from baseline {}: this target's established \
+                     modules are not caught up to that version (migration(s) {} still pending). \
+                     Roll them forward first with `{}`, then re-run provision.",
+                    needs_baseline.join(", "),
+                    baseline.version,
+                    pending
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    catch_up,
+                );
+            }
+
             if dry_run {
                 println!(
                     "Would adopt module(s) {} from baseline {} (then apply pending sections).",
