@@ -198,6 +198,73 @@ INSERT INTO users SELECT id FROM external_source;
     .await
 }
 
+/// FIX 7: a baseline that failed partway must NOT silently resume from edited
+/// content. If the baseline file is rewritten at the SAME version after a
+/// partial provision, the completed sections came from the OLD content and the
+/// executor skips them by name — resuming from the NEW file would leave a
+/// target matching neither. Provision must bail with a checksum mismatch, the
+/// same guard migrations already have.
+#[tokio::test]
+async fn test_provision_refuses_resume_of_modified_baseline() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+
+        helper.write_migration_file("1000_initial.sql", "CREATE TABLE users (id SERIAL);")?;
+        // Section "seed" fails on the first run (reads a table the baseline
+        // does not create), so the baseline is left partially applied.
+        std::fs::write(
+            helper.baselines_dir().join("baseline_1000.sql"),
+            r#"-- pgmt:section name="tables" mode="transactional"
+CREATE TABLE users (id SERIAL);
+
+-- pgmt:section name="seed" mode="transactional"
+INSERT INTO users SELECT id FROM external_source;
+"#,
+        )?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .failure();
+
+        // Rewrite the baseline at the SAME version with different content —
+        // and make the previously-failing section able to succeed now, so the
+        // ONLY thing stopping a silent (wrong) success is the checksum guard.
+        std::fs::write(
+            helper.baselines_dir().join("baseline_1000.sql"),
+            r#"-- pgmt:section name="tables" mode="transactional"
+CREATE TABLE users (id SERIAL, email TEXT);
+
+-- pgmt:section name="seed" mode="transactional"
+INSERT INTO users (id) VALUES (1);
+"#,
+        )?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "modified after being partially applied",
+            ));
+
+        Ok(())
+    })
+    .await
+}
+
 /// Version-pairing pin: a baseline covers the migration at its own version, so
 /// regenerating from an unchanged schema right after `--create-baseline` must
 /// detect no changes. (If replay used a `>=` boundary, the paired migration

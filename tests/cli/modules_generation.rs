@@ -1,4 +1,4 @@
-//! Module-tagged migration generation (Phase 2): `migrate new` on a module
+//! Module-tagged migration generation: `migrate new` on a module
 //! project partitions diff steps into per-module sections, detects partition
 //! divergence (re-tags, replayability breaks), and emits re-anchoring
 //! baselines with `remaps`.
@@ -352,6 +352,74 @@ async fn test_module_update_stays_sectioned() -> Result<()> {
             baseline.contains(r#"module="core""#),
             "updated baseline must stay sectioned:\n{baseline}"
         );
+
+        Ok(())
+    })
+    .await
+}
+
+/// A partition re-anchor detected during `migrate update` must point the user
+/// at `migrate new` — the command that actually owns re-anchoring baselines —
+/// not tell them to re-run the current command with a `--create-baseline` flag
+/// that `migrate update` doesn't have (clap would reject it as unknown).
+#[tokio::test]
+async fn test_migrate_update_reanchor_points_at_migrate_new() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, MODULES_YAML)?;
+
+        // `migrate update` replays only migrations BEFORE the one it rewrites,
+        // so a re-tag divergence needs the object's history to live in an
+        // EARLIER migration: create it under core in migration 1, then a
+        // second migration is what `update` will target.
+        helper.write_schema_file(
+            "core/thing.sql",
+            "CREATE TABLE thing (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        helper.write_schema_file(
+            "core/extra.sql",
+            "CREATE TABLE extra (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "second"])
+            .assert()
+            .success();
+        // No baseline yet, so a divergence during update is a hard error
+        // rather than a silent re-anchor.
+        assert!(
+            helper.list_baseline_files()?.is_empty(),
+            "no baseline should exist yet"
+        );
+
+        // Re-tag: move `thing` (created under core in migration 1) to billing.
+        // Replaying migration 1 attributes it to core; the current file says
+        // billing -> partition divergence detected during `migrate update`.
+        std::fs::remove_file(helper.project_root.join("schema/core/thing.sql"))?;
+        helper.write_schema_file(
+            "billing/thing.sql",
+            "CREATE TABLE thing (id SERIAL PRIMARY KEY);",
+        )?;
+
+        // `migrate update` has no --create-baseline flag, so the guidance must
+        // send the user to `migrate new`, and must NOT tell them to bolt
+        // --create-baseline onto the update command (a dead end clap rejects).
+        helper
+            .command()
+            .args(["migrate", "update"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("partition re-anchor required"))
+            .stderr(predicate::str::contains("migrate new"))
+            .stderr(predicate::str::contains("migrate update --create-baseline").not())
+            .stderr(predicate::str::contains("re-run with --create-baseline").not());
 
         Ok(())
     })

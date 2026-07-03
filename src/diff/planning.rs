@@ -1,16 +1,17 @@
 //! Step-graph planning: turn diffed steps into an executable order.
 //!
-//! This is the ordering half of the diff engine, extracted from `diff/mod.rs`.
-//! It builds a dependency graph over the steps — catalog `forward_deps`
+//! Two ordering paths share the same edge rules — catalog `forward_deps`
 //! (reversed for drops), step-declared fallbacks, and the synthetic rules
 //! (drop-before-create, namespace-slot collisions, create-before-alter,
-//! same-id ALTER chains, extensions-first) — and topologically sorts it in
-//! two phases (primary, then relationship steps).
+//! same-id ALTER chains, extensions-first):
 //!
-//! Direction: this module is growing into an annotated `PlannedStep` graph
-//! (step + module ownership + explicit edges) so ordering policies
-//! (phase-split vs module-affinity traversal) become interchangeable
-//! consumers of one complete graph.
+//! - `diff_order`: the historical two-batch sort (primary steps, then
+//!   relationship steps — FKs and sequence ownership). Used for non-module
+//!   projects, whose generated files must stay byte-stable.
+//! - `annotate` + `affinity_order`: one [`PlannedStep`] graph (step + owning
+//!   module + explicit edges) traversed with module affinity, so each
+//!   module's steps stay contiguous unless a dependency forces a jump. Used
+//!   by module-tagged generation.
 
 use crate::catalog::Catalog;
 use crate::catalog::id::DbObjectId;
@@ -22,10 +23,10 @@ use petgraph::graph::DiGraph;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{info, warn};
 
-/// Topo-sort the steps by their `dependencies()` using a multi-phase approach
-/// Phase 1: Primary object creation/modification (schemas, extensions, tables, views, etc.)
-/// Phase 2: Relationship establishment (sequence ownership, foreign keys, etc.)
-/// Uses old_catalog for drop steps, and new_catalog for create/alter steps
+/// Topo-sort the steps in two batches: primary object creation/modification
+/// (schemas, extensions, tables, views, …) first, then relationship
+/// establishment (sequence ownership, foreign keys). Uses old_catalog for
+/// drop steps and new_catalog for create/alter steps.
 pub fn diff_order(
     steps: Vec<MigrationStep>,
     old_catalog: &Catalog,
@@ -453,13 +454,13 @@ pub struct PlannedStep {
 
 /// Build the single annotated graph over `steps`.
 ///
-/// Edge sources, unioned (unlike the phase-split path, where step-declared
-/// deps are only a fallback): catalog `forward_deps` (reversed for drops),
-/// step-declared dependencies, the synthetic rules (drop-before-create,
-/// namespace-slot collisions, create-before-alter, same-id ALTER chains,
-/// extensions-first), and — closing the hole the phase split papered over —
-/// an explicit edge from an `ALTER SEQUENCE ... OWNED BY` step to its owning
-/// table's steps (`owned_by` is an unparsed string the catalogs never see).
+/// Edge sources: catalog `forward_deps` (reversed for drops), step-declared
+/// dependencies as a fallback where the catalog is silent, the synthetic
+/// rules (drop-before-create, namespace-slot collisions, create-before-alter,
+/// same-id ALTER chains, extensions-first), and an explicit edge from an
+/// `ALTER SEQUENCE ... OWNED BY` step to its owning table's steps —
+/// `owned_by` is an unparsed string the catalogs never see, so no other
+/// source records that ordering.
 pub fn annotate(
     steps: Vec<MigrationStep>,
     old_catalog: &Catalog,
@@ -520,8 +521,6 @@ pub fn annotate(
                         // object's id but does not PROVIDE the object — binding
                         // "X depends on seq" to seq's OWNED BY step would make
                         // the table wait on an ALTER that waits on the table.
-                        // (The phase split encoded this by construction:
-                        // relationship steps could never be depended upon.)
                         if !is_drop && steps[dep_i].is_relationship() {
                             continue;
                         }
@@ -535,12 +534,12 @@ pub fn annotate(
             }
         }
 
-        // Step-declared dependencies: FALLBACK ONLY, like the phase-split
-        // path. Unioning them unconditionally imports edges the catalog
-        // deliberately shadows — e.g. a sequence declares its owning table
-        // while the table's nextval() default depends on the sequence, which
-        // is a cycle. The one genuinely missing edge (OWNED BY → table) is
-        // added explicitly below instead.
+        // Step-declared dependencies: FALLBACK ONLY. Unioning them
+        // unconditionally imports edges the catalog deliberately shadows —
+        // e.g. a sequence declares its owning table while the table's
+        // nextval() default depends on the sequence, which is a cycle. The
+        // one genuinely missing edge (OWNED BY → table) is added explicitly
+        // below instead.
         if catalog_deps.is_none() {
             for dep in &step.dependencies() {
                 let resolved = resolve_for_ordering(dep);
@@ -577,7 +576,7 @@ pub fn annotate(
         }
     }
 
-    // Synthetic rules, mirroring the phase-split path.
+    // Synthetic same-object rules (see module docs).
     let mut drop_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
     let mut create_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
     let mut alter_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
@@ -611,7 +610,9 @@ pub fn annotate(
             add_edge(&mut deps, window[0], window[1]);
         }
     }
-    // Same-namespace-slot DROP before CREATE (see phase-split path for why).
+    // Same-namespace-slot DROP before CREATE: PostgreSQL enforces name
+    // uniqueness over a coarser key than identity (a CONSTRAINT and an INDEX
+    // of the same name collide in pg_class) with no pg_depend edge between them.
     {
         let mut slot_drops: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
         let mut slot_creates: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
@@ -632,6 +633,44 @@ pub fn annotate(
         }
         for (slot, drops) in &slot_drops {
             if let Some(creates) = slot_creates.get(slot) {
+                for &d in drops {
+                    for &c in creates {
+                        add_edge(&mut deps, d, c);
+                    }
+                }
+            }
+        }
+    }
+    // Routine (function/procedure) overloads: same schema+name, differing
+    // arguments. All drops of the overload set must run before any create,
+    // otherwise a signature change can leave two overloads live at once and an
+    // ambiguous call like f(1) fails with "function f(integer) is not unique".
+    // Procedures share pg_proc with functions, so the ambiguity spans both;
+    // group them together by (schema, name). No pg_depend edge records this,
+    // and each overload carries a distinct DbObjectId (arguments differ), so
+    // the same-id drop-before-create rule above does not cover it. Edges only
+    // point drop -> create, so they cannot introduce a cycle.
+    {
+        let mut routine_drops: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        let mut routine_creates: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (i, step) in steps.iter().enumerate() {
+            let key = match &step.id() {
+                DbObjectId::Function { schema, name, .. }
+                | DbObjectId::Procedure { schema, name, .. } => {
+                    Some((schema.clone(), name.clone()))
+                }
+                _ => None,
+            };
+            if let Some(key) = key {
+                match step.operation_kind() {
+                    OperationKind::Drop => routine_drops.entry(key).or_default().push(i),
+                    OperationKind::Create => routine_creates.entry(key).or_default().push(i),
+                    OperationKind::Alter => {}
+                }
+            }
+        }
+        for (key, drops) in &routine_drops {
+            if let Some(creates) = routine_creates.get(key) {
                 for &d in drops {
                     for &c in creates {
                         add_edge(&mut deps, d, c);
@@ -851,6 +890,79 @@ mod tests {
         assert!(
             matches!(ordered[0].step, MigrationStep::Table(_)),
             "table create must precede sequence ownership"
+        );
+    }
+
+    /// Routine overload rule: a new overload's CREATE must not run before the
+    /// old overload's DROP. The two steps share schema+name but carry distinct
+    /// DbObjectIds (their arguments differ), so the same-id drop-before-create
+    /// rule can't catch them; the (schema, name) overload rule must. Attributed
+    /// to different modules and fed in create-first order so affinity ordering
+    /// is tempted to emit the CREATE first.
+    #[test]
+    fn test_annotate_orders_routine_overload_drop_before_create() {
+        use crate::diff::operations::FunctionOperation;
+
+        // New overload calc(integer, boolean) — different signature/id.
+        let create_new = MigrationStep::Function(FunctionOperation::Create {
+            schema: "public".to_string(),
+            name: "calc".to_string(),
+            arguments: "integer, boolean".to_string(),
+            kind: "FUNCTION".to_string(),
+            parameters: "integer, boolean".to_string(),
+            returns: "integer".to_string(),
+            attributes: "".to_string(),
+            definition:
+                "CREATE FUNCTION public.calc(integer, boolean) RETURNS integer AS $$ SELECT 1 $$ \
+                 LANGUAGE sql"
+                    .to_string(),
+        });
+        // Old overload calc(integer) being dropped.
+        let drop_old = MigrationStep::Function(FunctionOperation::Drop {
+            schema: "public".to_string(),
+            name: "calc".to_string(),
+            arguments: "integer".to_string(),
+            kind: "FUNCTION".to_string(),
+            parameter_types: "integer".to_string(),
+        });
+
+        // Distinct ids, so the same-id rule doesn't apply.
+        assert_ne!(create_new.id(), drop_old.id());
+
+        // Input order: CREATE first (index 0), DROP second (index 1).
+        let steps = vec![create_new, drop_old];
+        let empty = Catalog::empty();
+        let planned = annotate(steps, &empty, &empty, &mut |step: &MigrationStep| {
+            // Put the two steps in different modules so affinity ordering has
+            // an incentive to keep each module's step where it fell.
+            Ok(Some(
+                match step.operation_kind() {
+                    OperationKind::Drop => "old_mod",
+                    _ => "new_mod",
+                }
+                .to_string(),
+            ))
+        })
+        .unwrap();
+
+        // The overload rule must record drop(index 1) -> create(index 0).
+        assert!(
+            planned[0].deps.contains(&1),
+            "new overload CREATE must depend on old overload DROP"
+        );
+
+        let ordered = affinity_order(planned).unwrap();
+        let drop_pos = ordered
+            .iter()
+            .position(|p| p.step.operation_kind() == OperationKind::Drop)
+            .unwrap();
+        let create_pos = ordered
+            .iter()
+            .position(|p| p.step.operation_kind() == OperationKind::Create)
+            .unwrap();
+        assert!(
+            drop_pos < create_pos,
+            "old overload must be dropped before the new overload is created"
         );
     }
 }

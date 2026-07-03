@@ -1,4 +1,4 @@
-//! Config-load validation of `modules:` declarations (Phase 1).
+//! Config-load validation of `modules:` declarations.
 //!
 //! Validation runs in `ConfigBuilder::resolve`, so every command fails fast
 //! on a broken declaration — like any other yaml error. Attribution machinery

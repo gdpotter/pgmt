@@ -115,7 +115,7 @@ pub async fn cmd_migrate_new(
     })?;
 
     // Module projects: validate cross-module references and check whether
-    // this change diverges the partition from what history implies (§10) —
+    // this change diverges the partition from what history implies —
     // a re-tag or a drop that breaks another module's replayability. Any
     // divergence demands a re-anchoring baseline alongside the migration.
     let should_create_baseline = create_baseline || config.migration.create_baselines_by_default;
@@ -126,6 +126,7 @@ pub async fn cmd_migrate_new(
         &file_mapping,
         &historical,
         should_create_baseline,
+        "re-run with --create-baseline to emit a re-anchoring baseline.",
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 

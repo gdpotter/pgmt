@@ -2,12 +2,23 @@ use crate::helpers::harness::with_test_db;
 use anyhow::Result;
 use pgmt::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use pgmt::config::types::TrackingTable;
+use pgmt::migration::section_parser::MigrationSection;
 use pgmt::migration::{parse_migration_sections, validate_sections};
 use pgmt::migration_tracking::section_tracking::{
     SectionStatus, ensure_section_tracking_table, get_section_status, initialize_sections,
 };
 use pgmt::progress::SectionReporter;
 use std::path::Path;
+
+/// Pair each section with its full-file index — the `section_order` that
+/// `initialize_sections` now expects the caller to supply explicitly.
+fn ordered(sections: &[MigrationSection]) -> Vec<(i32, MigrationSection)> {
+    sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i as i32, s.clone()))
+        .collect()
+}
 
 #[tokio::test]
 async fn test_basic_section_execution() -> Result<()> {
@@ -35,7 +46,7 @@ ALTER TABLE users ADD COLUMN email TEXT;
         // Setup section tracking
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &ordered(&sections)).await?;
 
         // Execute sections
         let reporter = SectionReporter::new(sections.len(), false);
@@ -86,7 +97,7 @@ async fn test_legacy_migration_compatibility() -> Result<()> {
         // Setup and execute
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &ordered(&sections)).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(
@@ -138,7 +149,7 @@ ALTER TABLE inventory ADD COLUMN location TEXT;
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &ordered(&sections)).await?;
 
         // Execute only first section
         let reporter = SectionReporter::new(sections.len(), false);
@@ -223,7 +234,7 @@ CREATE INDEX CONCURRENTLY idx_customers_email ON customers(email);
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &ordered(&sections)).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(
@@ -280,7 +291,7 @@ CREATE INDEX CONCURRENTLY idx_items_name ON items(name);
 
         let tracking_table = TrackingTable::default();
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
-        initialize_sections(db.pool(), &tracking_table, 1, false, &sections).await?;
+        initialize_sections(db.pool(), &tracking_table, 1, false, &ordered(&sections)).await?;
 
         let reporter = SectionReporter::new(sections.len(), false);
         let mut executor = SectionExecutor::new(

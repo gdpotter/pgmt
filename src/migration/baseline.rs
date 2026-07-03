@@ -230,9 +230,14 @@ pub async fn apply_baseline_to_target(
     source: &str,
     select_section: impl Fn(&MigrationSection) -> bool,
 ) -> Result<()> {
-    let sections: Vec<MigrationSection> = parse_baseline_sections(baseline_sql, source)?
+    // Pair each selected section with its index in the FULL baseline file
+    // (enumerate before filtering) so section_order stays stable per version —
+    // a module subset provision registers only a subset in each call.
+    let sections: Vec<(i32, MigrationSection)> = parse_baseline_sections(baseline_sql, source)?
         .into_iter()
-        .filter(select_section)
+        .enumerate()
+        .map(|(i, s)| (i as i32, s))
+        .filter(|(_, s)| select_section(s))
         .collect();
 
     ensure_section_tracking_table(pool, tracking_table).await?;
@@ -246,7 +251,7 @@ pub async fn apply_baseline_to_target(
         ExecutionMode::Production,
         true,
     );
-    for section in &sections {
+    for (_, section) in &sections {
         executor
             .execute_section(version, section)
             .await

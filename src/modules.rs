@@ -93,7 +93,8 @@ impl ModulePartition {
     /// unmoduled base. A path matching more than one module is an error —
     /// even for declared conflicts: conflicting modules may define the same
     /// *objects* (in separate files), but a single *file* can only have one
-    /// owner. (Phase 4 may relax this if a real need appears.)
+    /// owner. (A future conflicts_with feature may relax this between
+    /// declared-conflicting modules.)
     pub fn module_for_path(&self, root_relative: &str) -> Result<Option<&str>> {
         let normalized = root_relative.replace('\\', "/");
         let matches: Vec<&CompiledModule> = self
@@ -163,7 +164,7 @@ impl ModulePartition {
 /// (that's why it's being dropped), so its module can only come from the
 /// checksummed history that created it. Pre-modules history and header-less
 /// baselines tag everything `None` (the base). Because replay starts from the
-/// latest committed baseline — itself module-tagged after Phase 0 — the
+/// latest committed baseline — itself carrying module-tagged sections — the
 /// attribution survives migration pruning.
 #[derive(Debug, Default, Clone)]
 pub struct HistoricalAttribution {
@@ -211,7 +212,7 @@ pub struct StepSection {
 }
 
 /// Ways the current partition diverges from the partition history implies
-/// (§10 of the modules design). Any divergence makes module history
+///. Any divergence makes module history
 /// non-replayable and demands a re-anchoring baseline (`--create-baseline`).
 #[derive(Debug, Default)]
 pub struct PartitionDivergence {
@@ -453,8 +454,8 @@ pub fn render_sectioned_migration(sections: &[StepSection]) -> String {
     parts.join("\n\n")
 }
 
-/// Which modules a deploy names (design §13: bare `apply` = the base only;
-/// modules are always explicit — flag > `PGMT_MODULES` env).
+/// Which modules a deploy names. Bare `apply` deploys only the base —
+/// modules are always explicit (flag > `PGMT_MODULES` env), never inferred.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModuleSelection {
     /// Non-module project: every section runs, exactly as before modules.
@@ -553,7 +554,7 @@ impl ModuleSelection {
 /// The module of a recorded section row, resolved through the version's
 /// checksummed file. Fallback when the file is gone (pruned migrations): the
 /// generated-name convention (`billing`, `billing_2` → `billing`; `default*`
-/// → the base). §18.2 of the design tracks the principled fix.
+/// → the base). The design doc's open-items list tracks the principled fix.
 pub fn section_module_from_files(
     files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
     version: u64,
@@ -601,7 +602,7 @@ pub fn parse_section_files(
 }
 
 /// Modules with at least one Completed section on the target — the *literal*
-/// established set. (The §13 remap walk, which carries establishment through
+/// established set. (The remap walk, which carries establishment through
 /// re-tags, lands with the wholeness membranes; until then re-tagged history
 /// resolves through the re-anchoring baseline's own tagged sections once a
 /// target consumes it.)
@@ -669,15 +670,18 @@ pub fn modules_needing_baseline_content(
 /// Module context for one generation run (migrate new / update).
 pub struct ModuleGeneration {
     pub partition: ModulePartition,
-    /// Whether this change re-anchors the partition (§10): a re-tag or a
+    /// Whether this change re-anchors the partition: a re-tag or a
     /// replayability break, requiring the accompanying baseline.
     pub diverged: bool,
 }
 
-/// Run the module-aware generation checks: §5/§6 reference validation
-/// (warnings printed, errors fail) and §10 partition-divergence detection.
+/// Run the module-aware generation checks: cross-module reference validation
+/// (warnings printed, errors fail) and partition-divergence detection.
 /// Returns `None` for non-module projects. When divergence exists and
-/// `re_anchor_allowed` is false, fails with re-run guidance.
+/// `re_anchor_allowed` is false, fails with `re_anchor_guidance` appended —
+/// the caller supplies the remediation, since only some subcommands own a
+/// `--create-baseline` flag (see the two `migrate update` call sites, which
+/// point the user at `migrate new` instead of the flag they lack).
 pub fn evaluate_module_generation(
     config: &Config,
     old_catalog: &Catalog,
@@ -685,6 +689,7 @@ pub fn evaluate_module_generation(
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
     re_anchor_allowed: bool,
+    re_anchor_guidance: &str,
 ) -> Result<Option<ModuleGeneration>> {
     if !config.modules.is_enabled() {
         return Ok(None);
@@ -711,8 +716,9 @@ pub fn evaluate_module_generation(
             anyhow::bail!(
                 "partition re-anchor required:\n  - {}\n\n\
                  Replaying module history would reproduce the old ownership; \
-                 re-run with --create-baseline to emit a re-anchoring baseline.",
-                divergence.reasons.join("\n  - ")
+                 {}",
+                divergence.reasons.join("\n  - "),
+                re_anchor_guidance
             );
         }
         println!("Re-anchoring the module partition:");
@@ -794,7 +800,7 @@ impl ModuleReferenceReport {
 /// Validate every object-level dependency in the catalog against the module
 /// partition and the declared module DAG:
 ///
-/// - base object → module object: **error** (§6 base rule)
+/// - base object → module object: **error** (base rule)
 /// - module A → module B without `depends_on` closure edge: **warning**
 /// - references into a *conflicting* module: **error** (never co-deployed)
 /// - anything → base: always fine (the base is everywhere)
@@ -820,7 +826,7 @@ pub fn validate_module_references(
         // target — so every such edge is intra-module by construction and
         // there is nothing to validate. Explicit grants written in schema
         // files keep their file's module and ARE validated: a base file
-        // granting on a module's table is a real §6 violation.
+        // granting on a module's table is a real violation.
         if from.is_none()
             && matches!(
                 object,
@@ -991,6 +997,32 @@ mod tests {
         Ok(())
     }
 
+    /// Pruned migration files: section rows must still resolve to modules
+    /// via the generated-name convention (`billing_2` → `billing`,
+    /// `default*` → the base).
+    #[test]
+    fn test_section_module_name_convention_fallback() {
+        let files = BTreeMap::new(); // no files survive — everything pruned
+        assert_eq!(
+            section_module_from_files(&files, 1, false, "billing"),
+            Some("billing".to_string())
+        );
+        assert_eq!(
+            section_module_from_files(&files, 1, false, "billing_2"),
+            Some("billing".to_string())
+        );
+        assert_eq!(section_module_from_files(&files, 1, false, "default"), None);
+        assert_eq!(
+            section_module_from_files(&files, 1, false, "default_3"),
+            None
+        );
+        // A trailing _word (not digits) is part of the module name.
+        assert_eq!(
+            section_module_from_files(&files, 1, false, "billing_eu"),
+            Some("billing_eu".to_string())
+        );
+    }
+
     #[test]
     fn test_display_module() {
         assert_eq!(display_module(Some("billing")), "billing");
@@ -1126,7 +1158,7 @@ mod tests {
             name: "users".to_string(),
         };
         // An explicit GRANT written in an unmoduled file: the file claims it,
-        // so it is base state referencing a module's object → §6 error.
+        // so it is base state referencing a module's object → error.
         let explicit_grant = DbObjectId::Grant {
             id: "reader@table:public.users".to_string(),
         };

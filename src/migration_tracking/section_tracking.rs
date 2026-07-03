@@ -148,16 +148,24 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
 
 /// Initialize sections for a migration or baseline (idempotent: rows already
 /// present — e.g. on a resumed run — are left untouched).
+///
+/// Each entry pairs a section with its `section_order`: the section's index in
+/// the FULL parsed migration/baseline file, supplied by the caller. The order
+/// MUST be stable per migration version rather than derived from a local
+/// `enumerate()` — under module subset deploy the sections of one version are
+/// registered across SEPARATE calls (base first, a module later), so a
+/// per-call index would restart at 0 and collide distinct sections on the same
+/// `section_order`.
 pub async fn initialize_sections(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     migration_version: u64,
     is_baseline: bool,
-    sections: &[MigrationSection],
+    sections: &[(i32, MigrationSection)],
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    for (order, section) in sections.iter().enumerate() {
+    for (order, section) in sections {
         sqlx::query(&format!(
             "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
              VALUES ($1, $2, $3, $4, $5, 0)
@@ -167,7 +175,7 @@ pub async fn initialize_sections(
         .bind(migration_version as i64)
         .bind(is_baseline)
         .bind(&section.name)
-        .bind(order as i32)
+        .bind(*order)
         .bind(SectionStatus::Pending.as_str())
         .execute(pool)
         .await?;

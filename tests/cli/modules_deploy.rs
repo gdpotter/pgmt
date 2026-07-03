@@ -1,4 +1,4 @@
-//! Subset deploy (Phase 3a): `--modules` on apply/provision, dependency
+//! Subset deploy: `--modules` on apply/provision, dependency
 //! closure, adoption (replay vs baseline-content), zero-trace skipping, and
 //! the conservative intra-migration coupling guard.
 
@@ -365,6 +365,148 @@ async fn test_bare_provision_deploys_base_only() -> Result<()> {
         assert!(
             !helper.table_exists_in_dev("public", "users").await?,
             "modules never deploy implicitly — provision included"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// PGMT_MODULES env is the flag's fallback: with it set, a bare `apply`
+/// deploys the named modules.
+#[tokio::test]
+async fn test_pgmt_modules_env_fallback() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .env("PGMT_MODULES", "core")
+            .assert()
+            .success();
+
+        assert!(helper.table_exists_in_dev("public", "users").await?);
+        assert!(
+            !helper.table_exists_in_dev("public", "invoices").await?,
+            "env selects core only"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// FIX 3: `section_order` is a section's index in the FULL migration file,
+/// stable per version even when a version's sections are registered across
+/// SEPARATE apply calls. A bare `apply` registers only the base "default"
+/// section; a later `apply --modules core` registers core's section for the
+/// SAME version. The rows must carry DISTINCT orders reflecting file order —
+/// not both collide at 0 because each registration call restarts `enumerate()`.
+#[tokio::test]
+async fn test_split_registration_keeps_distinct_section_order() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+        // An unmoduled file → the base's "default" section.
+        helper.write_schema_file("meta.sql", "CREATE TABLE meta (k TEXT PRIMARY KEY);")?;
+
+        // A pure migration (no baseline): apply can adopt modules by replay.
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // First apply (bare): registers only the base "default" section for
+        // this version; module sections leave no rows.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        // Second apply (--modules core): registers core's section for the SAME
+        // version, in a separate registration call.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+        assert!(helper.table_exists_in_dev("public", "meta").await?);
+        assert!(helper.table_exists_in_dev("public", "users").await?);
+
+        // Recover the version and the file's section layout.
+        let migrations = helper.list_migration_files()?;
+        assert_eq!(migrations.len(), 1);
+        let version: i64 = migrations[0]
+            .split('_')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .expect("migration filename starts with a numeric version");
+        let sql = helper.read_migration_file(&migrations[0])?;
+
+        let pool = helper.connect_to_dev_db().await?;
+        let rows: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT section_name, section_order FROM public.pgmt_migrations_sections
+             WHERE migration_version = $1 AND NOT is_baseline",
+        )
+        .bind(version)
+        .fetch_all(&pool)
+        .await?;
+        pool.close().await;
+
+        // Both registration calls left their section rows for this version.
+        assert!(
+            rows.iter().any(|(n, _)| n == "default"),
+            "base 'default' section registered by the bare apply: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(n, _)| n == "core"),
+            "'core' section registered by --modules core apply: {rows:?}"
+        );
+
+        // No two sections share an order (the collision-at-0 bug).
+        let mut orders: Vec<i32> = rows.iter().map(|(_, o)| *o).collect();
+        orders.sort_unstable();
+        let mut distinct = orders.clone();
+        distinct.dedup();
+        assert_eq!(
+            orders, distinct,
+            "section_order values must be distinct across a version's sections: {rows:?}"
+        );
+
+        // Orders reflect FULL-file position: sections sorted by recorded order
+        // must match sections sorted by their header position in the file.
+        let mut by_db = rows.clone();
+        by_db.sort_by_key(|(_, o)| *o);
+        let mut by_file = rows.clone();
+        by_file.sort_by_key(|(name, _)| {
+            sql.find(&format!("name=\"{name}\""))
+                .expect("each recorded section has a header in the file")
+        });
+        let db_order: Vec<&str> = by_db.iter().map(|(n, _)| n.as_str()).collect();
+        let file_order: Vec<&str> = by_file.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            db_order, file_order,
+            "section_order must reflect file order (base precedes module iff it \
+             precedes in the file): {rows:?}"
         );
 
         Ok(())

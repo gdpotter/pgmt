@@ -30,9 +30,10 @@ pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) ->
         r#""{}"."{}_sections""#,
         config.migration.tracking_table.schema, config.migration.tracking_table.name
     );
-    let applied_migrations: Vec<(i64, String, String, i64)> = sqlx::query_as(&format!(
+    let applied_migrations: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(&format!(
         "SELECT m.version, m.description, m.applied_at::TEXT,
-                COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete
+                COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete,
+                m.is_baseline
          FROM {} m
          LEFT JOIN {} s
            ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
@@ -47,11 +48,19 @@ pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) ->
         println!("No migrations have been applied");
     } else {
         println!("Applied migrations:");
-        for (version, description, applied_at, incomplete) in applied_migrations {
+        for (version, description, applied_at, incomplete, is_baseline) in applied_migrations {
             if incomplete > 0 {
+                // Baselines can't be resumed by `migrate apply` (it never
+                // re-runs baselines and skips versions <= a baseline's
+                // version); a half-applied baseline resumes with `provision`.
+                let resume_command = if is_baseline {
+                    "pgmt migrate provision"
+                } else {
+                    "pgmt migrate apply"
+                };
                 println!(
-                    "  {} - {} (INCOMPLETE: {} section(s) pending or failed — resume with `pgmt migrate apply`)",
-                    version, description, incomplete
+                    "  {} - {} (INCOMPLETE: {} section(s) pending or failed — resume with `{}`)",
+                    version, description, incomplete, resume_command
                 );
             } else {
                 println!("  {} - {} (applied: {})", version, description, applied_at);

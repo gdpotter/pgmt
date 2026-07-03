@@ -111,6 +111,10 @@ pub async fn cmd_migrate_update_with_options(
         &file_mapping,
         &historical,
         should_update_baseline,
+        // `migrate update` has no --create-baseline flag; re-anchoring is owned
+        // by `migrate new`, so point the user there rather than at a flag this
+        // subcommand would reject as unknown.
+        "run 'pgmt migrate new <description> --create-baseline' to emit a re-anchoring baseline.",
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 
@@ -335,6 +339,10 @@ pub async fn cmd_migrate_update_specific(
         &file_mapping,
         &historical,
         should_update_baseline,
+        // `migrate update` has no --create-baseline flag; re-anchoring is owned
+        // by `migrate new`, so point the user there rather than at a flag this
+        // subcommand would reject as unknown.
+        "run 'pgmt migrate new <description> --create-baseline' to emit a re-anchoring baseline.",
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 

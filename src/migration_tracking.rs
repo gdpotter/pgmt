@@ -264,13 +264,18 @@ async fn migrate_tracking_table_schema(
 /// first-touch semantics migrations use. Idempotent (`ON CONFLICT DO
 /// NOTHING`): a resumed provision or a later module adoption re-registers
 /// harmlessly, preserving existing section statuses.
+///
+/// Each section is paired with its `section_order` — its index in the FULL
+/// baseline file — rather than a local `enumerate()`, so orders stay stable
+/// per version across the separate registration calls a module subset deploy
+/// makes (see [`section_tracking::initialize_sections`]).
 pub async fn register_baseline_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
     description: &str,
     checksum: &str,
-    sections: &[crate::migration::section_parser::MigrationSection],
+    sections: &[(i32, crate::migration::section_parser::MigrationSection)],
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
     let sections_table = section_tracking::format_sections_table_name(tracking_table);
@@ -290,7 +295,7 @@ pub async fn register_baseline_start(
     .await
     .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
 
-    for (order, section) in sections.iter().enumerate() {
+    for (order, section) in sections {
         sqlx::query(&format!(
             "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
              VALUES ($1, TRUE, $2, $3, $4, 0)
@@ -299,7 +304,7 @@ pub async fn register_baseline_start(
         ))
         .bind(version_to_db(version)?)
         .bind(&section.name)
-        .bind(order as i32)
+        .bind(*order)
         .bind(section_tracking::SectionStatus::Pending.as_str())
         .execute(&mut *tx)
         .await?;
@@ -326,13 +331,18 @@ pub async fn register_baseline_start(
 /// `ON CONFLICT DO NOTHING` on the section rows preserves any rows left by a
 /// pre-refactor crashed apply (sections used to be initialized before the
 /// version row existed), so their Completed statuses keep driving resume.
+///
+/// Each section is paired with its `section_order` — its index in the FULL
+/// migration file — rather than a local `enumerate()`, so orders stay stable
+/// per version across the separate registration calls a module subset deploy
+/// makes (see [`section_tracking::initialize_sections`]).
 pub async fn register_migration_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
     description: &str,
     checksum: &str,
-    sections: &[crate::migration::section_parser::MigrationSection],
+    sections: &[(i32, crate::migration::section_parser::MigrationSection)],
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
     let sections_table = section_tracking::format_sections_table_name(tracking_table);
@@ -349,7 +359,7 @@ pub async fn register_migration_start(
     .await
     .with_context(|| format!("Failed to record migration {} in tracking table", version))?;
 
-    for (order, section) in sections.iter().enumerate() {
+    for (order, section) in sections {
         sqlx::query(&format!(
             "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
              VALUES ($1, FALSE, $2, $3, $4, 0)
@@ -358,7 +368,7 @@ pub async fn register_migration_start(
         ))
         .bind(version_to_db(version)?)
         .bind(&section.name)
-        .bind(order as i32)
+        .bind(*order)
         .bind(section_tracking::SectionStatus::Pending.as_str())
         .execute(&mut *tx)
         .await?;

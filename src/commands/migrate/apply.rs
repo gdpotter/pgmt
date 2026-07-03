@@ -215,7 +215,7 @@ pub(crate) async fn apply_pending_migrations(
         })?;
 
         // Module selection: run the selected modules' (+ base) sections; the
-        // rest are skipped and leave NO rows (design §9: derived skipped-ness,
+        // rest are skipped and leave NO rows (derived skipped-ness,
         // no trace of unrequested work). Skips are signalled two-tier: an
         // established module being left behind is schema drift (warning); a
         // never-established one is expected on subset targets (info).
@@ -320,11 +320,16 @@ pub(crate) async fn apply_pending_migrations(
                 selected.len()
             );
             // Register any selected sections this target hasn't seen yet
-            // (adopting a module completes past versions' sections).
-            let missing: Vec<crate::migration::section_parser::MigrationSection> = selected
+            // (adopting a module completes past versions' sections). Each
+            // carries its index in the FULL file so section_order stays stable
+            // per version regardless of which subset this call registers.
+            let missing: Vec<(i32, crate::migration::section_parser::MigrationSection)> = sections
                 .iter()
-                .filter(|s| !statuses.contains_key(&s.name))
-                .map(|s| (*s).clone())
+                .enumerate()
+                .filter(|(_, s)| {
+                    selection.selects(s.module.as_deref()) && !statuses.contains_key(&s.name)
+                })
+                .map(|(i, s)| (i as i32, s.clone()))
                 .collect();
             if !missing.is_empty() {
                 initialize_sections(
@@ -337,7 +342,7 @@ pub(crate) async fn apply_pending_migrations(
                 .await?;
             }
         } else {
-            // Nothing selected and nothing recorded: leave zero trace (§9).
+            // Nothing selected and nothing recorded: leave zero trace.
             if selected.is_empty() {
                 debug!(
                     "Migration {} has no selected sections, skipping",
@@ -350,16 +355,23 @@ pub(crate) async fn apply_pending_migrations(
                 migration.version, migration.description
             );
             // Register the version row + the SELECTED Pending section rows
-            // atomically, before anything executes.
-            let selected_owned: Vec<crate::migration::section_parser::MigrationSection> =
-                selected.iter().map(|s| (*s).clone()).collect();
+            // atomically, before anything executes. Each selected section
+            // carries its index in the FULL file so section_order stays stable
+            // per version even when a later call registers another subset.
+            let selected_ordered: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
+                sections
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| selection.selects(s.module.as_deref()))
+                    .map(|(i, s)| (i as i32, s.clone()))
+                    .collect();
             register_migration_start(
                 pool,
                 &config.migration.tracking_table,
                 migration.version,
                 &migration.description,
                 &checksum,
-                &selected_owned,
+                &selected_ordered,
             )
             .await?;
         }

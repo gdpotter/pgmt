@@ -5,6 +5,7 @@ use crate::migration::{discover_migrations, find_latest_baseline};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table,
     ensure_tracking_table_exists, format_tracking_table_name, register_baseline_start,
+    version_to_db,
 };
 use crate::modules::{
     ModuleSelection, literal_established_modules, modules_needing_baseline_content,
@@ -95,7 +96,7 @@ async fn provision_inner(
                 .as_ref()
                 .expect("modules need baseline content, so a baseline exists");
 
-            // Adoption constraint (§14): a module's baseline sections may
+            // Adoption constraint: a module's baseline sections may
             // reference its dependencies' objects, so those must already be
             // established here (or be adopted in the same run).
             for module in &needs_baseline {
@@ -259,17 +260,56 @@ async fn register_and_apply_baseline(
     source: &str,
     select_section: impl Fn(&crate::migration::section_parser::MigrationSection) -> bool + Copy,
 ) -> Result<()> {
-    let selected: Vec<_> =
+    let new_checksum = calculate_checksum(baseline_sql);
+
+    // Resume guard (parity with `apply_pending_migrations`' migration guard): a
+    // baseline row already present at this version whose stored checksum differs
+    // from the current file means the baseline was edited/regenerated after a
+    // partial provision. Sections recorded Completed came from the OLD content,
+    // and the section executor skips them by name — so resuming from the NEW file
+    // would leave the target matching neither version. Refuse instead. Only fires
+    // when a row already exists, so a normal first provision is unaffected.
+    let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
+    let existing_checksum: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT checksum FROM {} WHERE version = $1 AND is_baseline = TRUE",
+        tracking_table_name
+    ))
+    .bind(version_to_db(version)?)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(stored) = existing_checksum
+        && stored != new_checksum
+    {
+        anyhow::bail!(
+            "Baseline {} was modified after being partially applied!\n\
+             Expected checksum: {}\n\
+             Actual checksum:   {}\n\n\
+             A previous provision recorded some of this baseline's sections from \
+             different content; resuming from the edited file would leave the target \
+             matching neither version. Restore the baseline to the applied content to \
+             resume, or reset the target and re-provision from the current baseline.",
+            version,
+            stored,
+            new_checksum,
+        );
+    }
+
+    // Pair each selected section with its index in the FULL baseline file
+    // (enumerate before filtering) so section_order stays stable per version
+    // across the separate registration calls a subset provision makes.
+    let selected: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
         crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?
             .into_iter()
-            .filter(|s| select_section(s))
+            .enumerate()
+            .map(|(i, s)| (i as i32, s))
+            .filter(|(_, s)| select_section(s))
             .collect();
     register_baseline_start(
         pool,
         &config.migration.tracking_table,
         version,
         "baseline",
-        &calculate_checksum(baseline_sql),
+        &new_checksum,
         &selected,
     )
     .await?;

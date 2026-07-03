@@ -102,6 +102,57 @@ INSERT INTO users SELECT id FROM external_source;
     .await
 }
 
+/// A half-applied *baseline* cannot be resumed by `migrate apply` (apply never
+/// re-runs baselines and skips versions <= a baseline's version). `migrate
+/// status` must therefore point at `provision`, not `apply`, for an incomplete
+/// baseline row.
+#[tokio::test]
+async fn test_status_points_incomplete_baseline_at_provision() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+
+        helper.write_migration_file("1000_initial.sql", "CREATE TABLE users (id SERIAL);")?;
+        // Section "seed" fails on the first provision: it reads from a table
+        // the baseline does not create, so the baseline stays half-applied.
+        std::fs::write(
+            helper.baselines_dir().join("baseline_1000.sql"),
+            r#"-- pgmt:section name="tables" mode="transactional"
+CREATE TABLE users (id SERIAL);
+
+-- pgmt:section name="seed" mode="transactional"
+INSERT INTO users SELECT id FROM external_source;
+"#,
+        )?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .failure();
+
+        // Status must flag the baseline as INCOMPLETE and point at provision —
+        // never tell the user to resume this baseline with `apply`.
+        helper
+            .command()
+            .args(["migrate", "status"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("INCOMPLETE"))
+            .stdout(predicate::str::contains(
+                "resume with `pgmt migrate provision`",
+            ))
+            .stdout(predicate::str::contains("resume with `pgmt migrate apply`").not());
+
+        Ok(())
+    })
+    .await
+}
+
 /// A legacy tracking row — version row present, NO section rows (recorded on
 /// completion by an older pgmt, or before section tracking existed) — counts
 /// as fully applied and is never re-executed.
