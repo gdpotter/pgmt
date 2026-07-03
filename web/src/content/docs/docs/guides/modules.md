@@ -147,7 +147,7 @@ $ pgmt migrate provision --modules analytics
 Adopting module(s) analytics from baseline 1734567890...
 ```
 
-The module's dependencies must already be on the target (at or past that baseline's version) — adopt `core` first if they aren't. Re-running an adoption is a no-op.
+Two conditions must hold, and adoption refuses with the exact fix if they don't: the module's dependencies must already be on the target (adopt `core` first if not), and the target's **already-established modules must be caught up to that baseline's version**. The latter is the behind-environment case — if `core` is behind, pgmt tells you to run `pgmt migrate apply --modules core` first. Rolling an established module forward is a deliberate `apply` (where its migrations, possibly destructive, are surfaced), never a silent side effect of adopting a different module. Re-running an adoption is a no-op.
 
 ## Re-Anchoring: When Ownership Moves
 
