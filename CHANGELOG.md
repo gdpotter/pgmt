@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `pgmt migrate provision` to stand up a new database from a baseline plus its post-baseline migrations — the on-ramp for fresh environments (demo, staging, preview, disaster recovery), where `migrate apply` only maintains a database that's already established.
 
+### Bug Fixes
+
+- Quote user-defined parameter types in generated `DROP FUNCTION` statements, so functions taking a mixed-case custom type (e.g. `"SubscriptionFrequency"`) drop with a valid identifier.
+
 ## 0.5.1 - 2026-06-24
 
 ### Bug Fixes

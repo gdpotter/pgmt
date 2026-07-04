@@ -76,7 +76,7 @@ async fn test_fetch_function_with_custom_types() {
         assert_eq!(func.schema, "public");
         assert_eq!(func.name, "get_status_message");
         assert_eq!(func.parameters.len(), 1);
-        assert_eq!(func.parameters[0].data_type, "public.status");
+        assert_eq!(func.parameters[0].data_type, "\"public\".\"status\"");
 
         assert_eq!(func.depends_on().len(), 2);
         assert!(func.depends_on().contains(&DbObjectId::Schema {
@@ -687,7 +687,7 @@ async fn test_fetch_function_with_domain_parameter() {
         assert_eq!(func.schema, "public");
         assert_eq!(func.name, "check_positive");
         assert_eq!(func.parameters.len(), 1);
-        assert_eq!(func.parameters[0].data_type, "public.positive_int");
+        assert_eq!(func.parameters[0].data_type, "\"public\".\"positive_int\"");
 
         // Should contain DbObjectId::Domain, not DbObjectId::Type
         assert_eq!(func.depends_on().len(), 2);
@@ -763,7 +763,7 @@ async fn test_fetch_function_with_custom_type_array_parameter() {
         assert_eq!(func.parameters.len(), 1);
         // The parameter type should include the schema-qualified name with array brackets
         assert_eq!(
-            func.parameters[0].data_type, "public.item_status[]",
+            func.parameters[0].data_type, "\"public\".\"item_status\"[]",
             "Parameter type should be schema-qualified with array brackets, got: {}",
             func.parameters[0].data_type
         );

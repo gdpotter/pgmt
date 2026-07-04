@@ -6,6 +6,7 @@ use tracing::info;
 
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{DependencyBuilder, is_system_schema, resolve_type_dependency};
+use crate::render::quote_ident;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
@@ -516,7 +517,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
         let data_type = if is_system_schema(&param.type_schema) || param.is_extension_type {
             param.formatted_type.clone()
         } else {
-            let base = format!("{}.{}", param.type_schema, param.type_name);
+            let base = format!(
+                "{}.{}",
+                quote_ident(&param.type_schema),
+                quote_ident(&param.type_name)
+            );
             if param.is_array {
                 format!("{}[]", base)
             } else {

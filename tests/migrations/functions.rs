@@ -167,6 +167,49 @@ async fn test_drop_function_with_array_parameter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_drop_function_with_mixed_case_custom_type() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper.run_migration_test(
+        // Both DBs: a custom type whose name requires quoting (mixed case)
+        &[
+            r#"CREATE TYPE "SubscriptionFrequency" AS ENUM ('monthly', 'yearly')"#,
+        ],
+        // Initial DB only: function taking the mixed-case type
+        &[
+            r#"CREATE OR REPLACE FUNCTION create_plan(freq "SubscriptionFrequency") RETURNS INTEGER AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql"#,
+        ],
+        // Target DB only: nothing extra (function removed)
+        &[],
+        |steps, final_catalog| {
+            let drop_step = steps
+                .iter()
+                .find(|s| matches!(s, MigrationStep::Function(FunctionOperation::Drop { name, .. }) if name == "create_plan"))
+                .expect("Should have DROP FUNCTION step");
+
+            match drop_step {
+                MigrationStep::Function(FunctionOperation::Drop {
+                    parameter_types, ..
+                }) => {
+                    assert!(
+                        parameter_types.contains("\"SubscriptionFrequency\""),
+                        "parameter_types should quote the mixed-case type, got: {}",
+                        parameter_types
+                    );
+                }
+                _ => panic!("Expected DROP FUNCTION step"),
+            }
+
+            assert!(final_catalog.functions.is_empty());
+
+            Ok(())
+        }
+    ).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_replace_function_migration() -> Result<()> {
     let helper = MigrationTestHelper::new().await;
 
