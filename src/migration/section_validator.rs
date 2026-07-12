@@ -85,7 +85,41 @@ fn validate_section(section: &MigrationSection) -> Result<()> {
         ));
     }
 
+    // Lint (warning, not error): pgmt resumes at section granularity, and a
+    // non-transactional/autocommit section is the only place partial
+    // intra-section failure exists — one recorded status covers every
+    // statement in it, so a resume re-touches statements that already
+    // succeeded. CONCURRENTLY statements are the canonical case: each
+    // physically commits on its own, so packing several into one section means
+    // a mid-section failure can't resume precisely.
+    //
+    // We do NOT parse SQL — pgmt never parses user SQL. This is a deliberately
+    // crude heuristic: a case-insensitive substring count of "CONCURRENTLY".
+    // Overcounting (e.g. the word inside a comment) at worst produces a
+    // spurious warning, which is acceptable for a lint.
+    if matches!(
+        section.mode,
+        TransactionMode::NonTransactional | TransactionMode::Autocommit
+    ) {
+        let concurrently_count = count_concurrently(&section.sql);
+        if concurrently_count > 1 {
+            eprintln!(
+                "Warning: section '{}' (line {}) contains {} CONCURRENTLY statements; \
+                 consider one non-transactional statement per section so a failure can \
+                 resume precisely (each section is tracked and resumed independently).",
+                section.name, section.start_line, concurrently_count
+            );
+        }
+    }
+
     Ok(())
+}
+
+/// Count case-insensitive occurrences of the literal "CONCURRENTLY" in `sql`.
+/// A lint heuristic only (see the call site): pgmt never parses user SQL, so
+/// this is a plain substring count, not a statement count.
+fn count_concurrently(sql: &str) -> usize {
+    sql.to_uppercase().matches("CONCURRENTLY").count()
 }
 
 #[cfg(test)]
@@ -148,6 +182,61 @@ CREATE INDEX CONCURRENTLY idx_test ON users(email);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("excessive"));
+    }
+
+    #[test]
+    fn test_count_concurrently_case_insensitive() {
+        assert_eq!(count_concurrently("CREATE INDEX foo ON t(a);"), 0);
+        assert_eq!(
+            count_concurrently("CREATE INDEX CONCURRENTLY foo ON t(a);"),
+            1
+        );
+        assert_eq!(
+            count_concurrently(
+                "CREATE INDEX concurrently a ON t(x);\nCREATE INDEX CONCURRENTLY b ON t(y);"
+            ),
+            2
+        );
+    }
+
+    /// Two CONCURRENTLY statements in one non-transactional section is a lint
+    /// (warning), not an error: validation still succeeds so apply proceeds.
+    #[test]
+    fn test_two_concurrently_in_one_section_warns_not_errors() {
+        let sql = r#"
+-- pgmt:section name="indexes"
+-- pgmt:  mode="non-transactional"
+-- pgmt:  timeout="2s"
+CREATE INDEX CONCURRENTLY idx_a ON users(a);
+CREATE INDEX CONCURRENTLY idx_b ON users(b);
+"#;
+
+        let sections = parse_migration_sections(Path::new("test.sql"), sql).unwrap();
+        assert_eq!(count_concurrently(&sections[0].sql), 2);
+        // Warning is emitted (stderr), but validation succeeds.
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    /// A single CONCURRENTLY statement per non-transactional section is the
+    /// recommended shape and must not warn (count == 1).
+    #[test]
+    fn test_single_concurrently_per_section_does_not_warn() {
+        let sql = r#"
+-- pgmt:section name="idx_a"
+-- pgmt:  mode="non-transactional"
+-- pgmt:  timeout="2s"
+CREATE INDEX CONCURRENTLY idx_a ON users(a);
+
+-- pgmt:section name="idx_b"
+-- pgmt:  mode="non-transactional"
+-- pgmt:  timeout="2s"
+CREATE INDEX CONCURRENTLY idx_b ON users(b);
+"#;
+
+        let sections = parse_migration_sections(Path::new("test.sql"), sql).unwrap();
+        assert_eq!(count_concurrently(&sections[0].sql), 1);
+        assert_eq!(count_concurrently(&sections[1].sql), 1);
+        assert!(validate_sections(&sections).is_ok());
     }
 
     #[test]
