@@ -37,5 +37,6 @@ pub mod migrate_end_to_end;
 pub mod migrate_new;
 pub mod migrate_reconstruction;
 pub mod migrate_validate_json;
+pub mod nontransactional_sections;
 pub mod roles_file;
 pub mod substrate;

@@ -16,6 +16,60 @@ fn format_section_error(error: sqlx::Error, sql: &str, section_name: &str) -> an
     anyhow::anyhow!("{}", ctx.format(section_name, sql))
 }
 
+/// Read-only probe for INVALID indexes, run only after a non-transactional
+/// section has exhausted its retries.
+///
+/// A failed or interrupted `CREATE INDEX CONCURRENTLY` leaves an INVALID index
+/// behind; the naive retry then dies with `already exists` and the user gets no
+/// hint about the leftover or the fix. This query lists any invalid indexes and,
+/// if there are some, returns a guidance note to append to the failure.
+///
+/// Design constraints (do not relax): pgmt NEVER auto-drops the index and NEVER
+/// parses the section SQL — this is detect-and-report only. The probe must never
+/// mask the original error: if the query itself fails (permissions, etc.), we
+/// log at debug and return `None`, leaving the original error untouched.
+async fn detect_invalid_index_guidance(pool: &PgPool) -> Option<String> {
+    let rows: Vec<(String, String)> = match sqlx::query_as(
+        r#"SELECT n.nspname, c.relname
+FROM pg_index i
+JOIN pg_class c ON c.oid = i.indexrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE NOT i.indisvalid
+  AND n.nspname NOT IN ('pg_catalog', 'pg_toast', 'information_schema')
+ORDER BY n.nspname, c.relname"#,
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::debug!("invalid-index detection query failed, skipping guidance: {e}");
+            return None;
+        }
+    };
+
+    if rows.is_empty() {
+        return None;
+    }
+
+    let qualified: Vec<String> = rows
+        .iter()
+        .map(|(schema, name)| format!("\"{schema}\".\"{name}\""))
+        .collect();
+    // Use the first invalid index's bare name in the DROP guidance example.
+    let drop_name = &rows[0].1;
+
+    Some(format!(
+        "Invalid index(es) found: {}. A failed or interrupted CREATE INDEX \
+CONCURRENTLY leaves an INVALID index behind, and re-running the CREATE will \
+fail with 'already exists'. To make this section safely re-runnable, add \
+`DROP INDEX CONCURRENTLY IF EXISTS {};` before the CREATE in this section \
+(the edit runs through your normal review process).",
+        qualified.join(", "),
+        drop_name
+    ))
+}
+
 /// Execution mode controls retry and timeout behavior
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionMode {
@@ -256,17 +310,31 @@ impl SectionExecutor {
                         tokio::time::sleep(delay).await;
                         continue;
                     } else {
-                        // Final attempt failed
+                        // Final attempt failed. Before recording the failure,
+                        // run a READ-ONLY probe for INVALID indexes left behind
+                        // by a failed/interrupted CREATE INDEX CONCURRENTLY, so
+                        // the enriched guidance lands in `last_error` too. This
+                        // NEVER auto-drops anything and NEVER parses the SQL.
+                        let guidance = detect_invalid_index_guidance(&self.pool).await;
+
+                        let recorded_error = match &guidance {
+                            Some(note) => format!("{}\n\n{}", e, note),
+                            None => e.to_string(),
+                        };
                         record_section_failed(
                             &self.pool,
                             &self.tracking_table,
                             migration_version,
                             &section.name,
-                            &e.to_string(),
+                            &recorded_error,
                         )
                         .await?;
 
-                        return Err(format_section_error(e, &section.sql, &section.name));
+                        let formatted = format_section_error(e, &section.sql, &section.name);
+                        return Err(match guidance {
+                            Some(note) => anyhow::anyhow!("{}\n\n{}", formatted, note),
+                            None => formatted,
+                        });
                     }
                 }
             }
