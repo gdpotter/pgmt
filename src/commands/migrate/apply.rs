@@ -105,11 +105,12 @@ pub(crate) async fn apply_pending_migrations(
                     "WARNING: migration {} ({}) is below the baseline watermark ({}) \
                      and was never applied to this database. It will never run here or on \
                      any other target (fresh provisions replay only migrations after the \
-                     baseline). If its changes are needed, re-create it as a new migration \
-                     above the baseline.",
+                     baseline). If its changes are needed, run 'pgmt migrate update {}' to \
+                     regenerate it above the baseline.",
                     migration.version,
                     migration.description,
                     baseline_version.expect("below_watermark implies a baseline exists"),
+                    migration.version,
                 );
             } else {
                 debug!(

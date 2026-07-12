@@ -69,7 +69,8 @@ async fn test_apply_warns_on_unrecorded_below_watermark_migration() -> Result<()
             .success()
             .stderr(predicate::str::contains("1000000020"))
             .stderr(predicate::str::contains("below the baseline watermark"))
-            .stderr(predicate::str::contains("1000000030"));
+            .stderr(predicate::str::contains("1000000030"))
+            .stderr(predicate::str::contains("pgmt migrate update 1000000020"));
 
         // The late migration was skipped, not applied.
         assert!(
