@@ -561,22 +561,36 @@ pub async fn record_section_failed(
     Ok(())
 }
 
-/// Baseline versions with at least one non-completed registered section — a
-/// crashed or otherwise incomplete provision. A *subset* provision registers
-/// only the selected sections, so a subset baseline whose selected sections
-/// all completed is NOT incomplete; only a genuinely interrupted apply is.
-pub async fn incomplete_baseline_versions(
+/// The individual non-completed baseline SECTION rows — a crashed or otherwise
+/// incomplete provision, resolved to `(version, section_name, module)` so the
+/// caller can scope its response by module. `module` is the literal stored at
+/// registration: `None` marks a base (unmoduled) section, `Some(name)` a
+/// module's section.
+///
+/// A *subset* provision registers only the selected sections, so a subset
+/// baseline whose selected sections all completed is NOT incomplete; only a
+/// genuinely interrupted apply leaves rows here.
+///
+/// This supersedes the version-only view: the guard in `migrate apply` must
+/// distinguish an incomplete BASE section (untrustworthy watermark — refuse
+/// everything) from incomplete MODULE sections (refuse only the affected
+/// modules), which needs the per-row module tag.
+pub async fn incomplete_baseline_sections(
     pool: &PgPool,
     tracking_table: &TrackingTable,
-) -> Result<Vec<u64>> {
+) -> Result<Vec<(u64, String, Option<String>)>> {
     let sections_table = format_sections_table_name(tracking_table);
-    let rows: Vec<i64> = sqlx::query_scalar(&format!(
-        "SELECT DISTINCT migration_version FROM {} WHERE is_baseline AND status <> 'completed'",
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT migration_version, section_name, module FROM {} \
+         WHERE is_baseline AND status <> 'completed'",
         sections_table
     ))
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|v| v as u64).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(v, name, module)| (v as u64, name, module))
+        .collect())
 }
 
 #[cfg(test)]

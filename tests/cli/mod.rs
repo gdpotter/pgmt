@@ -34,6 +34,7 @@ pub mod debug_commands;
 pub mod diff;
 pub mod error_handling;
 pub mod help_matrix;
+pub mod incomplete_baseline_guard;
 pub mod init_interactive;
 pub mod migrate_end_to_end;
 pub mod migrate_new;

@@ -62,22 +62,96 @@ async fn apply_with_module_guard(
     selection: &ModuleSelection,
 ) -> Result<()> {
     // A baseline row whose registered sections aren't all completed is a
-    // crashed/incomplete `provision`. Its version must NOT be trusted as
+    // crashed/incomplete `provision`. Its version must NOT be blindly trusted as
     // "covers everything ≤ V" — doing so would skip migrations onto a
-    // half-built schema. Refuse and point at provision to finish it (apply
-    // never resumes a baseline). Provision itself resumes such baselines, so
-    // this guard lives on the apply command, not the shared apply loop.
+    // half-built schema. But the untrustworthiness is scoped to what actually
+    // failed to land, so scope the refusal by module (apply never resumes a
+    // baseline; provision itself resumes such baselines, so this guard lives on
+    // the apply command, not the shared apply loop).
+    //
+    // - An incomplete BASE section (module IS NULL) means the baseline's base
+    //   content is half-built: the version is untrustworthy as a base watermark,
+    //   so refuse EVERY apply. This only arises from a crashed FRESH provision
+    //   that failed on a base section — adoption never runs base sections.
+    // - Incomplete MODULE sections mean only those modules are half-built. The
+    //   base content of that baseline version DID land: either the base sections
+    //   completed in this same provision run before the module section failed,
+    //   or (adoption) the base was already caught up to the baseline version via
+    //   migrations before adoption began — adoption is gated on exactly that
+    //   (`established_pending_through`) and inserts the baseline main row
+    //   idempotently (ON CONFLICT DO NOTHING), so a crashed adoption never moves
+    //   the watermark past content the base already has. So a base-only (or
+    //   any-unaffected-module) apply is safe to proceed; only refuse when the
+    //   selection actually names one of the half-built modules.
     ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
-    let incomplete = crate::migration_tracking::section_tracking::incomplete_baseline_versions(
+    let incomplete = crate::migration_tracking::section_tracking::incomplete_baseline_sections(
         pool,
         &config.migration.tracking_table,
     )
     .await?;
-    if let Some(version) = incomplete.iter().max() {
-        anyhow::bail!(
-            "baseline {version} is only partially applied — a `migrate provision` did not \
-             finish. Complete it with `pgmt migrate provision` before applying migrations."
+    if !incomplete.is_empty() {
+        // Any incomplete BASE section → the watermark itself is untrustworthy;
+        // refuse all applies with the original, version-scoped guidance.
+        let base_incomplete_version = incomplete
+            .iter()
+            .filter(|(_, _, module)| module.is_none())
+            .map(|(version, _, _)| *version)
+            .max();
+        if let Some(version) = base_incomplete_version {
+            anyhow::bail!(
+                "baseline {version} is only partially applied — a `migrate provision` did not \
+                 finish. Complete it with `pgmt migrate provision` before applying migrations."
+            );
+        }
+
+        // All incomplete sections belong to specific modules. Collect the
+        // affected modules and the baseline version they belong to.
+        let affected_version = incomplete
+            .iter()
+            .map(|(version, _, _)| *version)
+            .max()
+            .expect("incomplete is non-empty and all rows carry a module");
+        let affected_modules: BTreeSet<String> = incomplete
+            .iter()
+            .filter_map(|(_, _, module)| module.clone())
+            .collect();
+        let selection_hits: BTreeSet<&String> = affected_modules
+            .iter()
+            .filter(|m| selection.selects(Some(m)))
+            .collect();
+
+        let module_list = affected_modules
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let module_args = affected_modules
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+
+        if !selection_hits.is_empty() {
+            // The selection names a half-built module: applying its migrations
+            // onto an unfinished baseline would build on a partial schema.
+            anyhow::bail!(
+                "module(s) {module_list} have partially applied baseline content (baseline \
+                 {affected_version}) — a `migrate provision --modules {module_args}` did not \
+                 finish. Complete it with `pgmt migrate provision --modules {module_args}` before \
+                 applying its migrations."
+            );
+        }
+
+        // The half-built modules are unaffected by this selection (e.g. a
+        // base-only deploy while billing's adoption is half-done). The base
+        // watermark is honest (see above), so proceed — but warn loudly so the
+        // stuck adoption doesn't go unnoticed.
+        eprintln!(
+            "Warning: module(s) {module_list} have partially applied baseline content (baseline \
+             {affected_version}) from an unfinished `migrate provision --modules {module_args}`. \
+             This apply does not touch them and proceeds; complete their adoption with \
+             `pgmt migrate provision --modules {module_args}`."
         );
     }
 
