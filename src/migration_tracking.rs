@@ -296,17 +296,14 @@ pub async fn register_baseline_start(
     .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
 
     for (order, section) in sections {
-        sqlx::query(&format!(
-            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
-             VALUES ($1, TRUE, $2, $3, $4, 0)
-             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
-            sections_table
-        ))
-        .bind(version_to_db(version)?)
-        .bind(&section.name)
-        .bind(*order)
-        .bind(section_tracking::SectionStatus::Pending.as_str())
-        .execute(&mut *tx)
+        section_tracking::insert_pending_section(
+            &mut *tx,
+            &sections_table,
+            version,
+            true,
+            *order,
+            section,
+        )
         .await?;
     }
 
@@ -360,17 +357,14 @@ pub async fn register_migration_start(
     .with_context(|| format!("Failed to record migration {} in tracking table", version))?;
 
     for (order, section) in sections {
-        sqlx::query(&format!(
-            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
-             VALUES ($1, FALSE, $2, $3, $4, 0)
-             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
-            sections_table
-        ))
-        .bind(version_to_db(version)?)
-        .bind(&section.name)
-        .bind(*order)
-        .bind(section_tracking::SectionStatus::Pending.as_str())
-        .execute(&mut *tx)
+        section_tracking::insert_pending_section(
+            &mut *tx,
+            &sections_table,
+            version,
+            false,
+            *order,
+            section,
+        )
         .await?;
     }
 
@@ -384,4 +378,29 @@ pub async fn register_migration_start(
 /// Calculate checksum for migration content
 pub fn calculate_checksum(content: &str) -> String {
     format!("{:x}", md5::compute(content))
+}
+
+/// Update the stored whole-file checksum on a main tracking row. Called after
+/// per-section validation passes on a file whose bytes changed (e.g. an
+/// unapplied section was fixed in the repo) so the main-row fingerprint stays
+/// current — section rows remain authoritative for immutability.
+pub async fn update_stored_file_checksum(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    is_baseline: bool,
+    checksum: &str,
+) -> Result<()> {
+    let tracking_table_name = format_tracking_table_name(tracking_table)?;
+    sqlx::query(&format!(
+        "UPDATE {} SET checksum = $1 WHERE version = $2 AND is_baseline = $3",
+        tracking_table_name
+    ))
+    .bind(checksum)
+    .bind(version_to_db(version)?)
+    .bind(is_baseline)
+    .execute(pool)
+    .await
+    .with_context(|| format!("Failed to update stored checksum for version {}", version))?;
+    Ok(())
 }

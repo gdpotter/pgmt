@@ -26,6 +26,13 @@ pub struct MigrationSection {
     /// The SQL to execute for this section
     pub sql: String,
 
+    /// The raw header line(s) of this section (the `-- pgmt:section` line plus
+    /// any `-- pgmt:` attribute continuation lines), exactly as written.
+    /// Empty for the implicit header-less `default` section. It participates
+    /// in the per-section checksum because `module=`/`remaps=` attributes are
+    /// attribution facts pinned alongside the body.
+    pub raw_header: String,
+
     /// Owning module (modules feature). `None` = the unmoduled base — also
     /// what every pre-modules migration parses as.
     pub module: Option<String>,
@@ -39,6 +46,20 @@ pub struct MigrationSection {
     pub start_line: usize,
 }
 
+impl MigrationSection {
+    /// The exact content hashed for this section's checksum: the raw header
+    /// line(s) followed by the body SQL. The header carries `module=`/`remaps=`
+    /// attribution, so it is part of the immutable unit. The header-less
+    /// `default` section hashes its body alone.
+    pub fn checksum_content(&self) -> String {
+        if self.raw_header.is_empty() {
+            self.sql.clone()
+        } else {
+            format!("{}\n{}", self.raw_header, self.sql)
+        }
+    }
+}
+
 /// Transaction execution mode for a section
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionMode {
@@ -50,6 +71,17 @@ pub enum TransactionMode {
 
     /// Execute each statement individually with auto-commit
     Autocommit,
+}
+
+impl TransactionMode {
+    /// The stored/parsed string form of the mode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Transactional => "transactional",
+            Self::NonTransactional => "non-transactional",
+            Self::Autocommit => "autocommit",
+        }
+    }
 }
 
 /// Retry configuration for a section
@@ -114,6 +146,7 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
 
             // Start new section
             let mut builder = SectionBuilder::new(line_num + 1);
+            builder.raw_header.push_str(line);
 
             // Parse attributes on the same line (e.g., name="test")
             let rest = line
@@ -130,6 +163,10 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
         } else if line.trim_start().starts_with("-- pgmt:") {
             // Parse section attribute
             if let Some(builder) = current_section.as_mut() {
+                if !builder.raw_header.is_empty() {
+                    builder.raw_header.push('\n');
+                }
+                builder.raw_header.push_str(line);
                 parse_section_attribute(line, builder)?;
             }
         } else {
@@ -154,6 +191,7 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
             lock_timeout: None,
             retry_config: None,
             sql: sql.to_string(),
+            raw_header: String::new(),
             module: None,
             remaps: Vec::new(),
             start_line: 1,
@@ -336,6 +374,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 /// Helper struct for building sections
 struct SectionBuilder {
     start_line: usize,
+    raw_header: String,
     name: Option<String>,
     description: Option<String>,
     mode: Option<TransactionMode>,
@@ -353,6 +392,7 @@ impl SectionBuilder {
     fn new(start_line: usize) -> Self {
         Self {
             start_line,
+            raw_header: String::new(),
             name: None,
             description: None,
             mode: None,
@@ -405,6 +445,7 @@ impl SectionBuilder {
             lock_timeout: self.lock_timeout,
             retry_config,
             sql: sql.trim().to_string(),
+            raw_header: self.raw_header,
             start_line: self.start_line,
         })
     }

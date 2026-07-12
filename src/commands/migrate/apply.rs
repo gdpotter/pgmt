@@ -3,7 +3,9 @@ use crate::config::Config;
 use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
-use crate::migration_tracking::section_tracking::{SectionStatus, section_statuses};
+use crate::migration_tracking::section_tracking::{
+    SectionStatus, section_statuses, validate_and_sync_section_checksums,
+};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     format_tracking_table_name, initialize_sections, register_migration_start, version_from_db,
@@ -203,25 +205,6 @@ pub(crate) async fn apply_pending_migrations(
         // Calculate checksum
         let checksum = calculate_checksum(&migration_sql);
 
-        // Validate the checksum of an already-registered migration before
-        // anything else — resume must never run sections from an edited file.
-        let registered = applied_migrations.get(&migration.version);
-        if let Some(stored_checksum) = registered
-            && stored_checksum != &checksum
-        {
-            anyhow::bail!(
-                "Migration {} has been modified after being applied!\n\
-                 Expected checksum: {}\n\
-                 Actual checksum:   {}\n\n\
-                 Migrations must be immutable once applied. If you need to make changes:\n\
-                 • Create a new migration with the changes\n\
-                 • Or roll back and recreate this migration (dangerous in production)",
-                migration.version,
-                stored_checksum,
-                checksum
-            );
-        }
-
         // Parse migration into sections
         let sections = parse_migration_sections(&migration.path, &migration_sql)
             .with_context(|| format!("Failed to parse migration {}", migration.version))?;
@@ -233,6 +216,49 @@ pub(crate) async fn apply_pending_migrations(
                 migration.version
             )
         })?;
+
+        // Immutability is enforced at SECTION granularity (the unit of resume):
+        // an already-applied section may never change, but an unapplied one may
+        // be fixed in the repo and re-run. Validate the current file's sections
+        // against the registered rows; the whole-file checksum is only a
+        // fallback guard for legacy rows with no per-section checksums.
+        let registered = applied_migrations.get(&migration.version);
+        if let Some(stored_file_checksum) = registered {
+            let had_checksummed = validate_and_sync_section_checksums(
+                pool,
+                &config.migration.tracking_table,
+                migration.version,
+                false,
+                &sections,
+            )
+            .await?;
+            if stored_file_checksum != &checksum {
+                if !had_checksummed {
+                    // Legacy safety: no per-section checksums exist to validate,
+                    // so keep the original whole-file immutability bail.
+                    anyhow::bail!(
+                        "Migration {} has been modified after being applied!\n\
+                         Expected checksum: {}\n\
+                         Actual checksum:   {}\n\n\
+                         Migrations must be immutable once applied. If you need to make changes:\n\
+                         • Create a new migration with the changes\n\
+                         • Or roll back and recreate this migration (dangerous in production)",
+                        migration.version,
+                        stored_file_checksum,
+                        checksum
+                    );
+                }
+                // Sections validated; keep the main-row fingerprint current.
+                crate::migration_tracking::update_stored_file_checksum(
+                    pool,
+                    &config.migration.tracking_table,
+                    migration.version,
+                    false,
+                    &checksum,
+                )
+                .await?;
+            }
+        }
 
         // Module selection: run the selected modules' (+ base) sections; the
         // rest are skipped and leave NO rows (derived skipped-ness,
@@ -315,15 +341,24 @@ pub(crate) async fn apply_pending_migrations(
         if registered.is_some() {
             // The version row is written at start (register_migration_start),
             // so its existence doesn't mean "done" — completeness is derived.
-            // Legacy rows with NO section rows were recorded on completion by
-            // older pgmt and are fully applied by construction (registration
-            // is atomic, so a crash can't produce that shape). Under module
-            // selection, "done" means every SELECTED section is Completed —
-            // unselected modules' sections stay unrecorded until adopted.
-            let fully_applied = statuses.is_empty()
-                || selected
-                    .iter()
-                    .all(|s| statuses.get(&s.name) == Some(&SectionStatus::Completed));
+            // The schema migration backfills a synthetic 'default' completed
+            // section for every legacy main row, so a registered version with
+            // ZERO section rows can no longer occur; if it does, tracking state
+            // is corrupt and we must not guess.
+            if statuses.is_empty() {
+                anyhow::bail!(
+                    "tracking state corrupt: version {} has a tracking row but no section \
+                     rows; this should be impossible after schema migration — investigate \
+                     before re-running",
+                    migration.version
+                );
+            }
+            // Under module selection, "done" means every SELECTED section is
+            // Completed — unselected modules' sections stay unrecorded until
+            // adopted.
+            let fully_applied = selected
+                .iter()
+                .all(|s| statuses.get(&s.name) == Some(&SectionStatus::Completed));
             if fully_applied {
                 debug!("Migration {} already applied, skipping", migration.version);
                 continue;

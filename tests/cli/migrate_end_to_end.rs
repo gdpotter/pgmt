@@ -1356,19 +1356,20 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
             content.push_str("\n-- This migration was modified after being applied\n");
             std::fs::write(&migration_path, content)?;
 
-            // Try to apply again - should fail with checksum error
+            // Try to apply again - should fail with a section-level checksum
+            // error (a header-less migration is a single 'default' section).
             helper
                 .command()
                 .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
                 .assert()
                 .failure()
                 .stderr(predicate::str::contains(
-                    "has been modified after being applied",
+                    "was modified after it was applied",
                 ))
                 .stderr(predicate::str::contains("Expected checksum:"))
                 .stderr(predicate::str::contains("Actual checksum:"))
                 .stderr(predicate::str::contains(
-                    "Migrations must be immutable once applied",
+                    "Applied sections are immutable",
                 ));
 
             Ok(())

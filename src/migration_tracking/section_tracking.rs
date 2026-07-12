@@ -1,8 +1,12 @@
 use crate::config::types::TrackingTable;
 use crate::migration::section_parser::MigrationSection;
+use crate::migration_tracking::{calculate_checksum, version_to_db};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::str::FromStr;
+
+/// pgmt version stamped onto section rows at registration.
+const PGMT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Format the sections tracking table name with proper schema qualification
 pub(crate) fn format_sections_table_name(tracking_table: &TrackingTable) -> String {
@@ -72,6 +76,11 @@ pub async fn ensure_section_tracking_table(
             last_error TEXT,
             rows_affected BIGINT,
             duration_ms BIGINT,
+            checksum TEXT,
+            mode TEXT,
+            module TEXT,
+            applied_by TEXT,
+            pgmt_version TEXT,
             PRIMARY KEY (migration_version, is_baseline, section_name)
         )
         "#,
@@ -81,7 +90,7 @@ pub async fn ensure_section_tracking_table(
     .await
     .context("Failed to create section tracking table")?;
 
-    migrate_section_table_schema(pool, &sections_table).await?;
+    migrate_section_table_schema(pool, tracking_table, &sections_table).await?;
 
     // Create index for querying by status
     sqlx::query(&format!(
@@ -99,19 +108,27 @@ pub async fn ensure_section_tracking_table(
 /// "Migrate the migrator" for the sections table: older tables lack
 /// `is_baseline` (every existing row is a migration section — backfill FALSE,
 /// no column DEFAULT) and key sections by `(migration_version, section_name)`.
-async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Result<()> {
-    let has_is_baseline: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-             SELECT 1 FROM pg_attribute
-             WHERE attrelid = $1::regclass AND attname = 'is_baseline' AND NOT attisdropped
-         )",
+/// Later revisions added per-section `checksum`/`mode`/`module`/`applied_by`/
+/// `pgmt_version` (all nullable; NULL = legacy/pre-upgrade row).
+async fn migrate_section_table_schema(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    sections_table: &str,
+) -> Result<()> {
+    let existing_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT attname::text FROM pg_attribute
+         WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped",
     )
     .bind(sections_table)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
     .with_context(|| format!("Failed to inspect columns of {}", sections_table))?;
+    let has = |name: &str| existing_columns.iter().any(|c| c == name);
 
-    if !has_is_baseline {
+    // `is_baseline`: add nullable, backfill existing rows to FALSE (every
+    // existing row is a migration), then enforce NOT NULL — in one transaction
+    // so the column is never observed half-migrated.
+    if !has("is_baseline") {
         let mut tx = pool.begin().await?;
         sqlx::query(&format!(
             "ALTER TABLE {} ADD COLUMN is_baseline BOOLEAN",
@@ -119,12 +136,9 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
         ))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!(
-            "UPDATE {} SET is_baseline = FALSE",
-            sections_table
-        ))
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(&format!("UPDATE {} SET is_baseline = FALSE", sections_table))
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(&format!(
             "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
             sections_table
@@ -136,6 +150,21 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
             .with_context(|| format!("Failed to add is_baseline to {}", sections_table))?;
     }
 
+    // Per-section immutability + self-describing attribution columns. All
+    // nullable: a NULL checksum marks a legacy/pre-upgrade row (passes
+    // validation), and `module` NULL means the base (unmoduled) section.
+    for column in ["checksum", "mode", "module", "applied_by", "pgmt_version"] {
+        if !has(column) {
+            sqlx::query(&format!(
+                "ALTER TABLE {} ADD COLUMN {} TEXT",
+                sections_table, column
+            ))
+            .execute(pool)
+            .await
+            .with_context(|| format!("Failed to add {} to {}", column, sections_table))?;
+        }
+    }
+
     crate::migration_tracking::ensure_primary_key(
         pool,
         sections_table,
@@ -143,7 +172,220 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
     )
     .await?;
 
+    backfill_synthetic_legacy_sections(pool, tracking_table, sections_table).await?;
+
     Ok(())
+}
+
+/// Give every legacy main-table row that has ZERO section rows one synthetic
+/// `default` completed section row.
+///
+/// Before per-section tracking, "a main row with no section rows" *meant*
+/// "fully applied by an older pgmt" — an ABSENCE carrying meaning. That is
+/// fragile: module de-provisioning deletes section rows, which would make a
+/// module-only migration read as legacy-fully-applied. Materializing the
+/// implicit `default` section removes the heuristic: applied-ness is always a
+/// derived function of present section rows.
+///
+/// Idempotent via the `NOT EXISTS` guard; skipped when the main table is
+/// absent (the section table can be created before it).
+async fn backfill_synthetic_legacy_sections(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    sections_table: &str,
+) -> Result<()> {
+    let main_table = crate::migration_tracking::format_tracking_table_name(tracking_table)?;
+
+    let main_exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+        .bind(&main_table)
+        .fetch_one(pool)
+        .await?;
+    if main_exists.is_none() {
+        return Ok(());
+    }
+
+    sqlx::query(&format!(
+        "INSERT INTO {sections}
+             (migration_version, is_baseline, section_name, section_order,
+              status, completed_at, attempts)
+         SELECT m.version, m.is_baseline, 'default', 0, 'completed', m.applied_at, 0
+         FROM {main} m
+         WHERE NOT EXISTS (
+             SELECT 1 FROM {sections} s
+             WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline)",
+        sections = sections_table,
+        main = main_table,
+    ))
+    .execute(pool)
+    .await
+    .with_context(|| format!("Failed to backfill synthetic legacy sections into {}", sections_table))?;
+
+    Ok(())
+}
+
+/// Insert a single Pending section row carrying its checksum/mode/module and
+/// the recording pgmt version. `ON CONFLICT DO NOTHING` keeps registration
+/// idempotent across resume / module-adoption re-registration. The column
+/// list lives here so every registration path (migration, baseline,
+/// initialize_sections) stores identical metadata.
+pub(crate) async fn insert_pending_section<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    sections_table: &str,
+    version: u64,
+    is_baseline: bool,
+    order: i32,
+    section: &MigrationSection,
+) -> Result<()> {
+    sqlx::query(&format!(
+        "INSERT INTO {} (migration_version, is_baseline, section_name, section_order,
+                         status, attempts, checksum, mode, module, pgmt_version)
+         VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9)
+         ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
+        sections_table
+    ))
+    .bind(version_to_db(version)?)
+    .bind(is_baseline)
+    .bind(&section.name)
+    .bind(order)
+    .bind(SectionStatus::Pending.as_str())
+    .bind(calculate_checksum(&section.checksum_content()))
+    .bind(section.mode.as_str())
+    .bind(section.module.as_deref())
+    .bind(PGMT_VERSION)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// A completed section is immutable at section granularity; an unapplied
+/// (pending/failed/running) one may be fixed in the repo and re-run. Validate
+/// the CURRENT file's sections against the rows registered for this version and
+/// bring unapplied rows into sync.
+///
+/// Rules (matching "unit of resume = unit of immutability"):
+/// - Rows with a NULL stored checksum are legacy/pre-upgrade — they always
+///   pass and are ignored here (the caller keeps a file-level fallback guard).
+/// - A COMPLETED checksummed row must match the file exactly: same checksum,
+///   same transaction mode, same section_order, same module tag, and its name
+///   must still exist in the file. Any divergence is a hard error naming the
+///   section.
+/// - A non-completed checksummed row whose checksum drifted is UPDATEd to the
+///   current content (the fix-in-repo recovery path) with a printed notice.
+///
+/// Returns whether any checksummed section row was found — when none were, the
+/// caller falls back to the legacy file-level checksum bail.
+pub async fn validate_and_sync_section_checksums(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    is_baseline: bool,
+    file_sections: &[MigrationSection],
+) -> Result<bool> {
+    use std::collections::BTreeMap;
+
+    let sections_table = format_sections_table_name(tracking_table);
+    let kind = if is_baseline { "baseline" } else { "migration" };
+
+    // Current file: name -> (order, checksum, mode, module).
+    let mut file_map: BTreeMap<&str, (i32, String, &'static str, Option<&str>)> = BTreeMap::new();
+    for (idx, section) in file_sections.iter().enumerate() {
+        file_map.insert(
+            section.name.as_str(),
+            (
+                idx as i32,
+                calculate_checksum(&section.checksum_content()),
+                section.mode.as_str(),
+                section.module.as_deref(),
+            ),
+        );
+    }
+
+    // (section_name, status, checksum, mode, section_order, module)
+    type StoredSectionRow = (String, String, Option<String>, Option<String>, i32, Option<String>);
+    let rows: Vec<StoredSectionRow> = sqlx::query_as(&format!(
+        "SELECT section_name, status, checksum, mode, section_order, module
+             FROM {} WHERE migration_version = $1 AND is_baseline = $2",
+        sections_table
+    ))
+        .bind(version_to_db(version)?)
+        .bind(is_baseline)
+        .fetch_all(pool)
+        .await?;
+
+    let mut has_checksummed = false;
+    for (name, status, stored_checksum, stored_mode, stored_order, stored_module) in rows {
+        // Legacy row: no stored checksum → always passes.
+        let Some(stored_checksum) = stored_checksum else {
+            continue;
+        };
+        has_checksummed = true;
+        let completed = status == SectionStatus::Completed.as_str();
+
+        let Some((order, checksum, mode, module)) = file_map.get(name.as_str()) else {
+            // The section is gone from the file.
+            if completed {
+                anyhow::bail!(
+                    "section '{name}' of {kind} {version} was applied but no longer exists in \
+                     the file. Applied sections are immutable. Create a new migration for \
+                     further changes."
+                );
+            }
+            continue;
+        };
+
+        if completed {
+            if &stored_checksum != checksum {
+                anyhow::bail!(
+                    "section '{name}' of {kind} {version} was modified after it was applied.\n\
+                     Expected checksum: {stored_checksum}\n\
+                     Actual checksum:   {checksum}\n\n\
+                     Applied sections are immutable. Create a new migration for further changes."
+                );
+            }
+            if stored_order != *order {
+                anyhow::bail!(
+                    "section '{name}' of {kind} {version} was reordered after it was applied \
+                     (was position {stored_order}, now {order}). Applied sections are immutable. \
+                     Create a new migration for further changes."
+                );
+            }
+            if let Some(sm) = &stored_mode
+                && sm != mode
+            {
+                anyhow::bail!(
+                    "section '{name}' of {kind} {version} changed transaction mode after it was \
+                     applied (was '{sm}', now '{mode}'). Applied sections are immutable. Create a \
+                     new migration for further changes."
+                );
+            }
+            if stored_module.as_deref() != *module {
+                anyhow::bail!(
+                    "section '{name}' of {kind} {version} was re-tagged to a different module \
+                     after it was applied. Applied sections are immutable. Create a new migration \
+                     for further changes."
+                );
+            }
+        } else if &stored_checksum != checksum {
+            // Fix-in-repo recovery: an unapplied section may be edited and
+            // re-run. Bring the row up to date before it executes.
+            println!("section '{name}' changed since registration; updating");
+            sqlx::query(&format!(
+                "UPDATE {} SET checksum = $1, mode = $2, module = $3
+                 WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
+                sections_table
+            ))
+            .bind(checksum)
+            .bind(*mode)
+            .bind(*module)
+            .bind(version_to_db(version)?)
+            .bind(is_baseline)
+            .bind(&name)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(has_checksummed)
 }
 
 /// Initialize sections for a migration or baseline (idempotent: rows already
@@ -166,18 +408,14 @@ pub async fn initialize_sections(
     let sections_table = format_sections_table_name(tracking_table);
 
     for (order, section) in sections {
-        sqlx::query(&format!(
-            "INSERT INTO {} (migration_version, is_baseline, section_name, section_order, status, attempts)
-             VALUES ($1, $2, $3, $4, $5, 0)
-             ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
-            sections_table
-        ))
-        .bind(migration_version as i64)
-        .bind(is_baseline)
-        .bind(&section.name)
-        .bind(*order)
-        .bind(SectionStatus::Pending.as_str())
-        .execute(pool)
+        insert_pending_section(
+            pool,
+            &sections_table,
+            migration_version,
+            is_baseline,
+            *order,
+            section,
+        )
         .await?;
     }
 
@@ -244,7 +482,8 @@ pub async fn record_section_start(
 
     sqlx::query(&format!(
         "UPDATE {}
-         SET status = $1, started_at = NOW(), attempts = attempts + 1
+         SET status = $1, started_at = NOW(), attempts = attempts + 1,
+             applied_by = CURRENT_USER
          WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4",
         sections_table
     ))

@@ -233,9 +233,10 @@ INSERT INTO users SELECT id FROM external_source;
             .assert()
             .failure();
 
-        // Rewrite the baseline at the SAME version with different content —
-        // and make the previously-failing section able to succeed now, so the
-        // ONLY thing stopping a silent (wrong) success is the checksum guard.
+        // Rewrite the baseline at the SAME version, editing the already-COMPLETED
+        // "tables" section (add a column). Section-level immutability must refuse
+        // this and name the applied section — resuming from edited content would
+        // leave the target matching neither version.
         std::fs::write(
             helper.baselines_dir().join("baseline_1000.sql"),
             r#"-- pgmt:section name="tables" mode="transactional"
@@ -256,9 +257,9 @@ INSERT INTO users (id) VALUES (1);
             ])
             .assert()
             .failure()
-            .stderr(predicate::str::contains(
-                "modified after being partially applied",
-            ));
+            .stderr(predicate::str::contains("section 'tables'"))
+            .stderr(predicate::str::contains("was modified after it was applied"))
+            .stderr(predicate::str::contains("Applied sections are immutable"));
 
         Ok(())
     })

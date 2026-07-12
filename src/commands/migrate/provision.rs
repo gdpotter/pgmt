@@ -304,13 +304,23 @@ async fn register_and_apply_baseline(
 ) -> Result<()> {
     let new_checksum = calculate_checksum(baseline_sql);
 
-    // Resume guard (parity with `apply_pending_migrations`' migration guard): a
-    // baseline row already present at this version whose stored checksum differs
-    // from the current file means the baseline was edited/regenerated after a
-    // partial provision. Sections recorded Completed came from the OLD content,
-    // and the section executor skips them by name — so resuming from the NEW file
-    // would leave the target matching neither version. Refuse instead. Only fires
-    // when a row already exists, so a normal first provision is unaffected.
+    // Immutability at SECTION granularity (parity with the migration path):
+    // an already-applied baseline section is pinned, but an unapplied one may
+    // be fixed in the repo and re-run. Validate the current file's sections
+    // against the registered rows and sync any unapplied ones.
+    let full_sections =
+        crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?;
+    let had_checksummed = crate::migration_tracking::section_tracking::validate_and_sync_section_checksums(
+        pool,
+        &config.migration.tracking_table,
+        version,
+        true,
+        &full_sections,
+    )
+    .await?;
+
+    // The whole-file checksum is a fallback guard only for legacy baseline rows
+    // with no per-section checksums.
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
     let existing_checksum: Option<String> = sqlx::query_scalar(&format!(
         "SELECT checksum FROM {} WHERE version = $1 AND is_baseline = TRUE",
@@ -322,18 +332,29 @@ async fn register_and_apply_baseline(
     if let Some(stored) = existing_checksum
         && stored != new_checksum
     {
-        anyhow::bail!(
-            "Baseline {} was modified after being partially applied!\n\
-             Expected checksum: {}\n\
-             Actual checksum:   {}\n\n\
-             A previous provision recorded some of this baseline's sections from \
-             different content; resuming from the edited file would leave the target \
-             matching neither version. Restore the baseline to the applied content to \
-             resume, or reset the target and re-provision from the current baseline.",
+        if !had_checksummed {
+            anyhow::bail!(
+                "Baseline {} was modified after being partially applied!\n\
+                 Expected checksum: {}\n\
+                 Actual checksum:   {}\n\n\
+                 A previous provision recorded some of this baseline's sections from \
+                 different content; resuming from the edited file would leave the target \
+                 matching neither version. Restore the baseline to the applied content to \
+                 resume, or reset the target and re-provision from the current baseline.",
+                version,
+                stored,
+                new_checksum,
+            );
+        }
+        // Sections validated; keep the main-row fingerprint current.
+        crate::migration_tracking::update_stored_file_checksum(
+            pool,
+            &config.migration.tracking_table,
             version,
-            stored,
-            new_checksum,
-        );
+            true,
+            &new_checksum,
+        )
+        .await?;
     }
 
     // Pair each selected section with its index in the FULL baseline file
@@ -372,11 +393,16 @@ async fn register_and_apply_baseline(
 /// - a completed *migration* section (apply ran here),
 /// - a baseline whose registered sections ALL completed (a provision
 ///   finished — a half-applied baseline must NOT count, or a failed provision
-///   could never resume through the fresh path),
-/// - a legacy version row with no section rows at all (recorded on completion
-///   by older pgmt, fully applied by construction).
+///   could never resume through the fresh path).
+///
+/// A legacy main row with no section rows used to be a third condition, but the
+/// section-tracking schema migration now backfills a synthetic 'default'
+/// completed section for every such row (`backfill_synthetic_legacy_sections`),
+/// which satisfies one of the two conditions above (a completed migration
+/// section, or an all-completed baseline). The special case is therefore dead
+/// once the evolve step has run — and `ensure_section_tracking_table` runs
+/// before this check — so it is removed.
 async fn target_is_established(pool: &PgPool, config: &Config) -> Result<bool> {
-    let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
     let sections_table = format!(
         r#""{}"."{}_sections""#,
         config.migration.tracking_table.schema, config.migration.tracking_table.name
@@ -388,12 +414,8 @@ async fn target_is_established(pool: &PgPool, config: &Config) -> Result<bool> {
                    AND NOT EXISTS(SELECT 1 FROM {sections} s2
                        WHERE s2.is_baseline
                          AND s2.migration_version = s1.migration_version
-                         AND s2.status <> 'completed'))
-             OR EXISTS(SELECT 1 FROM {main} m WHERE NOT EXISTS
-                 (SELECT 1 FROM {sections} s
-                  WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline))",
+                         AND s2.status <> 'completed'))",
         sections = sections_table,
-        main = tracking_table_name,
     ))
     .fetch_one(pool)
     .await?;
