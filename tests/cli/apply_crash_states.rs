@@ -95,9 +95,7 @@ async fn test_resume_from_seeded_running_without_ddl() -> Result<()> {
         // Simulate a crash of section one *before* commit: its DDL never landed
         // and its row is stuck at `running`.
         let pool = helper.connect_to_dev_db().await?;
-        sqlx::query("DROP TABLE crash_one")
-            .execute(&pool)
-            .await?;
+        sqlx::query("DROP TABLE crash_one").execute(&pool).await?;
         pool.close().await;
         helper
             .seed_section_status(FAILING_VERSION, "one", "running")

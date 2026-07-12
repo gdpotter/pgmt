@@ -4,9 +4,8 @@ use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
 use crate::migration_tracking::{
-    MigrationLock, calculate_checksum, ensure_section_tracking_table,
-    ensure_tracking_table_exists, format_tracking_table_name, initialize_sections,
-    record_migration_as_applied, version_from_db,
+    MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
+    format_tracking_table_name, initialize_sections, record_migration_as_applied, version_from_db,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};

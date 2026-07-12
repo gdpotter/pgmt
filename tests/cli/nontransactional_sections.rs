@@ -41,7 +41,10 @@ const MISSING_TABLE_FILENAME: &str = "1000000021_missing_table.sql";
 
 /// Query whether a named index exists and is valid in the dev database.
 /// Returns `(exists, is_valid)`.
-async fn index_state(helper: &crate::helpers::cli::CliTestHelper, name: &str) -> Result<(bool, bool)> {
+async fn index_state(
+    helper: &crate::helpers::cli::CliTestHelper,
+    name: &str,
+) -> Result<(bool, bool)> {
     let pool = helper.connect_to_dev_db().await?;
     let row: Option<(bool,)> = sqlx::query_as(
         "SELECT i.indisvalid
@@ -149,13 +152,19 @@ async fn test_invalid_index_guidance_enables_recovery() -> Result<()> {
             .success();
 
         let (exists, valid) = index_state(helper, INVALID_INDEX_NAME).await?;
-        assert!(exists && valid, "the recovered index must be present and VALID");
+        assert!(
+            exists && valid,
+            "the recovered index must be present and VALID"
+        );
 
         let (status, _) = helper
             .section_row_in_dev(DUP_CIC_VERSION, "build_index")
             .await?
             .expect("build_index section row should exist");
-        assert_eq!(status, "completed", "the recovered CIC section must be completed");
+        assert_eq!(
+            status, "completed",
+            "the recovered CIC section must be completed"
+        );
 
         Ok(())
     })

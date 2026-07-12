@@ -78,12 +78,11 @@ async fn test_concurrent_applies_serialize() -> Result<()> {
         assert!(helper.table_exists_in_dev("public", "lock_marker").await?);
 
         let pool = helper.connect_to_dev_db().await?;
-        let version_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM public.pgmt_migrations WHERE version = $1",
-        )
-        .bind(SLOW_VERSION.parse::<i64>().unwrap())
-        .fetch_one(&pool)
-        .await?;
+        let version_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations WHERE version = $1")
+                .bind(SLOW_VERSION.parse::<i64>().unwrap())
+                .fetch_one(&pool)
+                .await?;
         assert_eq!(version_rows, 1, "migration must be recorded exactly once");
 
         // The section ran exactly once (attempts = 1): the second process skipped
@@ -201,12 +200,11 @@ async fn test_provision_and_apply_share_lock() -> Result<()> {
 
         // The migration was applied exactly once across both commands.
         let pool = helper.connect_to_dev_db().await?;
-        let version_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM public.pgmt_migrations WHERE version = $1",
-        )
-        .bind(SLOW_VERSION.parse::<i64>().unwrap())
-        .fetch_one(&pool)
-        .await?;
+        let version_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations WHERE version = $1")
+                .bind(SLOW_VERSION.parse::<i64>().unwrap())
+                .fetch_one(&pool)
+                .await?;
         assert_eq!(version_rows, 1, "migration must be recorded exactly once");
         pool.close().await;
 
