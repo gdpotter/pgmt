@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::migration::baseline::apply_baseline_to_target;
 use crate::migration::{discover_migrations, find_latest_baseline};
 use crate::migration_tracking::{
-    calculate_checksum, ensure_tracking_table_exists, format_tracking_table_name,
+    MigrationLock, calculate_checksum, ensure_tracking_table_exists, format_tracking_table_name,
     record_baseline_as_applied,
 };
 use anyhow::{Context, Result};
@@ -25,16 +25,34 @@ pub async fn cmd_migrate_provision(
     target: &crate::config::TargetUrl,
     dry_run: bool,
 ) -> Result<()> {
-    let migrations_dir = root_dir.join(&config.directories.migrations);
-    let baselines_dir = root_dir.join(&config.directories.baselines);
-
     let pool =
         crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
 
-    // Ensure the tracking table exists so we can read the target's state.
-    ensure_tracking_table_exists(&pool, &config.migration.tracking_table).await?;
+    // Serialize concurrent apply/provision runs against the same tracking table
+    // BEFORE reading the tracking table or applying anything. Shares its key with
+    // `migrate apply` (both derive it from the tracking table name), so the two
+    // commands exclude each other. Held on a dedicated connection for the whole
+    // run; released explicitly on every exit path (and on drop otherwise).
+    let lock = MigrationLock::acquire(target.as_str(), &config.migration.tracking_table).await?;
 
-    let established = tracking_has_rows(&pool, config).await?;
+    let result = provision_inner(config, root_dir, &pool, dry_run).await;
+    lock.release().await?;
+    result
+}
+
+async fn provision_inner(
+    config: &Config,
+    root_dir: &Path,
+    pool: &PgPool,
+    dry_run: bool,
+) -> Result<()> {
+    let migrations_dir = root_dir.join(&config.directories.migrations);
+    let baselines_dir = root_dir.join(&config.directories.baselines);
+
+    // Ensure the tracking table exists so we can read the target's state.
+    ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
+
+    let established = tracking_has_rows(pool, config).await?;
     let migrations = discover_migrations(&migrations_dir)?;
     let latest_baseline = find_latest_baseline(&baselines_dir)?;
 
@@ -47,7 +65,7 @@ pub async fn cmd_migrate_provision(
             return Ok(());
         }
         println!("Database is already provisioned; applying any pending migrations.");
-        return apply_pending_migrations(&pool, config, &migrations).await;
+        return apply_pending_migrations(pool, config, &migrations).await;
     }
 
     match latest_baseline {
@@ -76,9 +94,9 @@ pub async fn cmd_migrate_provision(
             }
 
             println!("Applying baseline {}...", baseline.version);
-            apply_baseline_to_target(&pool, &baseline_sql, source).await?;
+            apply_baseline_to_target(pool, &baseline_sql, source).await?;
             record_baseline_as_applied(
-                &pool,
+                pool,
                 &config.migration.tracking_table,
                 baseline.version,
                 "baseline",
@@ -86,7 +104,7 @@ pub async fn cmd_migrate_provision(
             )
             .await?;
 
-            apply_pending_migrations(&pool, config, &post_baseline).await?;
+            apply_pending_migrations(pool, config, &post_baseline).await?;
             println!("✅ Provisioned from baseline {}.", baseline.version);
         }
         None => {
@@ -103,7 +121,7 @@ pub async fn cmd_migrate_provision(
                 return Ok(());
             }
             println!("No baseline found; applying all migrations.");
-            apply_pending_migrations(&pool, config, &migrations).await?;
+            apply_pending_migrations(pool, config, &migrations).await?;
             println!("✅ Provisioned from migrations.");
         }
     }

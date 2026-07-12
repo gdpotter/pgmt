@@ -22,6 +22,7 @@
 /// session.send_line("my_migration")?;
 /// session.expect("Migration created")?;
 /// ```
+pub mod apply_locking;
 pub mod baseline_commands;
 pub mod baseline_extension_ordering;
 pub mod basic_interactive;

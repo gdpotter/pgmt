@@ -4,8 +4,9 @@ use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
 use crate::migration_tracking::{
-    calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    format_tracking_table_name, initialize_sections, record_migration_as_applied, version_from_db,
+    MigrationLock, calculate_checksum, ensure_section_tracking_table,
+    ensure_tracking_table_exists, format_tracking_table_name, initialize_sections,
+    record_migration_as_applied, version_from_db,
 };
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
@@ -31,9 +32,17 @@ pub async fn cmd_migrate_apply(
     let pool =
         crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
 
+    // Serialize concurrent apply/provision runs against the same tracking table
+    // BEFORE reading the tracking table or applying anything. Held on a dedicated
+    // connection for the whole run; released explicitly on success (and on drop
+    // otherwise).
+    let lock = MigrationLock::acquire(target.as_str(), &config.migration.tracking_table).await?;
+
     let migrations = discover_migrations(&migrations_dir)?;
 
-    apply_pending_migrations(&pool, config, &migrations).await
+    let result = apply_pending_migrations(&pool, config, &migrations).await;
+    lock.release().await?;
+    result
 }
 
 /// Apply migration files to a database, skipping any already recorded in the
