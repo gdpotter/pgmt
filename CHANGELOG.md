@@ -10,10 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 - Add `pgmt migrate provision` to stand up a new database from a baseline plus its post-baseline migrations — the on-ramp for fresh environments (demo, staging, preview, disaster recovery), where `migrate apply` only maintains a database that's already established.
+- `migrate apply` and `migrate provision` now serialize behind a Postgres advisory lock, so concurrent deployers (overlapping CI runs, a manual apply racing a pipeline) can't execute the same migration twice. The second runner prints a notice and waits.
+- When a non-transactional section fails, pgmt now checks for invalid indexes left behind by a failed `CREATE INDEX CONCURRENTLY` and names them in the error, along with the `DROP INDEX CONCURRENTLY IF EXISTS` fix.
 
 ### Bug Fixes
 
 - Quote user-defined parameter types in generated `DROP FUNCTION` statements, so functions taking a mixed-case custom type (e.g. `"SubscriptionFrequency"`) drop with a valid identifier.
+- Transactional sections now record their completion inside the section's own transaction, so a crash mid-apply can never leave a section's DDL committed but its tracking row stuck at `running` (which previously made the resume fail on `already exists`).
+- `migrate apply` warns loudly when a migration sits below the baseline watermark with no tracking row — a late-merged migration that would otherwise be silently skipped on every target forever — and points at `pgmt migrate update` to regenerate it above the baseline.
 
 ## 0.5.1 - 2026-06-24
 

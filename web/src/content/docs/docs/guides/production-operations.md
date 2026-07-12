@@ -34,7 +34,9 @@ This is safe because transactional sections roll back on failure - they either f
 
 ### Non-Transactional Section Failures
 
-`CREATE INDEX CONCURRENTLY` and similar operations can't run in a transaction. If they fail partway, partial state may be left behind. PostgreSQL marks a failed concurrent index as `INVALID`:
+`CREATE INDEX CONCURRENTLY` and similar operations can't run in a transaction. If they fail partway, partial state may be left behind. PostgreSQL marks a failed concurrent index as `INVALID`.
+
+When a non-transactional section fails, pgmt checks for invalid indexes and names them in the error, along with the fix — so the failure output tells you exactly what's stranded. To check by hand:
 
 ```sql
 -- Check for invalid indexes
@@ -54,6 +56,16 @@ DROP INDEX CONCURRENTLY IF EXISTS idx_users_status;
 Then run `pgmt migrate apply` again. The section will retry from scratch.
 
 **Tip:** Use `retry_attempts` and `on_lock_timeout="retry"` in your section config to handle transient lock contention automatically. See [Multi-Section Migrations](/docs/guides/multi-section-migrations#retry-logic).
+
+## Concurrent Deployments
+
+Two deployers pointed at the same database — overlapping CI runs, a manual apply racing a pipeline — can't step on each other. `migrate apply` and `migrate provision` take a PostgreSQL advisory lock (scoped to the tracking table) for the duration of the run. The second runner prints a notice and waits:
+
+```
+Another pgmt operation is running against this database (advisory lock 4779231646775632092 held); waiting...
+```
+
+The lock is held on its own connection and released when the run finishes — including when it fails — so a failed deploy never leaves the lock stuck. No configuration is needed, and projects using different tracking tables in one database don't serialize against each other.
 
 ## Checksum Mismatches
 
@@ -84,12 +96,12 @@ If you need to undo a change, create a new migration that reverses it. See [Reve
 Before deploying, check the current state:
 
 ```bash
-# See applied and pending migrations
-pgmt migrate status --target-url postgres://prod/myapp
-
-# See section-level progress (useful after failures)
-pgmt migrate status --target-url postgres://prod/myapp --sections
+# See applied and pending migrations, with per-section progress for
+# anything incomplete (runs against the dev database)
+pgmt migrate status
 ```
+
+Migrations with pending or failed sections are flagged `INCOMPLETE` with the command to resume them. (Running `status` against a production target directly is on the roadmap; today it reads the dev database.)
 
 ## Drift Detection
 

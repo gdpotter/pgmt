@@ -95,6 +95,8 @@ When you create a baseline and delete old migrations, teammates on other branche
 
 2. **Fix with `migrate update`:** The teammate runs `pgmt migrate update <version>`, which regenerates the migration with a new timestamp (after the baseline) based on the current schema diff.
 
+`migrate apply` is the backstop: if a migration below the baseline watermark was never recorded on the database (a late merge that slipped past the warning above), apply warns loudly that it will never run on any target and points at `migrate update` — instead of skipping it silently.
+
 This works because schema files are the source of truth. The migration is regenerated from the diff between the baseline state and the current schema, producing the correct result regardless of the original migration's timestamp.
 
 ## Configuration

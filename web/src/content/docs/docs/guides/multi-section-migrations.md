@@ -98,7 +98,7 @@ CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
 Use for: `CREATE INDEX CONCURRENTLY`, `ALTER TYPE ... ADD VALUE`, long-running operations.
 
 :::caution
-A failed `CREATE INDEX CONCURRENTLY` leaves an **invalid index** behind. If pgmt retries, the retry will fail with "relation already exists". Always include `DROP INDEX CONCURRENTLY IF EXISTS` before `CREATE INDEX CONCURRENTLY` to ensure retries work correctly.
+A failed `CREATE INDEX CONCURRENTLY` leaves an **invalid index** behind. If pgmt retries, the retry will fail with "relation already exists". Always include `DROP INDEX CONCURRENTLY IF EXISTS` before `CREATE INDEX CONCURRENTLY` to ensure retries work correctly. If a section fails and an invalid index is present, pgmt detects it and includes the index name and this fix in the error message.
 :::
 
 ### `autocommit`
