@@ -16,8 +16,8 @@ pub use debug::cmd_debug_dependencies;
 pub use diff::cmd_diff;
 pub use init::cmd_init_with_args;
 pub use migrate::{
-    MigrateDiffArgs, cmd_migrate_apply, cmd_migrate_diff, cmd_migrate_new, cmd_migrate_provision,
-    cmd_migrate_status, cmd_migrate_update_specific, cmd_migrate_update_with_options,
-    cmd_migrate_validate,
+    MigrateDiffArgs, ResolveVerb, cmd_migrate_apply, cmd_migrate_diff, cmd_migrate_new,
+    cmd_migrate_provision, cmd_migrate_resolve, cmd_migrate_status, cmd_migrate_update_specific,
+    cmd_migrate_update_with_options, cmd_migrate_validate,
 };
 pub use validate::cmd_validate;

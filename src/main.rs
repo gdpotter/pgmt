@@ -248,6 +248,44 @@ enum MigrateCommands {
 
     /// Create a baseline and optionally consolidate old migrations
     Baseline(MigrateBaselineArgs),
+
+    /// Break-glass repair of section tracking state (mark-completed/reset/restamp)
+    Resolve(MigrateResolveArgs),
+}
+
+/// Arguments for `pgmt migrate resolve` — explicit, one-coordinate-at-a-time
+/// repair of section tracking state. Exactly one verb is required.
+#[derive(clap::Args)]
+struct MigrateResolveArgs {
+    #[command(flatten)]
+    verb: MigrateResolveVerbArgs,
+
+    /// Operate on the baseline row (is_baseline = TRUE) rather than a migration row
+    #[arg(long)]
+    baseline: bool,
+
+    #[command(flatten)]
+    target: config::TargetUrlArgs,
+}
+
+/// The three mutually exclusive resolve verbs; clap requires exactly one.
+#[derive(clap::Args)]
+#[group(required = true, multiple = false)]
+struct MigrateResolveVerbArgs {
+    /// Mark a pending/failed/running section completed without running it (a
+    /// manual hot-fix landed its effects). Format: <version>/<section>
+    #[arg(long, value_name = "VERSION/SECTION")]
+    mark_completed: Option<String>,
+
+    /// Reset a failed/running section back to pending so the next apply re-runs
+    /// it. Format: <version>/<section>
+    #[arg(long, value_name = "VERSION/SECTION")]
+    reset: Option<String>,
+
+    /// Re-stamp stored checksum(s) for completed section(s) after a conscious
+    /// edit of an applied migration. Format: <version>[/<section>]
+    #[arg(long, value_name = "VERSION[/SECTION]")]
+    restamp: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -574,6 +612,33 @@ async fn run_main(cli: Cli) -> Result<()> {
                                 .await
                             }
                         }
+                    }
+                    MigrateCommands::Resolve(args) => {
+                        let config = config::ConfigBuilder::new()
+                            .with_file(file_config.clone())
+                            .resolve()?;
+                        let target = args.target.resolve(&file_config)?;
+
+                        // clap guarantees exactly one verb is set.
+                        let verb = if let Some(coord) = &args.verb.mark_completed {
+                            commands::ResolveVerb::MarkCompleted(coord.clone())
+                        } else if let Some(coord) = &args.verb.reset {
+                            commands::ResolveVerb::Reset(coord.clone())
+                        } else if let Some(coord) = &args.verb.restamp {
+                            commands::ResolveVerb::Restamp(coord.clone())
+                        } else {
+                            unreachable!("clap requires exactly one resolve verb")
+                        };
+
+                        info!("Resolving tracking state");
+                        commands::cmd_migrate_resolve(
+                            &config,
+                            &root_dir,
+                            &target,
+                            verb,
+                            args.baseline,
+                        )
+                        .await
                     }
                 },
                 Commands::Diff(args) => {

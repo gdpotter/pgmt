@@ -81,6 +81,40 @@ This is intentional. Applied migrations are immutable - they represent what actu
 
 **To fix:** Restore the original migration file from git. If you need to make changes, create a new migration instead.
 
+## Repairing Tracking State
+
+The normal recovery path is **fix-in-repo**: when a section fails or an unapplied section is wrong, edit it in the migration file and re-run `pgmt migrate apply`. Per-section checksums let pgmt resume from where it stopped — no special command needed. Reach for `pgmt migrate resolve` only when the tracking table itself is out of sync with what actually happened in the database, and fix-in-repo can't express the repair.
+
+`resolve` is a **break-glass tool**. It operates on one section coordinate at a time (`<version>/<section>`), never in bulk, and prints the before/after state so the change is auditable. Because it mutates tracking state, prefer running it as a **manually-triggered CI job** against the target database rather than from a laptop with production access — the same place you run `migrate apply`. It takes the same advisory lock as apply/provision, so it can't race a deploy.
+
+There are three verbs (exactly one required):
+
+### `--mark-completed <version>/<section>`
+
+A section is `failed`/`running`/`pending`, but the database already has its effects — typically because a DBA hot-fixed it by hand. Record it as completed without re-running it. pgmt refuses if the section is already completed or if no row exists (it never invents rows). When the file and section still exist, it also re-stamps the row's checksum/mode/module from the current file so the state stays self-consistent.
+
+```bash
+pgmt migrate resolve --mark-completed 1734567890/add_index --target-url "$DATABASE_URL"
+```
+
+### `--reset <version>/<section>`
+
+A `failed` or `running` section should be re-armed so the next apply runs it again (for example, a transient lock timeout you've since cleared). Sets it back to `pending` and clears the recorded error. pgmt refuses on a completed section — un-completing an applied section is never valid; if its effects were manually rolled back, create a new migration instead.
+
+```bash
+pgmt migrate resolve --reset 1734567890/add_index --target-url "$DATABASE_URL"
+```
+
+### `--restamp <version>[/<section>]`
+
+You consciously edited an already-applied section and accept that the change won't re-run — you just need pgmt to stop failing the checksum comparison. Re-stamps the stored checksum(s) from the current file for a completed section (or every completed section of the version if you omit the section). This is the sanctioned path for editing an applied migration; it prints each section's old and new checksum. The file must be present.
+
+```bash
+pgmt migrate resolve --restamp 1734567890 --target-url "$DATABASE_URL"
+```
+
+Add `--baseline` to any verb to operate on a baseline row instead of a migration row.
+
 ## Migrations Are Append-Only
 
 Once a migration is applied to any environment, treat it as permanent:
