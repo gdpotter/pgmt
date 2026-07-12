@@ -40,3 +40,4 @@ pub mod migrate_validate_json;
 pub mod nontransactional_sections;
 pub mod roles_file;
 pub mod substrate;
+pub mod watermark_warning;

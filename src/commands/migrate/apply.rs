@@ -89,10 +89,35 @@ pub(crate) async fn apply_pending_migrations(
     for migration in migrations {
         // Skip migrations covered by a recorded baseline.
         if baseline_version.is_some_and(|bv| migration.version <= bv) {
-            debug!(
-                "Migration {} is covered by the baseline, skipping",
-                migration.version
-            );
+            // Distinguish the benign case (covered by, or at, the baseline) from
+            // a silent hazard: a migration merged late with a version STRICTLY
+            // below an already-recorded baseline watermark and NO tracking row.
+            // Such a migration was never applied here, and never will be — it is
+            // skipped on established targets and excluded from fresh-provision
+            // replay (which only replays versions after the baseline). It is a
+            // consistent-but-wrong state, so tell the user loudly. Any recorded
+            // row for the version (baseline OR migration) means it is accounted
+            // for; only a total absence below the watermark is the hazard. The
+            // at-baseline-version case (paired `--create-baseline` migration) is
+            // excluded by the strict `<` comparison.
+            let below_watermark = baseline_version.is_some_and(|bv| migration.version < bv);
+            if below_watermark && !applied_migrations.contains_key(&migration.version) {
+                eprintln!(
+                    "WARNING: migration {} ({}) is below the baseline watermark ({}) \
+                     and was never applied to this database. It will never run here or on \
+                     any other target (fresh provisions replay only migrations after the \
+                     baseline). If its changes are needed, re-create it as a new migration \
+                     above the baseline.",
+                    migration.version,
+                    migration.description,
+                    baseline_version.expect("below_watermark implies a baseline exists"),
+                );
+            } else {
+                debug!(
+                    "Migration {} is covered by the baseline, skipping",
+                    migration.version
+                );
+            }
             continue;
         }
 
