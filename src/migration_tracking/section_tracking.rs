@@ -160,9 +160,15 @@ pub async fn record_section_start(
     Ok(())
 }
 
-/// Record section completion
-pub async fn record_section_complete(
-    pool: &PgPool,
+/// Record section completion.
+///
+/// Accepts any executor so the caller can pass either a pool (autocommit /
+/// non-transactional paths) or the section's own transaction (`&mut *tx`).
+/// For transactional sections, recording completion inside the section's
+/// transaction — before its commit — makes the `completed` tracking row and
+/// the section's DDL atomic: the row exists if and only if the DDL committed.
+pub async fn record_section_complete<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     tracking_table: &TrackingTable,
     migration_version: u64,
     section_name: &str,
@@ -182,7 +188,7 @@ pub async fn record_section_complete(
     .bind(duration_ms)
     .bind(migration_version as i64)
     .bind(section_name)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(())

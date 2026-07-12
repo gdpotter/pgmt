@@ -147,14 +147,16 @@ impl SectionExecutor {
             }
         };
 
-        // Commit transaction
-        tx.commit().await?;
-
         let duration = start.elapsed();
         let rows = result.rows_affected() as i64;
 
+        // Record completion INSIDE the section's transaction, before commit, so
+        // the `completed` tracking row and the section's DDL commit atomically:
+        // a crash can never leave the DDL applied with the row stuck at
+        // `running`. The recorded duration excludes the commit itself, which is
+        // an acceptable trade for the closed crash window.
         record_section_complete(
-            &self.pool,
+            &mut *tx,
             &self.tracking_table,
             migration_version,
             &section.name,
@@ -162,6 +164,9 @@ impl SectionExecutor {
             duration.as_millis() as i64,
         )
         .await?;
+
+        // Commit transaction (atomically persists both the DDL and the record)
+        tx.commit().await?;
 
         self.reporter
             .complete_section(&section.name, duration, Some(rows as usize));

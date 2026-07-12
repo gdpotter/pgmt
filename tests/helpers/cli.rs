@@ -297,6 +297,51 @@ docker:
         Ok(exists)
     }
 
+    /// Seed a section tracking row's status directly, simulating a post-crash
+    /// state that can't be produced black-box. When setting a non-completed
+    /// status (e.g. `running`), `completed_at` is cleared so the row looks like
+    /// a section that started but never recorded completion.
+    pub async fn seed_section_status(
+        &self,
+        migration_version: i64,
+        section_name: &str,
+        status: &str,
+    ) -> Result<()> {
+        let pool = self.connect_to_dev_db().await?;
+        sqlx::query(
+            "UPDATE public.pgmt_migrations_sections
+             SET status = $1,
+                 completed_at = CASE WHEN $1 = 'completed' THEN completed_at ELSE NULL END
+             WHERE migration_version = $2 AND section_name = $3",
+        )
+        .bind(status)
+        .bind(migration_version)
+        .bind(section_name)
+        .execute(&pool)
+        .await?;
+        pool.close().await;
+        Ok(())
+    }
+
+    /// Read a section tracking row's `(status, last_error)`.
+    pub async fn section_row_in_dev(
+        &self,
+        migration_version: i64,
+        section_name: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let pool = self.connect_to_dev_db().await?;
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT status, last_error FROM public.pgmt_migrations_sections
+             WHERE migration_version = $1 AND section_name = $2",
+        )
+        .bind(migration_version)
+        .bind(section_name)
+        .fetch_optional(&pool)
+        .await?;
+        pool.close().await;
+        Ok(row)
+    }
+
     /// Get the comment on a table in the dev database
     pub async fn get_table_comment_in_dev(
         &self,
