@@ -263,6 +263,25 @@ docker:
         fs::write(path, content).context("Failed to write migration file")
     }
 
+    /// Create an additional empty database on the same instance and return its
+    /// connection URL. Used to test target-vs-dev routing (the extra DB stands
+    /// in for a deployment target distinct from dev). Uniquely named, so it
+    /// harmlessly leaks past the helper's dev/shadow-only cleanup.
+    pub async fn create_extra_database(&self) -> Result<String> {
+        let name = format!("test_target_{}", Uuid::new_v4().simple());
+        let base_pool = sqlx::PgPool::connect(&self.pg_instance.base_url).await?;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", name))
+            .execute(&base_pool)
+            .await?;
+        base_pool.close().await;
+        let url = if let Some(last_slash) = self.pg_instance.base_url.rfind('/') {
+            format!("{}/{}", &self.pg_instance.base_url[..last_slash], name)
+        } else {
+            format!("{}/{}", self.pg_instance.base_url, name)
+        };
+        Ok(url)
+    }
+
     /// Read the content of a baseline file
     pub fn read_baseline_file(&self, filename: &str) -> Result<String> {
         let path = self.baselines_dir().join(filename);

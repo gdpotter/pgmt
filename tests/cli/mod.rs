@@ -40,6 +40,7 @@ pub mod migrate_end_to_end;
 pub mod migrate_new;
 pub mod migrate_reconstruction;
 pub mod migrate_resolve;
+pub mod migrate_status;
 pub mod migrate_validate_json;
 pub mod modules_deploy;
 pub mod modules_generation;

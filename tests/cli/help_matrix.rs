@@ -28,7 +28,7 @@ fn test_connection_flags_match_databases_each_command_uses() {
         (&["migrate", "new"], &[SHADOW], &[DEV, TARGET]),
         (&["migrate", "update"], &[SHADOW], &[DEV, TARGET]),
         (&["migrate", "apply"], &[TARGET], &[DEV, SHADOW]),
-        (&["migrate", "status"], &[DEV], &[SHADOW, TARGET]),
+        (&["migrate", "status"], &[DEV, TARGET], &[SHADOW]),
         (&["migrate", "validate"], &[SHADOW], &[DEV, TARGET]),
         (&["migrate", "diff"], &[TARGET, SHADOW], &[DEV]),
         (&["migrate", "baseline"], &[SHADOW], &[DEV, TARGET]),

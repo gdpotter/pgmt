@@ -130,12 +130,29 @@ If you need to undo a change, create a new migration that reverses it. See [Reve
 Before deploying, check the current state:
 
 ```bash
-# See applied and pending migrations, with per-section progress for
-# anything incomplete (runs against the dev database)
+# Report on a deployment target directly (the triage tool for incidents)
+pgmt migrate status --target-url postgres://prod/myapp
+
+# With no target (flag / PGMT_TARGET_URL / yaml target), it falls back to
+# reporting on the dev database
 pgmt migrate status
 ```
 
-Migrations with pending or failed sections are flagged `INCOMPLETE` with the command to resume them. (Running `status` against a production target directly is on the roadmap; today it reads the dev database.)
+`status` is strictly read-only: it takes no lock and never creates or evolves the tracking tables on the reported database, so a stuck deploy stays diagnosable. Precedence for which database it reports on is `--target-url` flag > `PGMT_TARGET_URL` > yaml `databases.target_url` > dev fallback.
+
+Migrations with pending or failed sections are flagged `INCOMPLETE` with the command to resume them (`pgmt migrate apply` for a migration, `pgmt migrate provision` for a half-applied baseline).
+
+On a module project, a `Modules` summary follows the per-migration listing — one line per declared module plus the base — showing whether each is established, how many sections are applied, and the resume command for anything failed:
+
+```
+Modules:
+  (unmoduled)  established — 4 section(s) applied
+  core         established — 6 section(s) applied
+  billing      incomplete — 0 applied, 1 pending/failed (resume with `pgmt migrate provision --modules billing`)
+  analytics    not established (expected on subset targets)
+```
+
+A module declared in config but never established on this target prints as `not established (expected on subset targets)` — normal for subset deployments that don't carry every module.
 
 ## Drift Detection
 

@@ -2,73 +2,245 @@ use crate::config::Config;
 use crate::migration::{
     BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
 };
-use crate::migration_tracking::{
-    ensure_section_tracking_table, ensure_tracking_table_exists, format_tracking_table_name,
+use crate::migration_tracking::format_tracking_table_name;
+use crate::modules::{
+    UNMODULED_DISPLAY, display_module, literal_established_modules, parse_section_files,
+    section_module_from_files,
 };
 use crate::validation::{ValidationConfig, validate_catalogs};
 use crate::validation_output::{BaselineInfo, ValidationOutputOptions, format_validation_output};
 use anyhow::{Result, anyhow};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::db::connection::connect_to_database;
 
-pub async fn cmd_migrate_status(config: &Config, dev: &crate::config::DevUrl) -> Result<()> {
-    println!("Checking migration status");
+/// Report migration status for a target or dev database.
+///
+/// Status is the triage tool for production incidents, so it is strictly
+/// READ-ONLY: it takes no advisory lock (a stuck deploy must stay diagnosable)
+/// and never creates or evolves the tracking tables against the reported
+/// database — it probes for their existence with `to_regclass` and degrades
+/// gracefully when they are absent. `database_label` ("target"/"dev") and
+/// `database_url` are resolved by the caller through the connection args
+/// structs (`--target-url` flag > `PGMT_TARGET_URL` > yaml target > dev
+/// fallback), so this function just reports on whatever it is handed.
+pub async fn cmd_migrate_status(
+    config: &Config,
+    root_dir: &Path,
+    database_label: &str,
+    database_url: &str,
+) -> Result<()> {
+    println!("Migration status for {} database", database_label);
 
-    let dev_pool = connect_to_database(dev.as_str(), "development database").await?;
+    let pool = connect_to_database(database_url, &format!("{} database", database_label)).await?;
 
-    let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
+    let result = report_status(config, root_dir, &pool).await;
+    pool.close().await;
+    result
+}
 
-    // Ensure the tracking tables exist (and are migrated to the current shape)
-    ensure_tracking_table_exists(&dev_pool, &config.migration.tracking_table).await?;
-    ensure_section_tracking_table(&dev_pool, &config.migration.tracking_table).await?;
+async fn report_status(config: &Config, root_dir: &Path, pool: &sqlx::PgPool) -> Result<()> {
+    let tracking = &config.migration.tracking_table;
+    let main_table = format_tracking_table_name(tracking)?;
+    let main_qualified = format!(r#""{}"."{}""#, tracking.schema, tracking.name);
+    let sections_qualified = format!(r#""{}"."{}_sections""#, tracking.schema, tracking.name);
 
-    // The version row is written when a migration STARTS (see
-    // register_migration_start), so surface rows whose recorded sections
-    // aren't all complete — they're in-progress or failed, not applied.
-    let sections_table = format!(
-        r#""{}"."{}_sections""#,
-        config.migration.tracking_table.schema, config.migration.tracking_table.name
-    );
-    let applied_migrations: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(&format!(
-        "SELECT m.version, m.description, m.applied_at::TEXT,
-                COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete,
-                m.is_baseline
-         FROM {} m
-         LEFT JOIN {} s
-           ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
-         GROUP BY m.version, m.is_baseline, m.description, m.applied_at
-         ORDER BY m.version",
-        tracking_table_name, sections_table
-    ))
-    .fetch_all(&dev_pool)
-    .await?;
+    // Read-only probe: never CREATE or evolve the tracking tables on the
+    // reported database. If pgmt has never run here, there is nothing to show.
+    if !relation_exists(pool, &main_qualified).await? {
+        println!("No migrations have been applied");
+        return Ok(());
+    }
+    let sections_exist = relation_exists(pool, &sections_qualified).await?;
 
+    if sections_exist {
+        // The version row is written when a migration STARTS (see
+        // register_migration_start), so surface rows whose recorded sections
+        // aren't all complete — they're in-progress or failed, not applied.
+        let applied_migrations: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(&format!(
+            "SELECT m.version, m.description, m.applied_at::TEXT,
+                    COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete,
+                    m.is_baseline
+             FROM {} m
+             LEFT JOIN {} s
+               ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
+             GROUP BY m.version, m.is_baseline, m.description, m.applied_at
+             ORDER BY m.version",
+            main_table, sections_qualified
+        ))
+        .fetch_all(pool)
+        .await?;
+
+        print_migration_listing(&applied_migrations);
+    } else {
+        // Legacy target: a main tracking table with no per-section table. We do
+        // not evolve it here (read-only), so treat every recorded version as
+        // fully applied.
+        let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(&format!(
+            "SELECT version, description, applied_at::TEXT, is_baseline FROM {} ORDER BY version",
+            main_table
+        ))
+        .fetch_all(pool)
+        .await?;
+        let listing: Vec<(i64, String, String, i64, bool)> = rows
+            .into_iter()
+            .map(|(v, d, a, b)| (v, d, a, 0, b))
+            .collect();
+        print_migration_listing(&listing);
+    }
+
+    // Per-module rollup for module projects, derived from the stored section
+    // rows joined with file-derived module attribution. Needs the section
+    // table; a legacy target without it can't be rolled up by module.
+    if config.modules.is_enabled() && sections_exist {
+        print_module_rollup(config, root_dir, pool, &sections_qualified).await?;
+    }
+
+    Ok(())
+}
+
+/// Whether a relation exists, without touching it. `qualified` is a
+/// double-quoted `"schema"."name"` reference.
+async fn relation_exists(pool: &sqlx::PgPool, qualified: &str) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(qualified)
+        .fetch_one(pool)
+        .await?;
+    Ok(exists)
+}
+
+fn print_migration_listing(applied_migrations: &[(i64, String, String, i64, bool)]) {
     if applied_migrations.is_empty() {
         println!("No migrations have been applied");
-    } else {
-        println!("Applied migrations:");
-        for (version, description, applied_at, incomplete, is_baseline) in applied_migrations {
-            if incomplete > 0 {
-                // Baselines can't be resumed by `migrate apply` (it never
-                // re-runs baselines and skips versions <= a baseline's
-                // version); a half-applied baseline resumes with `provision`.
-                let resume_command = if is_baseline {
-                    "pgmt migrate provision"
-                } else {
-                    "pgmt migrate apply"
-                };
-                println!(
-                    "  {} - {} (INCOMPLETE: {} section(s) pending or failed — resume with `{}`)",
-                    version, description, incomplete, resume_command
-                );
+        return;
+    }
+    println!("Applied migrations:");
+    for (version, description, applied_at, incomplete, is_baseline) in applied_migrations {
+        if *incomplete > 0 {
+            // Baselines can't be resumed by `migrate apply` (it never re-runs
+            // baselines and skips versions <= a baseline's version); a
+            // half-applied baseline resumes with `provision`.
+            let resume_command = if *is_baseline {
+                "pgmt migrate provision"
             } else {
-                println!("  {} - {} (applied: {})", version, description, applied_at);
+                "pgmt migrate apply"
+            };
+            println!(
+                "  {} - {} (INCOMPLETE: {} section(s) pending or failed — resume with `{}`)",
+                version, description, incomplete, resume_command
+            );
+        } else {
+            println!("  {} - {} (applied: {})", version, description, applied_at);
+        }
+    }
+}
+
+/// One module's tally of recorded section rows on the reported database.
+#[derive(Default)]
+struct ModuleTally {
+    completed: usize,
+    incomplete: usize,
+    /// Any incomplete section belongs to a baseline row — resume needs
+    /// baseline content (`provision`), not a migration replay (`apply`).
+    incomplete_baseline: bool,
+}
+
+/// Print the "Modules" summary: one compact line per declared module plus the
+/// base. Establishment comes from [`literal_established_modules`] (the existing
+/// derivation); per-module counts and resume hints are tallied from the same
+/// section rows via the shared [`section_module_from_files`] attribution.
+async fn print_module_rollup(
+    config: &Config,
+    root_dir: &Path,
+    pool: &sqlx::PgPool,
+    sections_qualified: &str,
+) -> Result<()> {
+    let migrations_dir = root_dir.join(&config.directories.migrations);
+    let baselines_dir = root_dir.join(&config.directories.baselines);
+    let migrations = discover_migrations(&migrations_dir)?;
+    let files = parse_section_files(&migrations, &baselines_dir)?;
+
+    let established =
+        literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
+
+    // Tally every recorded section row by owning module (None = base).
+    let rows: Vec<(i64, bool, String, String)> = sqlx::query_as(&format!(
+        "SELECT migration_version, is_baseline, section_name, status FROM {}",
+        sections_qualified
+    ))
+    .fetch_all(pool)
+    .await?;
+
+    let mut tallies: BTreeMap<Option<String>, ModuleTally> = BTreeMap::new();
+    for (version, is_baseline, section_name, status) in rows {
+        let module = section_module_from_files(&files, version as u64, is_baseline, &section_name);
+        let tally = tallies.entry(module).or_default();
+        if status == "completed" {
+            tally.completed += 1;
+        } else {
+            tally.incomplete += 1;
+            if is_baseline {
+                tally.incomplete_baseline = true;
             }
         }
     }
 
-    dev_pool.close().await;
+    // Row order: the base first, then declared modules alphabetically.
+    let mut keys: Vec<Option<String>> = vec![None];
+    keys.extend(config.modules.modules.keys().cloned().map(Some));
+
+    // Align the module-name column for compact, scannable output.
+    let label_width = keys
+        .iter()
+        .map(|k| display_module(k.as_deref()).len())
+        .max()
+        .unwrap_or(UNMODULED_DISPLAY.len());
+
+    println!("Modules:");
+    for key in keys {
+        let label = display_module(key.as_deref());
+        let tally = tallies.get(&key);
+        let is_established = match &key {
+            None => tally.is_some_and(|t| t.completed > 0),
+            Some(m) => established.contains(m),
+        };
+
+        let line = match tally {
+            // No section rows at all. The base having no rows is only possible
+            // on an otherwise-empty tracking table; a declared module with no
+            // rows is simply not deployed here (expected on subset targets).
+            None => match &key {
+                None => "no sections recorded".to_string(),
+                Some(_) => "not established (expected on subset targets)".to_string(),
+            },
+            Some(t) if t.incomplete == 0 => {
+                format!("established — {} section(s) applied", t.completed)
+            }
+            Some(t) => {
+                let base_cmd = if t.incomplete_baseline {
+                    "pgmt migrate provision"
+                } else {
+                    "pgmt migrate apply"
+                };
+                let resume = match &key {
+                    None => base_cmd.to_string(),
+                    Some(m) => format!("{} --modules {}", base_cmd, m),
+                };
+                let state = if is_established {
+                    "established"
+                } else {
+                    "incomplete"
+                };
+                format!(
+                    "{} — {} applied, {} pending/failed (resume with `{}`)",
+                    state, t.completed, t.incomplete, resume
+                )
+            }
+        };
+        println!("  {:width$}  {}", label, line, width = label_width);
+    }
+
     Ok(())
 }
 

@@ -220,6 +220,12 @@ enum MigrateCommands {
 
     /// Check migration status
     Status {
+        /// Target (production/staging) database to report on. When set (flag,
+        /// PGMT_TARGET_URL, or yaml target), status reports on it; otherwise it
+        /// falls back to the dev database.
+        #[command(flatten)]
+        target: config::TargetUrlArgs,
+
         #[command(flatten)]
         dev: config::DevUrlArgs,
     },
@@ -550,14 +556,26 @@ async fn run_main(cli: Cli) -> Result<()> {
                         )
                         .await
                     }
-                    MigrateCommands::Status { dev } => {
+                    MigrateCommands::Status { target, dev } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
                             .resolve()?;
-                        let dev = dev.resolve(&file_config)?;
+
+                        // Precedence: explicit --target-url flag > PGMT_TARGET_URL
+                        // > yaml target > dev fallback. A resolvable target means
+                        // "report on the deployment"; otherwise report on dev
+                        // exactly as before (and surface dev's own not-configured
+                        // error if neither is set). Both URLs come only through
+                        // their args structs' resolvers.
+                        let (label, url): (&str, String) =
+                            if target.lookup(&file_config).is_some() {
+                                ("target", target.resolve(&file_config)?.as_str().to_string())
+                            } else {
+                                ("dev", dev.resolve(&file_config)?.as_str().to_string())
+                            };
 
                         info!("Checking migration status");
-                        commands::cmd_migrate_status(&config, &dev).await
+                        commands::cmd_migrate_status(&config, &root_dir, label, &url).await
                     }
                     MigrateCommands::Validate {
                         shadow,
