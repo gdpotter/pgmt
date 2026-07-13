@@ -134,7 +134,10 @@ async fn test_failed_module_adoption_does_not_block_base_apply() -> Result<()> {
         let baseline_path = helper.baselines_dir().join(&baseline_name);
         let original_baseline = std::fs::read_to_string(&baseline_path)?;
         let broken = inject_bad_sql_into_billing_section(&original_baseline);
-        assert_ne!(broken, original_baseline, "the injection must change the file");
+        assert_ne!(
+            broken, original_baseline,
+            "the injection must change the file"
+        );
         std::fs::write(&baseline_path, &broken)?;
 
         helper
@@ -362,10 +365,7 @@ fn inject_bad_sql_into_billing_section(baseline: &str) -> String {
     let mut injected = false;
     for line in baseline.lines() {
         out.push(line.to_string());
-        if !injected
-            && line.contains("pgmt:section")
-            && line.contains("module=\"billing\"")
-        {
+        if !injected && line.contains("pgmt:section") && line.contains("module=\"billing\"") {
             out.push("SELECT this_is_not_valid_sql;".to_string());
             injected = true;
         }

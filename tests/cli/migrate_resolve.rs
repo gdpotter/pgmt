@@ -234,7 +234,9 @@ CREATE TABLE rsp_two (id INT);
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("was modified after it was applied"));
+            .stderr(predicate::str::contains(
+                "was modified after it was applied",
+            ));
 
         // Re-stamp all completed sections of the version.
         helper

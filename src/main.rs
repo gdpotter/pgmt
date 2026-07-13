@@ -567,12 +567,12 @@ async fn run_main(cli: Cli) -> Result<()> {
                         // exactly as before (and surface dev's own not-configured
                         // error if neither is set). Both URLs come only through
                         // their args structs' resolvers.
-                        let (label, url): (&str, String) =
-                            if target.lookup(&file_config).is_some() {
-                                ("target", target.resolve(&file_config)?.as_str().to_string())
-                            } else {
-                                ("dev", dev.resolve(&file_config)?.as_str().to_string())
-                            };
+                        let (label, url): (&str, String) = if target.lookup(&file_config).is_some()
+                        {
+                            ("target", target.resolve(&file_config)?.as_str().to_string())
+                        } else {
+                            ("dev", dev.resolve(&file_config)?.as_str().to_string())
+                        };
 
                         info!("Checking migration status");
                         commands::cmd_migrate_status(&config, &root_dir, label, &url).await

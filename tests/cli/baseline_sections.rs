@@ -258,7 +258,9 @@ INSERT INTO users (id) VALUES (1);
             .assert()
             .failure()
             .stderr(predicate::str::contains("section 'tables'"))
-            .stderr(predicate::str::contains("was modified after it was applied"))
+            .stderr(predicate::str::contains(
+                "was modified after it was applied",
+            ))
             .stderr(predicate::str::contains("Applied sections are immutable"));
 
         Ok(())

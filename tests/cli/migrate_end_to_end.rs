@@ -1368,9 +1368,7 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
                 ))
                 .stderr(predicate::str::contains("Expected checksum:"))
                 .stderr(predicate::str::contains("Actual checksum:"))
-                .stderr(predicate::str::contains(
-                    "Applied sections are immutable",
-                ));
+                .stderr(predicate::str::contains("Applied sections are immutable"));
 
             Ok(())
         })

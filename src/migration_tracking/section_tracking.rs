@@ -136,9 +136,12 @@ async fn migrate_section_table_schema(
         ))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!("UPDATE {} SET is_baseline = FALSE", sections_table))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(&format!(
+            "UPDATE {} SET is_baseline = FALSE",
+            sections_table
+        ))
+        .execute(&mut *tx)
+        .await?;
         sqlx::query(&format!(
             "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
             sections_table
@@ -218,7 +221,12 @@ async fn backfill_synthetic_legacy_sections(
     ))
     .execute(pool)
     .await
-    .with_context(|| format!("Failed to backfill synthetic legacy sections into {}", sections_table))?;
+    .with_context(|| {
+        format!(
+            "Failed to backfill synthetic legacy sections into {}",
+            sections_table
+        )
+    })?;
 
     Ok(())
 }
@@ -301,16 +309,23 @@ pub async fn validate_and_sync_section_checksums(
     }
 
     // (section_name, status, checksum, mode, section_order, module)
-    type StoredSectionRow = (String, String, Option<String>, Option<String>, i32, Option<String>);
+    type StoredSectionRow = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        i32,
+        Option<String>,
+    );
     let rows: Vec<StoredSectionRow> = sqlx::query_as(&format!(
         "SELECT section_name, status, checksum, mode, section_order, module
              FROM {} WHERE migration_version = $1 AND is_baseline = $2",
         sections_table
     ))
-        .bind(version_to_db(version)?)
-        .bind(is_baseline)
-        .fetch_all(pool)
-        .await?;
+    .bind(version_to_db(version)?)
+    .bind(is_baseline)
+    .fetch_all(pool)
+    .await?;
 
     let mut has_checksummed = false;
     for (name, status, stored_checksum, stored_mode, stored_order, stored_module) in rows {

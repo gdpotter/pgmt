@@ -157,7 +157,9 @@ CREATE TABLE t2 (id INT REFERENCES nonexistent(id));
             .assert()
             .failure()
             .stderr(predicate::str::contains("section 's1'"))
-            .stderr(predicate::str::contains("was modified after it was applied"))
+            .stderr(predicate::str::contains(
+                "was modified after it was applied",
+            ))
             .stderr(predicate::str::contains("Applied sections are immutable"));
 
         Ok(())
@@ -287,7 +289,9 @@ async fn test_legacy_null_checksum_passes() -> Result<()> {
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("has been modified after being applied"))
+            .stderr(predicate::str::contains(
+                "has been modified after being applied",
+            ))
             .stderr(predicate::str::contains(
                 "Migrations must be immutable once applied",
             ))
@@ -388,7 +392,9 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
 
         // Legacy migration treated as applied — table never created.
         assert!(
-            !helper.table_exists_in_dev("public", "legacy_marker").await?,
+            !helper
+                .table_exists_in_dev("public", "legacy_marker")
+                .await?,
             "legacy migration must not be re-executed"
         );
 
@@ -399,12 +405,15 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
             .assert()
             .success();
         let pool = helper.connect_to_dev_db().await?;
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations_sections")
-                .fetch_one(&pool)
-                .await?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations_sections")
+            .fetch_one(&pool)
+            .await?;
         assert_eq!(count, 1, "backfill is idempotent");
-        assert!(!helper.table_exists_in_dev("public", "legacy_marker").await?);
+        assert!(
+            !helper
+                .table_exists_in_dev("public", "legacy_marker")
+                .await?
+        );
         pool.close().await;
 
         Ok(())
@@ -460,7 +469,13 @@ async fn test_module_and_metadata_recorded_at_registration() -> Result<()> {
 
         let pool = helper.connect_to_dev_db().await?;
         // (section_name, module, mode, pgmt_version, applied_by)
-        type MetaRow = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+        type MetaRow = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
         let rows: Vec<MetaRow> = sqlx::query_as(
             "SELECT section_name, module, mode, pgmt_version, applied_by
                  FROM public.pgmt_migrations_sections ORDER BY section_order",

@@ -19,8 +19,8 @@
 //! so resolve can't race a concurrent deploy.
 
 use crate::config::Config;
-use crate::migration::{discover_baselines, discover_migrations, parse_migration_sections};
 use crate::migration::section_parser::MigrationSection;
+use crate::migration::{discover_baselines, discover_migrations, parse_migration_sections};
 use crate::migration_tracking::section_tracking::format_sections_table_name;
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
@@ -84,7 +84,15 @@ async fn resolve_inner(
         }
         ResolveVerb::Restamp(coord) => {
             let (version, section) = parse_coord_optional_section(&coord)?;
-            restamp(config, root_dir, pool, version, section.as_deref(), is_baseline).await
+            restamp(
+                config,
+                root_dir,
+                pool,
+                version,
+                section.as_deref(),
+                is_baseline,
+            )
+            .await
         }
     }
 }
@@ -232,7 +240,12 @@ async fn reset(
     .execute(pool)
     .await?;
 
-    println!("Reset {} section {}/{}:", kind(is_baseline), version, section);
+    println!(
+        "Reset {} section {}/{}:",
+        kind(is_baseline),
+        version,
+        section
+    );
     println!("  status: {status} -> pending");
     println!("  last_error cleared; the next apply will re-run this section");
 
@@ -254,8 +267,8 @@ async fn restamp(
     let sections_table = format_sections_table_name(&config.migration.tracking_table);
 
     // The file must be present — re-stamping recomputes from its content.
-    let (file_sections, file_checksum) = load_file_sections(config, root_dir, version, is_baseline)?
-        .ok_or_else(|| {
+    let (file_sections, file_checksum) =
+        load_file_sections(config, root_dir, version, is_baseline)?.ok_or_else(|| {
             anyhow!(
                 "no {} file found for version {}; --restamp recomputes checksums from the file, \
                  which must be present",
@@ -319,15 +332,18 @@ async fn restamp(
     );
 
     for (name, _status, stored_checksum) in targets {
-        let fs = file_sections.iter().find(|s| &s.name == name).ok_or_else(|| {
-            anyhow!(
-                "section '{}' is recorded as completed for {} {} but no longer exists in the \
+        let fs = file_sections
+            .iter()
+            .find(|s| &s.name == name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "section '{}' is recorded as completed for {} {} but no longer exists in the \
                  file; --restamp cannot recompute a removed section",
-                name,
-                kind(is_baseline),
-                version
-            )
-        })?;
+                    name,
+                    kind(is_baseline),
+                    version
+                )
+            })?;
 
         let new_checksum = calculate_checksum(&fs.checksum_content());
         sqlx::query(&format!(

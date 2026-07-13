@@ -3,9 +3,8 @@ use crate::config::Config;
 use crate::migration::baseline::apply_baseline_to_target;
 use crate::migration::{discover_migrations, find_latest_baseline};
 use crate::migration_tracking::{
-    MigrationLock, calculate_checksum, ensure_section_tracking_table,
-    ensure_tracking_table_exists, format_tracking_table_name, register_baseline_start,
-    version_to_db,
+    MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
+    format_tracking_table_name, register_baseline_start, version_to_db,
 };
 use crate::modules::{
     ModuleSelection, literal_established_modules, modules_needing_baseline_content,
@@ -212,14 +211,8 @@ async fn provision_inner(
         } else {
             BTreeSet::new()
         };
-        return apply_pending_migrations(
-            pool,
-            config,
-            &migrations,
-            &selection,
-            &established_after,
-        )
-        .await;
+        return apply_pending_migrations(pool, config, &migrations, &selection, &established_after)
+            .await;
     }
 
     match latest_baseline {
@@ -310,14 +303,15 @@ async fn register_and_apply_baseline(
     // against the registered rows and sync any unapplied ones.
     let full_sections =
         crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?;
-    let had_checksummed = crate::migration_tracking::section_tracking::validate_and_sync_section_checksums(
-        pool,
-        &config.migration.tracking_table,
-        version,
-        true,
-        &full_sections,
-    )
-    .await?;
+    let had_checksummed =
+        crate::migration_tracking::section_tracking::validate_and_sync_section_checksums(
+            pool,
+            &config.migration.tracking_table,
+            version,
+            true,
+            &full_sections,
+        )
+        .await?;
 
     // The whole-file checksum is a fallback guard only for legacy baseline rows
     // with no per-section checksums.

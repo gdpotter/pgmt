@@ -162,8 +162,7 @@ async fn apply_with_module_guard(
     let established = if selection.named().is_some() {
         ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
         ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
-        let files =
-            parse_section_files(migrations, &root_dir.join(&config.directories.baselines))?;
+        let files = parse_section_files(migrations, &root_dir.join(&config.directories.baselines))?;
         let established =
             literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
         let needs_baseline = modules_needing_baseline_content(selection, &established, &files);

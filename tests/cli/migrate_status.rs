@@ -53,7 +53,9 @@ async fn test_status_against_target_url() -> Result<()> {
             .args(["migrate", "status", "--target-url", &target_url])
             .assert()
             .success()
-            .stdout(predicate::str::contains("Migration status for target database"))
+            .stdout(predicate::str::contains(
+                "Migration status for target database",
+            ))
             .stdout(predicate::str::contains("Applied migrations:"))
             .stdout(predicate::str::contains("1000"));
 
@@ -65,7 +67,9 @@ async fn test_status_against_target_url() -> Result<()> {
             .args(["migrate", "status"])
             .assert()
             .success()
-            .stdout(predicate::str::contains("Migration status for dev database"))
+            .stdout(predicate::str::contains(
+                "Migration status for dev database",
+            ))
             .stdout(predicate::str::contains("No migrations have been applied"));
 
         Ok(())
@@ -81,7 +85,10 @@ async fn test_status_module_rollup() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         enable_modules(helper, THREE_MODULES_YAML)?;
-        helper.write_schema_file("core/users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file(
+            "core/users.sql",
+            "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+        )?;
         helper.write_schema_file(
             "billing/invoices.sql",
             "-- require: core/users.sql\n\
@@ -139,7 +146,9 @@ async fn test_status_module_rollup() -> Result<()> {
             .assert()
             .success()
             .stdout(predicate::str::contains("Modules:"))
-            .stdout(predicate::str::contains("established — 1 section(s) applied"))
+            .stdout(predicate::str::contains(
+                "established — 1 section(s) applied",
+            ))
             .stdout(predicate::str::contains(
                 "resume with `pgmt migrate provision --modules billing`",
             ))
