@@ -26,6 +26,7 @@ pub mod schemas;
 pub mod sections;
 pub mod sequences;
 pub mod sql_snapshots;
+pub mod subscription;
 pub mod tables;
 pub mod triggers;
 pub mod views;

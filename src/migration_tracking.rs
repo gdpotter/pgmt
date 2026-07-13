@@ -1,5 +1,10 @@
 pub mod advisory_lock;
 pub mod section_tracking;
+// The read/write helpers land as a storage layer here; the crossing loop and
+// read-side consumers that call them arrive in the next change. Until then the
+// binary doesn't reference them yet, so silence dead-code for this module.
+#[allow(dead_code)]
+pub mod subscription;
 
 use crate::config::types::TrackingTable;
 use anyhow::{Context, Result};

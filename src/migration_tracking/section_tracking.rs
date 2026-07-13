@@ -92,6 +92,13 @@ pub async fn ensure_section_tracking_table(
 
     migrate_section_table_schema(pool, tracking_table, &sections_table).await?;
 
+    // The stored module subscription (§13) is part of the same evolve step:
+    // the tables arrive here so every apply/provision path that ensures the
+    // section table also has the subscription tables available. (The read-only
+    // `migrate status` path never calls this — it probes instead.)
+    crate::migration_tracking::subscription::ensure_subscription_tables(pool, tracking_table)
+        .await?;
+
     // Create index for querying by status
     sqlx::query(&format!(
         "CREATE INDEX IF NOT EXISTS idx_{}_status ON {}(migration_version, status)",
