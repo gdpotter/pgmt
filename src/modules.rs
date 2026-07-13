@@ -294,24 +294,50 @@ pub fn detect_partition_divergence(
     Ok(divergence)
 }
 
-/// Fill in `remaps` on baseline sections: for each section, the distinct
-/// historical owners of its objects that differ from the section's module.
-/// Objects with no history (brand new) contribute nothing.
+/// Fill in `remaps` on baseline sections: the distinct prior owners of a
+/// section's objects, recording where its objects came from so a target can
+/// consume the re-anchor as a crossing (§12, §13).
+///
+/// **Self-inclusion (§12).** A section that *retained* prior objects of its
+/// own alongside acquired ones lists **itself** as a source
+/// (`module="billing" remaps="billing,billing_legacy"`) — that is what lets
+/// the checksummed artifact distinguish "objects moved into a brand-new
+/// module" (`remaps="a"`, crossing auto-subscribes) from "objects moved into a
+/// pre-existing module" (`remaps="a,b"`, wholeness may fail: adopt `b` first).
+/// The rule:
+///
+/// - Collect the distinct prior owners of every object that has history
+///   (brand-new objects contribute nothing).
+/// - If *nothing moved* — every prior owner is the section's own module, or
+///   there is no history at all — stamp **no** `remaps`; the section stays
+///   inert to crossings.
+/// - Otherwise stamp **every** distinct prior owner, including the section's
+///   own module when it appears among them (an object it retained).
 pub fn compute_baseline_remaps(sections: &mut [StepSection], historical: &HistoricalAttribution) {
     use crate::diff::operations::SqlRenderer;
 
     for section in sections.iter_mut() {
-        let mut priors: BTreeSet<String> = BTreeSet::new();
+        // Distinct prior owners of this section's objects (None = the base).
+        let mut priors: BTreeSet<Option<String>> = BTreeSet::new();
         for step in &section.steps {
             let id = step.db_object_id();
             if let Some(prior) = historical.object_modules.get(&id) {
-                let prior = prior.as_deref();
-                if prior != section.module.as_deref() {
-                    priors.insert(display_module(prior).to_string());
-                }
+                priors.insert(prior.clone());
             }
         }
-        section.remaps = priors.into_iter().collect();
+        // "Nothing moved": every prior owner equals the section's own module
+        // (or there is no history). The section is inert to crossings.
+        let moved = priors
+            .iter()
+            .any(|p| p.as_deref() != section.module.as_deref());
+        section.remaps = if moved {
+            priors
+                .iter()
+                .map(|p| display_module(p.as_deref()).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
 }
 
@@ -1271,6 +1297,97 @@ mod tests {
             "an unattributed comment belongs with the object it annotates"
         );
         Ok(())
+    }
+
+    /// Build a StepSection whose steps are schema CREATEs named `objects`,
+    /// with the given `module`. The step's `db_object_id()` is
+    /// `DbObjectId::Schema { name }`, so a `HistoricalAttribution` keyed by the
+    /// same names controls each object's prior owner.
+    fn step_section(module: Option<&str>, objects: &[&str]) -> StepSection {
+        use crate::diff::operations::{MigrationStep, SchemaOperation};
+        StepSection {
+            name: module.unwrap_or("default").to_string(),
+            module: module.map(str::to_string),
+            remaps: Vec::new(),
+            steps: objects
+                .iter()
+                .map(|name| {
+                    MigrationStep::Schema(SchemaOperation::Create {
+                        name: name.to_string(),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    fn historical(entries: &[(&str, Option<&str>)]) -> HistoricalAttribution {
+        let mut h = HistoricalAttribution::default();
+        for (name, module) in entries {
+            h.object_modules.insert(
+                DbObjectId::Schema {
+                    name: name.to_string(),
+                },
+                module.map(str::to_string),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn test_remap_move_into_brand_new_module() {
+        // Objects moved from 'a' into brand-new module 'b'. 'b' held nothing
+        // before, so self is NOT a source: remaps="a" alone.
+        let mut sections = vec![step_section(Some("b"), &["x", "y"])];
+        let hist = historical(&[("x", Some("a")), ("y", Some("a"))]);
+        compute_baseline_remaps(&mut sections, &hist);
+        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn test_remap_move_into_pre_existing_module() {
+        // Module 'b' retained its own object (prior 'b') and acquired one from
+        // 'a' → self-inclusion: remaps="a,b".
+        let mut sections = vec![step_section(Some("b"), &["own", "acquired"])];
+        let hist = historical(&[("own", Some("b")), ("acquired", Some("a"))]);
+        compute_baseline_remaps(&mut sections, &hist);
+        assert_eq!(sections[0].remaps, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn test_remap_untouched_module_stamps_nothing() {
+        // Every object was already owned by 'b' (only-self) → nothing moved.
+        let mut sections = vec![step_section(Some("b"), &["p", "q"])];
+        let hist = historical(&[("p", Some("b")), ("q", Some("b"))]);
+        compute_baseline_remaps(&mut sections, &hist);
+        assert!(sections[0].remaps.is_empty(), "{:?}", sections[0].remaps);
+    }
+
+    #[test]
+    fn test_remap_untouched_module_with_brand_new_objects_stamps_nothing() {
+        // Retained own objects plus brand-new (no history) ones — still nothing
+        // acquired from elsewhere.
+        let mut sections = vec![step_section(Some("b"), &["kept", "fresh"])];
+        let hist = historical(&[("kept", Some("b"))]); // "fresh" has no history
+        compute_baseline_remaps(&mut sections, &hist);
+        assert!(sections[0].remaps.is_empty(), "{:?}", sections[0].remaps);
+    }
+
+    #[test]
+    fn test_remap_demotion_into_base() {
+        // Unmoduled (base) section whose objects came from module 'a'.
+        let mut sections = vec![step_section(None, &["x"])];
+        let hist = historical(&[("x", Some("a"))]);
+        compute_baseline_remaps(&mut sections, &hist);
+        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn test_remap_modularization_from_base() {
+        // Module 'app' whose objects were previously unmoduled (the base).
+        let mut sections = vec![step_section(Some("app"), &["users"])];
+        let hist = historical(&[("users", None)]);
+        compute_baseline_remaps(&mut sections, &hist);
+        assert_eq!(sections[0].remaps, vec![UNMODULED_DISPLAY.to_string()]);
     }
 
     #[test]
