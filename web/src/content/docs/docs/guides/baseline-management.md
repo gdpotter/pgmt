@@ -38,7 +38,7 @@ Both produce the same result. Baselines just make it faster.
 
 ## Provisioning a New Environment
 
-`migrate apply` maintains a database that's already established — it runs pending migration files and does **not** apply baselines. So to stand up a *new* database (a demo, a fresh staging environment, a new region, disaster recovery), use `pgmt migrate provision`:
+`migrate apply` maintains a database that's already established — it runs pending migration files and does **not** apply baselines. So to stand up a _new_ database (a demo, a fresh staging environment, a new region, disaster recovery), use `pgmt migrate provision`:
 
 ```bash
 pgmt migrate provision --target-url postgres://demo/myapp

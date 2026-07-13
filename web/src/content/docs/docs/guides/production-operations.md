@@ -126,4 +126,4 @@ pgmt migrate provision --target-url postgres://new-env/myapp
 pgmt migrate provision --target-url postgres://new-env/myapp --dry-run   # preview first
 ```
 
-provision expects a fresh database. If the baseline collides with objects already present, the apply fails atomically (Postgres reports `relation "x" already exists`) and nothing is left behind. To bring an *existing* database under management instead, adopt it with `pgmt init`.
+provision expects a fresh database. If the baseline collides with objects already present, the apply fails atomically (Postgres reports `relation "x" already exists`) and nothing is left behind. To bring an _existing_ database under management instead, adopt it with `pgmt init`.

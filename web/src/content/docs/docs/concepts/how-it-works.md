@@ -101,7 +101,7 @@ This is why you can `git clone` a pgmt project and run `pgmt migrate new` withou
 4. **Apply in order** - Run pending migrations one at a time, in version order
 5. **Record** - Insert each migration into `pgmt_migrations` after successful application
 
-**Setting up a new environment:** `migrate apply` maintains a database that already exists — it runs pending migration files but does not apply baselines. To stand up a *new* database from the repo (a demo, fresh staging, disaster recovery), use `pgmt migrate provision`, which applies the latest baseline and then the migrations after it. See [Provisioning a New Environment](../guides/baseline-management#provisioning-a-new-environment).
+**Setting up a new environment:** `migrate apply` maintains a database that already exists — it runs pending migration files but does not apply baselines. To stand up a _new_ database from the repo (a demo, fresh staging, disaster recovery), use `pgmt migrate provision`, which applies the latest baseline and then the migrations after it. See [Provisioning a New Environment](../guides/baseline-management#provisioning-a-new-environment).
 
 **Multi-section migrations:** You can split a migration into execution phases using `-- pgmt:section` comments. Each section has its own configuration for transaction mode, timeout, and retry logic.
 
