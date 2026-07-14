@@ -60,7 +60,7 @@ async fn report_status(config: &Config, root_dir: &Path, pool: &sqlx::PgPool) ->
         // aren't all complete — they're in-progress or failed, not applied.
         let applied_migrations: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(&format!(
             "SELECT m.version, m.description, m.applied_at::TEXT,
-                    COUNT(s.section_name) FILTER (WHERE s.status <> 'completed') AS incomplete,
+                    COUNT(s.section_name) FILTER (WHERE s.status NOT IN ('completed', 'satisfied')) AS incomplete,
                     m.is_baseline
              FROM {} m
              LEFT JOIN {} s
@@ -216,7 +216,7 @@ async fn print_module_rollup(
     for (version, is_baseline, section_name, status) in rows {
         let module = section_module_from_files(&files, version as u64, is_baseline, &section_name);
         let tally = tallies.entry(module).or_default();
-        if status == "completed" {
+        if status == "completed" || status == "satisfied" {
             tally.completed += 1;
         } else {
             tally.incomplete += 1;

@@ -30,6 +30,22 @@ pub fn display_module(module: Option<&str>) -> &str {
     module.unwrap_or(UNMODULED_DISPLAY)
 }
 
+/// Whether a re-anchor baseline section's remap *source* is already held by a
+/// target with the given established set (§14 per-section adoption rule). A
+/// plain section (no `remaps`) is never source-covered — it must run. The base
+/// source (`(unmoduled)`) is held everywhere; a module source is held iff
+/// established. Provenance-cut guarantees at most one source per section.
+pub fn remap_source_held(
+    section: &crate::migration::section_parser::MigrationSection,
+    established: &BTreeSet<String>,
+) -> bool {
+    match section.remaps.first() {
+        None => false,
+        Some(source) if source == UNMODULED_DISPLAY => true,
+        Some(source) => established.contains(source),
+    }
+}
+
 /// The validated file→module partition for one project.
 ///
 /// Paths are matched project-root-relative (as declared in yaml); schema
@@ -689,7 +705,7 @@ pub async fn literal_established_modules(
         tracking_table.schema, tracking_table.name
     );
     let rows: Vec<(i64, bool, String)> = sqlx::query_as(&format!(
-        "SELECT migration_version, is_baseline, section_name FROM {} WHERE status = 'completed'",
+        "SELECT migration_version, is_baseline, section_name FROM {} WHERE status IN ('completed', 'satisfied')",
         sections_table
     ))
     .fetch_all(pool)
@@ -897,28 +913,22 @@ impl ModuleRuntime {
     }
 
     /// The baseline adoption reads content from (§14's "latest committed
-    /// baseline"), interpreted relative to the target's crossed world: the
-    /// latest baseline that is NOT an unconsumed re-anchor.
+    /// baseline"): simply the highest-version committed baseline, re-anchor or
+    /// not.
     ///
-    /// An unconsumed re-anchor (above the target's crossing watermark) is
-    /// written in a vocabulary the target hasn't crossed into — its sections
-    /// may carry objects the target already holds under the remap *source*
-    /// module, so applying them pre-crossing would collide. §13's
-    /// move-into-pre-existing and §19e's merge guidance both prescribe
-    /// adopting the missing source *in the pre-crossing world* (replay, or an
-    /// earlier baseline); the crossing then rewrites ownership. Checkpoint
-    /// baselines (no remaps) and already-crossed re-anchors stay usable.
+    /// Provenance-cut sections (§12) make **any** committed baseline safe to
+    /// adopt from, unconsumed re-anchors included: a re-anchor's remap sections
+    /// carry objects already present under the source's old name, so per-section
+    /// adoption (§14) records those as `satisfied` and runs only the plain
+    /// sections plus remap sections whose source the target lacks — no
+    /// collision, no routing around the re-anchor (this reverts the earlier
+    /// "never route adoption through an unconsumed re-anchor" rule).
     pub fn adoption_baseline(
         &self,
     ) -> Option<(u64, &[crate::migration::section_parser::MigrationSection])> {
         self.baselines
             .iter()
-            .rev()
-            .find(|(version, _)| {
-                let unconsumed_re_anchor = self.re_anchors.iter().any(|ra| ra.version == **version)
-                    && self.watermark.is_none_or(|w| **version > w);
-                !unconsumed_re_anchor
-            })
+            .next_back()
             .map(|(version, sections)| (*version, sections.as_slice()))
     }
 
@@ -1147,7 +1157,7 @@ async fn applied_baseline_watermark(
          WHERE m.is_baseline AND NOT EXISTS (
              SELECT 1 FROM {sections} s
              WHERE s.is_baseline AND s.migration_version = m.version
-               AND s.status <> 'completed')",
+               AND s.status NOT IN ('completed', 'satisfied'))",
         main = main,
         sections = sections,
     ))
@@ -1190,7 +1200,7 @@ pub async fn established_pending_through(
          WHERE m.is_baseline AND NOT EXISTS (
              SELECT 1 FROM {sections} s
              WHERE s.is_baseline AND s.migration_version = m.version
-               AND s.status <> 'completed')",
+               AND s.status NOT IN ('completed', 'satisfied'))",
         main = main,
         sections = sections,
     ))

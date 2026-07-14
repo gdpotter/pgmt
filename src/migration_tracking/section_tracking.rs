@@ -21,6 +21,13 @@ pub enum SectionStatus {
     Pending,
     Running,
     Completed,
+    /// A remap section covered by an established source at provision/adoption
+    /// time (modules.md §9, §14): the objects are already present under the
+    /// source's name, so nothing ran here — but the section is accounted for.
+    /// `completed` keeps its invariant ("this DDL committed here") and absence
+    /// keeps its ("crashed or never requested"); the incomplete-baseline guard
+    /// treats completed|satisfied alike as covered.
+    Satisfied,
     Failed,
 }
 
@@ -30,8 +37,17 @@ impl SectionStatus {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Completed => "completed",
+            Self::Satisfied => "satisfied",
             Self::Failed => "failed",
         }
+    }
+
+    /// A terminal, covered state: the section's objects are present (whether it
+    /// executed here or was covered by an established source). The
+    /// incomplete-baseline guard and every "is this section done" check treat
+    /// completed and satisfied identically.
+    pub fn is_covered(&self) -> bool {
+        matches!(self, Self::Completed | Self::Satisfied)
     }
 }
 
@@ -43,6 +59,7 @@ impl FromStr for SectionStatus {
             "pending" => Ok(Self::Pending),
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
+            "satisfied" => Ok(Self::Satisfied),
             "failed" => Ok(Self::Failed),
             _ => Err(anyhow::anyhow!("Unknown section status: {}", s)),
         }
@@ -341,7 +358,12 @@ pub async fn validate_and_sync_section_checksums(
             continue;
         };
         has_checksummed = true;
-        let completed = status == SectionStatus::Completed.as_str();
+        // Satisfied rows are terminal and covered, like completed: their
+        // section is immutable (source-covered adoption record, §9).
+        let completed = matches!(
+            status.parse::<SectionStatus>(),
+            Ok(s) if s.is_covered()
+        );
 
         let Some((order, checksum, mode, module)) = file_map.get(name.as_str()) else {
             // The section is gone from the file.
@@ -441,6 +463,55 @@ pub async fn initialize_sections(
         .await?;
     }
 
+    Ok(())
+}
+
+/// Record the given sections as `satisfied` (modules.md §9, §14): a remap
+/// section whose source the target already holds, so nothing runs — the
+/// objects are present under the source's name and a later crossing relabels
+/// them. Insert-then-mark inside ONE transaction so the determination and the
+/// row are atomic (the caller holds the advisory lock). Idempotent: an existing
+/// row keeps its status (a resumed adoption never demotes a completed section).
+pub async fn record_sections_satisfied(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    is_baseline: bool,
+    sections: &[(i32, MigrationSection)],
+) -> Result<()> {
+    if sections.is_empty() {
+        return Ok(());
+    }
+    let sections_table = format_sections_table_name(tracking_table);
+    let mut tx = pool.begin().await?;
+    for (order, section) in sections {
+        insert_pending_section(
+            &mut *tx,
+            &sections_table,
+            version,
+            is_baseline,
+            *order,
+            section,
+        )
+        .await?;
+        // Only a freshly-registered (pending) row becomes satisfied; a row that
+        // already completed/satisfied here stays as it is.
+        sqlx::query(&format!(
+            "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
+             WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
+               AND status = 'pending'",
+            sections_table
+        ))
+        .bind(SectionStatus::Satisfied.as_str())
+        .bind(version_to_db(version)?)
+        .bind(is_baseline)
+        .bind(&section.name)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit()
+        .await
+        .context("Failed to record satisfied sections")?;
     Ok(())
 }
 
@@ -604,7 +675,7 @@ pub async fn incomplete_baseline_sections(
     let sections_table = format_sections_table_name(tracking_table);
     let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(&format!(
         "SELECT migration_version, section_name, module FROM {} \
-         WHERE is_baseline AND status <> 'completed'",
+         WHERE is_baseline AND status NOT IN ('completed', 'satisfied')",
         sections_table
     ))
     .fetch_all(pool)
@@ -624,7 +695,17 @@ mod tests {
         assert_eq!(SectionStatus::Pending.as_str(), "pending");
         assert_eq!(SectionStatus::Running.as_str(), "running");
         assert_eq!(SectionStatus::Completed.as_str(), "completed");
+        assert_eq!(SectionStatus::Satisfied.as_str(), "satisfied");
         assert_eq!(SectionStatus::Failed.as_str(), "failed");
+    }
+
+    #[test]
+    fn test_section_status_covered() {
+        assert!(SectionStatus::Completed.is_covered());
+        assert!(SectionStatus::Satisfied.is_covered());
+        assert!(!SectionStatus::Pending.is_covered());
+        assert!(!SectionStatus::Running.is_covered());
+        assert!(!SectionStatus::Failed.is_covered());
     }
 
     #[test]
@@ -640,6 +721,10 @@ mod tests {
         assert_eq!(
             "completed".parse::<SectionStatus>().unwrap(),
             SectionStatus::Completed
+        );
+        assert_eq!(
+            "satisfied".parse::<SectionStatus>().unwrap(),
+            SectionStatus::Satisfied
         );
         assert_eq!(
             "failed".parse::<SectionStatus>().unwrap(),

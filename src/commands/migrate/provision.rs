@@ -93,11 +93,12 @@ async fn provision_inner(
         };
 
         if !needs_baseline.is_empty() {
-            // Adopt from the ADOPTION baseline (§14 routed through the
-            // target's crossed world — never an unconsumed re-anchor, whose
-            // sections could collide with objects the target holds under a
-            // remap source): needing_baseline_content flagged these modules
-            // against exactly this baseline.
+            // Adopt from the latest committed baseline (§14). Provenance-cut
+            // sections (§12) make an unconsumed re-anchor safe to adopt from:
+            // its remap sections whose source the target holds are recorded
+            // `satisfied` (objects already present under the source's name),
+            // and only the plain sections + remap sections whose source the
+            // target lacks actually run.
             let adoption_version = runtime
                 .adoption_baseline()
                 .map(|(version, _)| version)
@@ -194,8 +195,18 @@ async fn provision_inner(
 
             // Only the adopted modules' sections: the target's base (and any
             // previously established modules) already exist here — re-running
-            // their baseline sections would collide.
+            // their baseline sections would collide. Per-section rule (§14):
+            // a remap section whose source the target already holds is recorded
+            // `satisfied` (its objects are present under the source's name);
+            // everything else (plain sections, remap sections whose source the
+            // target lacks) runs.
             let adopted: BTreeSet<&str> = needs_baseline.iter().map(String::as_str).collect();
+            let is_adopted = |section: &crate::migration::section_parser::MigrationSection| {
+                section
+                    .module
+                    .as_deref()
+                    .is_some_and(|m| adopted.contains(m))
+            };
             register_and_apply_baseline(
                 pool,
                 config,
@@ -203,11 +214,33 @@ async fn provision_inner(
                 &baseline_sql,
                 source,
                 |section| {
-                    section
-                        .module
-                        .as_deref()
-                        .is_some_and(|m| adopted.contains(m))
+                    is_adopted(section)
+                        && !crate::modules::remap_source_held(section, &runtime.established)
                 },
+            )
+            .await?;
+
+            // Record the source-covered remap sections as `satisfied` (§9):
+            // nothing ran for them, but they are accounted for so the crossing
+            // and the incomplete-baseline guard see them as covered.
+            let satisfied: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
+                crate::migration::parse_migration_sections(
+                    std::path::Path::new(source),
+                    &baseline_sql,
+                )?
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| (i as i32, s))
+                .filter(|(_, s)| {
+                    is_adopted(s) && crate::modules::remap_source_held(s, &runtime.established)
+                })
+                .collect();
+            crate::migration_tracking::section_tracking::record_sections_satisfied(
+                pool,
+                &config.migration.tracking_table,
+                baseline.version,
+                true,
+                &satisfied,
             )
             .await?;
             println!("✅ Adopted module(s) {}.", needs_baseline.join(", "));
