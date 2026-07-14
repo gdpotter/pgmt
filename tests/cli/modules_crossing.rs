@@ -1,0 +1,859 @@
+//! Acceptance tests for the stored subscription + crossing loop + wholeness
+//! membranes (modules.md §13, §16, §19): re-anchors are consumed exactly once
+//! per target, at the crossing, rewriting the stored subscription; wholeness
+//! failures are strong membranes with adopt-first guidance.
+//!
+//! Together with `modules_deploy.rs`/`modules_generation.rs` (ordinary
+//! migrations, new modules, cross-module drops, coupling, adoption paths,
+//! the non-module characterization pin) these cover the §16 dynamics grid;
+//! this file owns the re-anchor rows (modularization, split, merge, demotion,
+//! irrelevant crossings) across LEGACY / SUBSET / BEHIND targets.
+
+use crate::helpers::cli::{CliTestHelper, with_cli_helper};
+use anyhow::Result;
+use predicates::prelude::*;
+
+/// Rewrite pgmt.yaml as `base_config` + the given `modules:` block (replacing
+/// any previously set block — re-tags change the partition in place).
+fn set_modules(helper: &CliTestHelper, base_config: &str, modules_yaml: &str) -> Result<()> {
+    let config_path = helper.project_root.join("pgmt.yaml");
+    std::fs::write(config_path, format!("{base_config}{modules_yaml}"))?;
+    Ok(())
+}
+
+fn base_config(helper: &CliTestHelper) -> Result<String> {
+    Ok(std::fs::read_to_string(
+        helper.project_root.join("pgmt.yaml"),
+    )?)
+}
+
+/// Distinct migration versions are timestamps: force the clock forward
+/// between generation calls.
+fn next_version_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+}
+
+/// The single baseline's version (most tests emit exactly one re-anchor).
+fn latest_baseline_version(helper: &CliTestHelper) -> Result<u64> {
+    let mut versions: Vec<u64> = helper
+        .list_baseline_files()?
+        .iter()
+        .filter_map(|name| {
+            name.strip_prefix("baseline_")
+                .and_then(|s| s.strip_suffix(".sql"))
+                .and_then(|s| s.parse().ok())
+        })
+        .collect();
+    versions.sort_unstable();
+    versions
+        .last()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("no baseline emitted"))
+}
+
+async fn subscription_modules(pool: &sqlx::PgPool) -> Result<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT module FROM public.pgmt_migrations_modules ORDER BY module")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+async fn crossing_watermark(pool: &sqlx::PgPool) -> Result<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT crossing_watermark FROM public.pgmt_migrations_watermark")
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+/// `(version, subscription_before, subscription_after)` of recorded crossings.
+async fn crossing_events(pool: &sqlx::PgPool) -> Result<Vec<(i64, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT version, subscription_before, subscription_after
+         FROM public.pgmt_migrations_events WHERE event = 'crossing' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn table_exists(pool: &sqlx::PgPool, table: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = $1)",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// §19c end-to-end: a LEGACY target (all-default pre-module history) meets a
+/// modularization re-anchor. The next bare `apply` consumes the crossing —
+/// subscription becomes {app, analytics}, the watermark advances — and later
+/// module sections warn as subscribed-but-unrequested until a deploy names
+/// them (`--modules all` then runs them).
+#[tokio::test]
+async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        // Pre-module history: two unmoduled files, applied bare (LEGACY).
+        helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("events.sql", "CREATE TABLE events (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            Vec::<String>::new(),
+            "legacy target: empty subscription = base only"
+        );
+        assert_eq!(crossing_watermark(&pool).await?, None);
+
+        // Modularize the existing files: a pure re-tag, no DDL.
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/users.sql\"]\n  analytics:\n    paths: [\"schema/events.sql\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "modularize", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // A later ordinary migration with module-tagged sections.
+        helper.write_schema_file(
+            "users.sql",
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT);",
+        )?;
+        helper.write_schema_file(
+            "events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY, kind TEXT);",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "second"])
+            .assert()
+            .success();
+
+        // Bare apply: the crossing is consumed (source = the base, always
+        // whole on a fully-applied target) BEFORE migration `second` is
+        // considered, so its app/analytics sections warn as
+        // subscribed-but-unrequested and are skipped.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "module 'app' is established on this target but not in the requested set",
+            ))
+            .stderr(predicate::str::contains("schema drift"));
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["analytics".to_string(), "app".to_string()],
+            "the crossing rewrote the subscription through the remaps"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64),
+            "the watermark advanced to the consumed re-anchor"
+        );
+        let events = crossing_events(&pool).await?;
+        assert_eq!(events.len(), 1, "exactly one crossing recorded: {events:?}");
+        assert_eq!(
+            events[0],
+            (
+                re_anchor_version as i64,
+                "(base only)".to_string(),
+                "analytics,app".to_string()
+            )
+        );
+
+        // Skipped means skipped: the module columns don't exist yet.
+        let email_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'email')",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(!email_exists, "bare apply never grows the target's surface");
+
+        // Consumed once: a second bare apply records no new crossing.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        assert_eq!(crossing_events(&pool).await?.len(), 1);
+
+        // The operator updates the deploy command once: --modules all runs
+        // the skipped sections.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+        let email_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'email')",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(email_exists);
+
+        // Status reads the stored subscription (and raises no divergence
+        // warning — legacy default rows imply no module).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "status",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("app"))
+            .stdout(predicate::str::contains("established"));
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Split into a brand-new module: objects move `app → metrics` where
+/// `metrics` never existed. The stamp is `remaps="app"` alone (no
+/// self-inclusion — metrics held nothing before), so the crossing
+/// auto-subscribes it: the target already holds every object metrics owns;
+/// declining would orphan them. Also pins provision-from-baseline W
+/// initializing the watermark to W with NO crossing events.
+#[tokio::test]
+async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n",
+        )?;
+        helper.write_schema_file("app/users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file(
+            "app/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+        let provision_baseline = latest_baseline_version(helper)?;
+
+        // Fresh provision from baseline W: provision never crosses — it
+        // initializes the watermark to W and writes the subscription from
+        // what was provisioned.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "app",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(subscription_modules(&pool).await?, vec!["app".to_string()]);
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(provision_baseline as i64),
+            "provision initializes the watermark to its baseline's version"
+        );
+        assert_eq!(
+            crossing_events(&pool).await?.len(),
+            0,
+            "provision never crosses"
+        );
+
+        // Move events into a brand-new module.
+        std::fs::remove_file(helper.project_root.join("schema/app/events.sql"))?;
+        helper.write_schema_file(
+            "metrics/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n  metrics:\n    paths: [\"schema/metrics/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+        assert!(re_anchor_version > provision_baseline);
+
+        // The stamp: brand-new module lists only the source, no self.
+        let baseline_sql =
+            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        assert!(
+            baseline_sql.contains(r#"module="metrics" remaps="app""#),
+            "brand-new module stamps the source alone:\n{baseline_sql}"
+        );
+
+        // Bare apply consumes the crossing: metrics auto-subscribes (app
+        // survives — it still owns users in the post-split partition).
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["app".to_string(), "metrics".to_string()]
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Move into a PRE-EXISTING module the target lacks: self-inclusion stamps
+/// `remaps="a,b"`, so a target subscribed to `a` but not `b` hits
+/// some-but-not-all — the membrane error names the adoption; adopting `b`
+/// (pure replay — the only baseline is the unconsumed re-anchor itself, which
+/// is never an adoption source) then lets the crossing succeed.
+#[tokio::test]
+async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("a/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("b/z.sql", "CREATE TABLE z (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // SUBSET target: a only (b never deployed here).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(table_exists(&pool, "y").await?);
+        assert!(!table_exists(&pool, "z").await?);
+
+        // Re-tag: y moves a → b (b pre-existing). Self-inclusion stamps both.
+        std::fs::remove_file(helper.project_root.join("schema/a/y.sql"))?;
+        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "move_y", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+        let baseline_sql =
+            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        assert!(
+            baseline_sql.contains(r#"module="b" remaps="a,b""#),
+            "pre-existing module self-includes:\n{baseline_sql}"
+        );
+
+        // The membrane: bare apply refuses, naming the adoption (replay — the
+        // re-anchor itself is not an adoption source).
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "adopt b before applying past {re_anchor_version}"
+            )))
+            .stderr(predicate::str::contains("migrate apply --modules b"));
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["a".to_string()],
+            "a blocked crossing mutates nothing"
+        );
+        assert_eq!(crossing_events(&pool).await?.len(), 0);
+
+        // Adopt b by replay: its pre-crossing history (z) lands, then the
+        // same run crosses the re-anchor with both sources whole.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "b",
+            ])
+            .assert()
+            .success();
+        assert!(table_exists(&pool, "z").await?);
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["a".to_string(), "b".to_string()],
+            "a survives (still owns x); b adopted then carried through the crossing"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
+        assert_eq!(crossing_events(&pool).await?.len(), 1);
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Merge `a, b → c` on a target subscribed to both: the crossing collapses
+/// the subscription to {c}; the wholly-absorbed sources drop out.
+#[tokio::test]
+async fn test_merge_with_both_sources_collapses() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+
+        // Merge: both files move into module c; a and b disappear.
+        std::fs::remove_file(helper.project_root.join("schema/a/x.sql"))?;
+        std::fs::remove_file(helper.project_root.join("schema/b/y.sql"))?;
+        helper.write_schema_file("c/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("c/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  c:\n    paths: [\"schema/c/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "merge", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+        let baseline_sql =
+            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        assert!(
+            baseline_sql.contains(r#"module="c" remaps="a,b""#),
+            "merge stamps every distinct prior owner:\n{baseline_sql}"
+        );
+
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["c".to_string()],
+            "both sources whole -> c subscribed, absorbed a and b removed"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Demotion `a → (unmoduled)`: with the source subscribed the crossing
+/// removes it (its objects are base now); without it, the crossing blocks —
+/// the base must be whole everywhere — and the STRONG membrane refuses even
+/// the BASE sections of every later version.
+#[tokio::test]
+async fn test_demotion_crossing_and_strong_membrane() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  k:\n    paths: [\"schema/k/**\"]\n",
+        )?;
+        helper.write_schema_file("meta.sql", "CREATE TABLE meta (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("k/w.sql", "CREATE TABLE w (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Target 1: has a (and k). Target 2: k only — lacks a.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+        let target2_url = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &target2_url,
+                "--modules",
+                "k",
+            ])
+            .assert()
+            .success();
+
+        // Demote a: its file becomes unmoduled (k stays a module).
+        std::fs::remove_file(helper.project_root.join("schema/a/x.sql"))?;
+        helper.write_schema_file("x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  k:\n    paths: [\"schema/k/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "demote", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+        let baseline_sql =
+            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        assert!(
+            baseline_sql.contains(r#"name="default" remaps="(unmoduled),a""#),
+            "demotion: an unmoduled section listing the demoted module as a source \
+             (self-included base — the section also retained base objects):\n{baseline_sql}"
+        );
+
+        // A LATER base-only migration — the membrane must refuse even this.
+        helper.write_schema_file(
+            "meta.sql",
+            "CREATE TABLE meta (id SERIAL PRIMARY KEY, note TEXT);",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "base_change"])
+            .assert()
+            .success();
+
+        // Target 1 (a subscribed): demotion removes a; the base migration runs.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        let pool1 = helper.connect_to_dev_db().await?;
+        assert_eq!(
+            subscription_modules(&pool1).await?,
+            vec!["k".to_string()],
+            "demoted module drops out; its objects are base now"
+        );
+        assert_eq!(
+            crossing_watermark(&pool1).await?,
+            Some(re_anchor_version as i64)
+        );
+        let note_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'meta' AND column_name = 'note')",
+        )
+        .fetch_one(&pool1)
+        .await?;
+        assert!(note_exists);
+        pool1.close().await;
+
+        // Target 2 (a never subscribed): the crossing blocks — and the strong
+        // membrane refuses the base migration BEYOND the re-anchor too.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &target2_url])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "adopt a before applying past {re_anchor_version}"
+            )));
+        let pool2 = sqlx::PgPool::connect(&target2_url).await?;
+        let note_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'meta' AND column_name = 'note')",
+        )
+        .fetch_one(&pool2)
+        .await?;
+        assert!(
+            !note_exists,
+            "strong membrane: base sections of versions past the blocked crossing must not run"
+        );
+        // Zero trace of the refused migration, and no crossing recorded.
+        let base_change_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.pgmt_migrations WHERE description = 'base_change'",
+        )
+        .fetch_one(&pool2)
+        .await?;
+        assert_eq!(base_change_rows, 0);
+        assert_eq!(crossing_events(&pool2).await?.len(), 0);
+        assert_eq!(subscription_modules(&pool2).await?, vec!["k".to_string()]);
+        pool2.close().await;
+
+        Ok(())
+    })
+    .await
+}
+
+/// `migrate status --target-url` is READ-ONLY: on a target whose tracking
+/// tables predate the subscription tables it reports gracefully (a
+/// pre-subscription note, establishment derived from section rows) and runs
+/// no DDL — the subscription tables must NOT appear as a side effect.
+#[tokio::test]
+async fn test_status_on_pre_subscription_target_is_read_only() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n",
+        )?;
+        helper.write_schema_file("core/c.sql", "CREATE TABLE c (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Hand-build a pre-subscription target: main + sections tables in the
+        // old shape, with a completed core row — no subscription tables.
+        let pool = helper.connect_to_dev_db().await?;
+        sqlx::query(
+            "CREATE TABLE public.pgmt_migrations (
+                 version BIGINT NOT NULL, description TEXT NOT NULL,
+                 applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                 checksum TEXT NOT NULL, applied_by TEXT DEFAULT CURRENT_USER,
+                 is_baseline BOOLEAN NOT NULL, PRIMARY KEY (version, is_baseline))",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE public.pgmt_migrations_sections (
+                 migration_version BIGINT NOT NULL, is_baseline BOOLEAN NOT NULL,
+                 section_name TEXT NOT NULL, section_order INT NOT NULL,
+                 status TEXT NOT NULL, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ,
+                 attempts INT DEFAULT 0, last_error TEXT, rows_affected BIGINT,
+                 duration_ms BIGINT, checksum TEXT, mode TEXT, module TEXT,
+                 applied_by TEXT, pgmt_version TEXT,
+                 PRIMARY KEY (migration_version, is_baseline, section_name))",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO public.pgmt_migrations (version, description, checksum, is_baseline)
+             VALUES (1, 'initial', 'x', FALSE)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO public.pgmt_migrations_sections
+                 (migration_version, is_baseline, section_name, section_order, status, module)
+             VALUES (1, FALSE, 'core', 0, 'completed', 'core')",
+        )
+        .execute(&pool)
+        .await?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "status",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("pre-subscription target"));
+
+        // Read-only: status must not have created the subscription tables.
+        let modules_table_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.pgmt_migrations_modules') IS NOT NULL")
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            !modules_table_exists,
+            "status is read-only: no subscription tables may appear"
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// An irrelevant re-anchor (its sources entirely outside the target's
+/// subscription) is still CROSSED on a subset target: the watermark advances
+/// and a crossing event is recorded, but the subscription is untouched —
+/// crossing means evaluated-and-consumed, not mutated.
+#[tokio::test]
+async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  analytics:\n    paths: [\"schema/an/**\"]\n",
+        )?;
+        helper.write_schema_file("core/c.sql", "CREATE TABLE c (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("an/e.sql", "CREATE TABLE e (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // SUBSET target: core only.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+
+        // Rename analytics → reports: a re-tag whose source (analytics) this
+        // target never had.
+        std::fs::remove_file(helper.project_root.join("schema/an/e.sql"))?;
+        helper.write_schema_file("rp/e.sql", "CREATE TABLE e (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  reports:\n    paths: [\"schema/rp/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "rename_analytics", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["core".to_string()],
+            "irrelevant remap: subscription unchanged"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64),
+            "…but the crossing is still consumed: the watermark advances"
+        );
+        let events = crossing_events(&pool).await?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].1, events[0].2,
+            "crossing recorded with before == after"
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}

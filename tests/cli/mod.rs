@@ -42,6 +42,7 @@ pub mod migrate_reconstruction;
 pub mod migrate_resolve;
 pub mod migrate_status;
 pub mod migrate_validate_json;
+pub mod modules_crossing;
 pub mod modules_deploy;
 pub mod modules_generation;
 pub mod nontransactional_sections;
