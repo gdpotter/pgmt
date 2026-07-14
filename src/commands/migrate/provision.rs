@@ -93,9 +93,20 @@ async fn provision_inner(
         };
 
         if !needs_baseline.is_empty() {
-            let baseline = latest_baseline
-                .as_ref()
-                .expect("modules need baseline content, so a baseline exists");
+            // Adopt from the ADOPTION baseline (§14 routed through the
+            // target's crossed world — never an unconsumed re-anchor, whose
+            // sections could collide with objects the target holds under a
+            // remap source): needing_baseline_content flagged these modules
+            // against exactly this baseline.
+            let adoption_version = runtime
+                .adoption_baseline()
+                .map(|(version, _)| version)
+                .expect("modules need baseline content, so an adoption baseline exists");
+            let baseline = crate::migration::discover_baselines(&baselines_dir)?
+                .into_iter()
+                .find(|b| b.version == adoption_version)
+                .expect("the adoption baseline was discovered from this directory");
+            let baseline = &baseline;
 
             // Adoption constraint: a module's baseline sections may
             // reference its dependencies' objects, so those must already be

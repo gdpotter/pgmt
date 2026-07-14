@@ -814,10 +814,9 @@ pub struct ModuleRuntime {
     watermark: Option<u64>,
     /// All committed re-anchors, version-ascending.
     re_anchors: Vec<ReAnchor>,
-    /// The latest committed baseline's sections — the adoption-routing input
-    /// (a module with a section here needs `provision` to adopt; one without
-    /// is younger than the baseline and adopts by replay).
-    latest_baseline_sections: Vec<crate::migration::section_parser::MigrationSection>,
+    /// Every committed baseline's sections, by version — the adoption-routing
+    /// input (see [`Self::adoption_baseline`]).
+    baselines: BTreeMap<u64, Vec<crate::migration::section_parser::MigrationSection>>,
 }
 
 impl ModuleRuntime {
@@ -841,35 +840,62 @@ impl ModuleRuntime {
         };
 
         let re_anchors = discover_re_anchors(baselines_dir)?;
-        let latest_baseline_sections = match crate::migration::find_latest_baseline(baselines_dir)?
-        {
-            Some(baseline) => {
-                let sql = std::fs::read_to_string(&baseline.path)?;
-                crate::migration::parse_migration_sections(&baseline.path, &sql)?
-            }
-            None => Vec::new(),
-        };
+        let mut baselines = BTreeMap::new();
+        for baseline in crate::migration::discover_baselines(baselines_dir)? {
+            let sql = std::fs::read_to_string(&baseline.path)?;
+            let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
+            baselines.insert(baseline.version, sections);
+        }
 
         Ok(Self {
             established: stored.modules,
             watermark,
             re_anchors,
-            latest_baseline_sections,
+            baselines,
         })
     }
 
+    /// The baseline adoption reads content from (§14's "latest committed
+    /// baseline"), interpreted relative to the target's crossed world: the
+    /// latest baseline that is NOT an unconsumed re-anchor.
+    ///
+    /// An unconsumed re-anchor (above the target's crossing watermark) is
+    /// written in a vocabulary the target hasn't crossed into — its sections
+    /// may carry objects the target already holds under the remap *source*
+    /// module, so applying them pre-crossing would collide. §13's
+    /// move-into-pre-existing and §19e's merge guidance both prescribe
+    /// adopting the missing source *in the pre-crossing world* (replay, or an
+    /// earlier baseline); the crossing then rewrites ownership. Checkpoint
+    /// baselines (no remaps) and already-crossed re-anchors stay usable.
+    pub fn adoption_baseline(
+        &self,
+    ) -> Option<(u64, &[crate::migration::section_parser::MigrationSection])> {
+        self.baselines
+            .iter()
+            .rev()
+            .find(|(version, _)| {
+                let unconsumed_re_anchor = self.re_anchors.iter().any(|ra| ra.version == **version)
+                    && self.watermark.is_none_or(|w| **version > w);
+                !unconsumed_re_anchor
+            })
+            .map(|(version, sections)| (*version, sections.as_slice()))
+    }
+
     /// Of `modules`, those not established here whose pre-baseline state
-    /// lives in the latest committed baseline — adopting them requires
-    /// `provision --modules` (baseline content), not replay.
+    /// lives in the adoption baseline ([`Self::adoption_baseline`]) —
+    /// adopting them requires `provision --modules` (baseline content), not
+    /// replay. Modules absent from it are younger: their whole (break-free,
+    /// §10) history is in the migrations and plain `apply` adopts them.
     pub fn needing_baseline_content<'a, I: IntoIterator<Item = &'a String>>(
         &self,
         modules: I,
     ) -> Vec<String> {
+        let baseline_sections = self.adoption_baseline().map(|(_, s)| s).unwrap_or(&[]);
         modules
             .into_iter()
             .filter(|m| !self.established.contains(*m))
             .filter(|m| {
-                self.latest_baseline_sections
+                baseline_sections
                     .iter()
                     .any(|s| s.module.as_deref() == Some(m.as_str()))
             })
