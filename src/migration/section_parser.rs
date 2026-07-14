@@ -760,6 +760,41 @@ CREATE TABLE test (id INT);
         assert_eq!(sections[0].description, Some("This has spaces".to_string()));
     }
 
+    /// `remaps` is accepted on MIGRATION sections too (modules.md §11):
+    /// acquisition sections carry the same attribute, same single-source
+    /// grammar as baseline remap sections.
+    #[test]
+    fn test_parse_migration_remap_section() {
+        let sql = r#"
+-- objects moved from module 'a'; runs only on targets without it.
+-- pgmt:section name="b" module="b" remaps="a"
+CREATE TABLE y (id SERIAL PRIMARY KEY);
+
+-- pgmt:section name="default" remaps="a"
+CREATE TABLE x (id SERIAL PRIMARY KEY);
+"#;
+        let sections = parse_migration_sections(Path::new("100_move.sql"), sql).unwrap();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].module.as_deref(), Some("b"));
+        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+        assert_eq!(sections[1].module, None);
+        assert_eq!(sections[1].remaps, vec!["a".to_string()]);
+    }
+
+    /// The comma-list remaps form is retired (§12): a provenance-cut remap
+    /// section has exactly one source, in migrations and baselines alike.
+    #[test]
+    fn test_parse_multi_source_remaps_is_error() {
+        let sql = r#"
+-- pgmt:section name="c" module="c" remaps="a,b"
+CREATE TABLE z (id SERIAL PRIMARY KEY);
+"#;
+        let err = parse_migration_sections(Path::new("bad.sql"), sql)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly one prior owner"), "{err}");
+    }
+
     #[test]
     fn test_parse_key_value_pairs() {
         use super::parse_key_value_pairs;

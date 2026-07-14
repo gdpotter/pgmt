@@ -298,6 +298,19 @@ async fn replay_migrations(
         let sections = parse_migration_sections(&migration.path, &migration_sql)?;
         validate_sections(&sections)?;
 
+        // Full-replay pin (modules.md §12): shadow replay builds history with
+        // every module present, so a migration REMAP section's source always
+        // exists during replay — the acquired objects are already there
+        // (created by the source's history or the covering baseline), and
+        // executing the section would double-create. The uniform execution
+        // rule therefore satisfied-skips migration remap sections in replay,
+        // always. Baseline remap sections are different (a fresh shadow holds
+        // nothing) and replay through `apply_baseline_file_sections`.
+        let sections: Vec<MigrationSection> = sections
+            .into_iter()
+            .filter(|s| s.remaps.is_empty())
+            .collect();
+
         execute_validation_sections(shadow_pool, &sections, config, attribution.as_deref_mut())
             .await
             .with_context(|| {

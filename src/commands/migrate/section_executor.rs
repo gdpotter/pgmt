@@ -118,8 +118,10 @@ impl SectionExecutor {
             return self.execute_validation(section).await;
         }
 
-        // Check if section already completed (for resume)
-        if let Some(SectionStatus::Completed) = get_section_status(
+        // Check if section is already covered (for resume): completed, or
+        // satisfied — a source-covered remap section whose objects are already
+        // present (modules.md §9); re-executing it would double-create.
+        if get_section_status(
             &self.pool,
             &self.tracking_table,
             migration_version,
@@ -127,6 +129,7 @@ impl SectionExecutor {
             &section.name,
         )
         .await?
+        .is_some_and(|st| st.is_covered())
         {
             self.reporter.skip_section(&section.name);
             return Ok(());
