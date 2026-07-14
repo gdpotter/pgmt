@@ -15,7 +15,7 @@ use crate::catalog::Catalog;
 use crate::catalog::file_dependencies::FileToObjectMapping;
 use crate::catalog::id::DbObjectId;
 use crate::config::Config;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use glob::Pattern;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -628,10 +628,16 @@ pub fn parse_section_files(
 }
 
 /// Modules with at least one Completed section on the target — the *literal*
-/// established set. (The remap walk, which carries establishment through
-/// re-tags, lands with the wholeness membranes; until then re-tagged history
-/// resolves through the re-anchoring baseline's own tagged sections once a
-/// target consumes it.)
+/// established set, read off the stored section rows.
+///
+/// **Audit-side cross-check only.** Establishment itself is the stored
+/// subscription ([`crate::migration_tracking::subscription`], §13) — the
+/// module literals on section rows are epoch-stamped historical facts, never
+/// rewritten on re-tag, so after a crossing they legitimately diverge from
+/// the subscription. `migrate status`/`validate` use this to flag rows that
+/// name a module the subscription doesn't include (stored truth, derived
+/// audit — the same pattern as file checksums). Never feed this into
+/// enforcement decisions.
 pub async fn literal_established_modules(
     pool: &sqlx::PgPool,
     tracking_table: &crate::config::types::TrackingTable,
@@ -659,38 +665,428 @@ pub async fn literal_established_modules(
     Ok(established)
 }
 
-/// Of the named modules, those that are not established here and whose
-/// pre-baseline state lives in the latest committed baseline — adopting them
-/// requires that baseline's content (`provision --modules`), not replay.
-/// Modules absent from the baseline are younger than it: their whole history
-/// is in the migrations and plain `apply` can adopt them.
-pub fn modules_needing_baseline_content(
-    selection: &ModuleSelection,
-    established: &BTreeSet<String>,
-    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
-) -> Vec<String> {
-    let Some(named) = selection.named() else {
-        return Vec::new();
-    };
-    let Some(latest_baseline_sections) = files
-        .iter()
-        .filter(|((_, is_baseline), _)| *is_baseline)
-        .max_by_key(|((version, _), _)| *version)
-        .map(|(_, sections)| sections)
-    else {
-        return Vec::new();
-    };
+/// A committed **re-anchoring baseline**: a baseline file with at least one
+/// `remaps=` section (§12). Re-anchors are the only baselines apply ever
+/// consumes — as one-time *crossings* (§13) that rewrite the target's stored
+/// subscription. Plain checkpoint baselines stay inert to apply.
+#[derive(Debug, Clone)]
+pub struct ReAnchor {
+    pub version: u64,
+    /// `(section's module, remap sources)` for every section carrying
+    /// `remaps=`. `None` = the base on both slots (an unmoduled section is a
+    /// demotion target; an `(unmoduled)` source is the base).
+    pub remap_sections: Vec<(Option<String>, Vec<Option<String>>)>,
+    /// Modules that still exist in the post-V partition — i.e. own at least
+    /// one section in this baseline (a full schema snapshot). A remap *source*
+    /// survives the crossing iff it is in here; a wholly-absorbed module is
+    /// not, and drops out of the subscription. Self-interpreting from the
+    /// checksummed artifact — never from mutable yaml.
+    pub surviving_modules: BTreeSet<String>,
+}
 
-    named
-        .iter()
-        .filter(|m| !established.contains(*m))
-        .filter(|m| {
-            latest_baseline_sections
-                .iter()
-                .any(|s| s.module.as_deref() == Some(m.as_str()))
+/// Parse the committed baselines and return the re-anchors among them, in
+/// version order. A baseline with no `remaps=` sections is not a re-anchor.
+pub fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec<ReAnchor>> {
+    let mut re_anchors = Vec::new();
+    for baseline in crate::migration::discover_baselines(baselines_dir)? {
+        let sql = std::fs::read_to_string(&baseline.path)?;
+        let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
+        let remap_sections: Vec<(Option<String>, Vec<Option<String>>)> = sections
+            .iter()
+            .filter(|s| !s.remaps.is_empty())
+            .map(|s| {
+                let sources = s
+                    .remaps
+                    .iter()
+                    .map(|r| {
+                        if r == UNMODULED_DISPLAY {
+                            None
+                        } else {
+                            Some(r.clone())
+                        }
+                    })
+                    .collect();
+                (s.module.clone(), sources)
+            })
+            .collect();
+        if remap_sections.is_empty() {
+            continue;
+        }
+        let surviving_modules = sections.iter().filter_map(|s| s.module.clone()).collect();
+        re_anchors.push(ReAnchor {
+            version: baseline.version,
+            remap_sections,
+            surviving_modules,
+        });
+    }
+    // discover_baselines sorts, but pin it: the crossing loop depends on
+    // version order.
+    re_anchors.sort_by_key(|r| r.version);
+    Ok(re_anchors)
+}
+
+/// Outcome of evaluating one re-anchor against a target's subscription.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CrossingCheck {
+    /// Wholeness holds: this is the subscription after the rewrite. May equal
+    /// the input — a re-anchor whose sources are entirely outside the
+    /// subscription is still *crossed* (evaluated and consumed, watermark
+    /// advances), just not a mutation.
+    Whole { rewritten: BTreeSet<String> },
+    /// Wholeness fails: these source modules must be adopted before the
+    /// target can apply past this re-anchor (the strong membrane, §13).
+    Blocked { missing: BTreeSet<String> },
+}
+
+/// The wholeness rule (§13), as pure set operations on the subscription.
+/// Per remap section:
+///
+/// - A source is *established* if it is the base (always whole on a target
+///   that settled every version < V — the crossing's position guarantees
+///   that) or a subscribed module.
+/// - Section into a **module**: no source established → irrelevant here, no
+///   change. All established → the rewrite applies: subscribe the section's
+///   module (brand-new modules auto-subscribe — the target already holds
+///   every object they own; a *pre-existing* module lists itself as a source
+///   via self-inclusion (§12), so a target lacking it hits
+///   some-but-not-all instead). Some-but-not-all → blocked on the missing
+///   sources (merge / move-into-pre-existing).
+/// - Section into the **base** (demotion): always relevant — the base is
+///   whole everywhere, so every source must be established or the crossing
+///   blocks.
+/// - A source module survives iff it still exists in the post-V partition
+///   ([`ReAnchor::surviving_modules`]); wholly-absorbed sources drop out.
+pub fn evaluate_crossing(re_anchor: &ReAnchor, subscription: &BTreeSet<String>) -> CrossingCheck {
+    let mut rewritten = subscription.clone();
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+
+    for (target, sources) in &re_anchor.remap_sections {
+        let is_established =
+            |s: &Option<String>| s.as_ref().is_none_or(|m| subscription.contains(m));
+        let any_established = sources.iter().any(is_established);
+        let all_established = sources.iter().all(is_established);
+
+        // A module-target section with no established source is someone
+        // else's remap; a base-target section (demotion) is always relevant.
+        let relevant = target.is_none() || any_established;
+        if !relevant {
+            continue;
+        }
+        if !all_established {
+            missing.extend(
+                sources
+                    .iter()
+                    .filter(|s| !is_established(s))
+                    .flatten()
+                    .cloned(),
+            );
+            continue;
+        }
+
+        if let Some(module) = target {
+            rewritten.insert(module.clone());
+        }
+        for source in sources.iter().flatten() {
+            if !re_anchor.surviving_modules.contains(source) {
+                rewritten.remove(source);
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        CrossingCheck::Whole { rewritten }
+    } else {
+        CrossingCheck::Blocked { missing }
+    }
+}
+
+/// The per-run module state a deploy command carries: the target's stored
+/// subscription plus the repo's committed re-anchors. Built once per command
+/// (under the advisory lock, after the tracking tables are ensured), mutated
+/// only through its own methods so the in-memory view and the stored tables
+/// never diverge within a run.
+pub struct ModuleRuntime {
+    /// The subscription: modules established on this target (base excluded —
+    /// it is established everywhere). This is THE establishment source for
+    /// every consumer (skip notices, adoption guard, dependency closure).
+    pub established: BTreeSet<String>,
+    /// The crossing watermark: re-anchors `≤` it are consumed or moot.
+    watermark: Option<u64>,
+    /// All committed re-anchors, version-ascending.
+    re_anchors: Vec<ReAnchor>,
+    /// The latest committed baseline's sections — the adoption-routing input
+    /// (a module with a section here needs `provision` to adopt; one without
+    /// is younger than the baseline and adopts by replay).
+    latest_baseline_sections: Vec<crate::migration::section_parser::MigrationSection>,
+}
+
+impl ModuleRuntime {
+    /// Load the stored subscription and the committed re-anchors. For a
+    /// target whose rows predate the subscription tables' watermark (a
+    /// pre-subscription provision), fall back to the target's honest applied-
+    /// baseline watermark: provisioning from baseline W lands directly in W's
+    /// world, so every re-anchor ≤ W is moot (§13) — the fallback
+    /// reconstructs exactly that.
+    pub async fn load(
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        baselines_dir: &std::path::Path,
+    ) -> Result<Self> {
+        use crate::migration_tracking::subscription;
+
+        let stored = subscription::load_subscription(pool, tracking_table).await?;
+        let watermark = match stored.watermark {
+            Some(w) => Some(w),
+            None => applied_baseline_watermark(pool, tracking_table).await?,
+        };
+
+        let re_anchors = discover_re_anchors(baselines_dir)?;
+        let latest_baseline_sections = match crate::migration::find_latest_baseline(baselines_dir)?
+        {
+            Some(baseline) => {
+                let sql = std::fs::read_to_string(&baseline.path)?;
+                crate::migration::parse_migration_sections(&baseline.path, &sql)?
+            }
+            None => Vec::new(),
+        };
+
+        Ok(Self {
+            established: stored.modules,
+            watermark,
+            re_anchors,
+            latest_baseline_sections,
         })
-        .cloned()
-        .collect()
+    }
+
+    /// Of `modules`, those not established here whose pre-baseline state
+    /// lives in the latest committed baseline — adopting them requires
+    /// `provision --modules` (baseline content), not replay.
+    pub fn needing_baseline_content<'a, I: IntoIterator<Item = &'a String>>(
+        &self,
+        modules: I,
+    ) -> Vec<String> {
+        modules
+            .into_iter()
+            .filter(|m| !self.established.contains(*m))
+            .filter(|m| {
+                self.latest_baseline_sections
+                    .iter()
+                    .any(|s| s.module.as_deref() == Some(m.as_str()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// **The crossing loop (§13).** Consume, in version order, every
+    /// committed re-anchor above the watermark and at or below `ceiling`
+    /// (`None` = all of them — the end-of-apply sweep that makes a pure
+    /// re-tag land on a fully-up-to-date target).
+    ///
+    /// Per re-anchor V: check wholeness against the subscription; on success
+    /// rewrite the subscription through V's remaps, record the crossing event
+    /// and advance the watermark — all in ONE transaction (the caller holds
+    /// the advisory lock). On wholeness failure, error — the caller must
+    /// treat this as the strong membrane: no section of any version > V (V
+    /// included) may run, base sections included.
+    ///
+    /// Crossing ≠ mutation: a re-anchor whose sources are entirely outside
+    /// the subscription still records its crossing and advances the
+    /// watermark (evaluated and consumed).
+    pub async fn cross_re_anchors_through(
+        &mut self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        ceiling: Option<u64>,
+    ) -> Result<()> {
+        use crate::migration_tracking::subscription;
+
+        for i in 0..self.re_anchors.len() {
+            let re_anchor = &self.re_anchors[i];
+            if self.watermark.is_some_and(|w| re_anchor.version <= w) {
+                continue; // already consumed, or moot (≤ the provision baseline)
+            }
+            if ceiling.is_some_and(|c| re_anchor.version > c) {
+                break; // not yet reached in the apply order
+            }
+
+            match evaluate_crossing(re_anchor, &self.established) {
+                CrossingCheck::Blocked { missing } => {
+                    let needs_baseline = self.needing_baseline_content(missing.iter());
+                    let replay: Vec<String> = missing
+                        .iter()
+                        .filter(|m| !needs_baseline.contains(*m))
+                        .cloned()
+                        .collect();
+                    let mut guidance = String::new();
+                    if !replay.is_empty() {
+                        guidance.push_str(&format!(
+                            "\n  pgmt migrate apply --modules {}   (replay)",
+                            replay.join(",")
+                        ));
+                    }
+                    if !needs_baseline.is_empty() {
+                        guidance.push_str(&format!(
+                            "\n  pgmt migrate provision --modules {}   (needs baseline content)",
+                            needs_baseline.join(",")
+                        ));
+                    }
+                    anyhow::bail!(
+                        "re-anchor {version} remaps module(s) this target only partially has: \
+                         adopt {missing_list} before applying past {version}.\n\
+                         Nothing at or after version {version} was applied (crossing a re-anchor \
+                         with a partial module would leave it split across two vocabularies).\n\
+                         Adopt first:{guidance}\n\
+                         then re-run.",
+                        version = re_anchor.version,
+                        missing_list = missing.iter().cloned().collect::<Vec<_>>().join(", "),
+                        guidance = guidance,
+                    );
+                }
+                CrossingCheck::Whole { rewritten } => {
+                    let mut tx = pool.begin().await?;
+                    for module in rewritten.difference(&self.established) {
+                        subscription::add_module(
+                            &mut *tx,
+                            tracking_table,
+                            module,
+                            &subscription::SubscriptionSource::Crossing(re_anchor.version),
+                        )
+                        .await?;
+                    }
+                    for module in self.established.difference(&rewritten) {
+                        subscription::remove_module(&mut *tx, tracking_table, module).await?;
+                    }
+                    subscription::set_watermark(&mut *tx, tracking_table, re_anchor.version)
+                        .await?;
+                    subscription::record_event(
+                        &mut *tx,
+                        tracking_table,
+                        "crossing",
+                        Some(re_anchor.version),
+                        &self.established,
+                        &rewritten,
+                    )
+                    .await?;
+                    tx.commit().await.with_context(|| {
+                        format!(
+                            "Failed to record crossing of re-anchor {}",
+                            re_anchor.version
+                        )
+                    })?;
+
+                    if rewritten != self.established {
+                        println!(
+                            "Crossed re-anchor {}: subscription {} -> {}",
+                            re_anchor.version,
+                            subscription::render_subscription_set(&self.established),
+                            subscription::render_subscription_set(&rewritten),
+                        );
+                    }
+                    self.established = rewritten;
+                    self.watermark = Some(re_anchor.version);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Record a fresh provision's outcome: subscribe the provisioned modules
+    /// and initialize the crossing watermark to the baseline's version —
+    /// provision never crosses; every re-anchor ≤ W is moot (§13). One
+    /// transaction, under the caller's advisory lock.
+    pub async fn record_provisioned(
+        &mut self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        modules: &BTreeSet<String>,
+        baseline_version: Option<u64>,
+    ) -> Result<()> {
+        use crate::migration_tracking::subscription;
+
+        let mut tx = pool.begin().await?;
+        for module in modules {
+            subscription::add_module(
+                &mut *tx,
+                tracking_table,
+                module,
+                &subscription::SubscriptionSource::Provision,
+            )
+            .await?;
+        }
+        if let Some(version) = baseline_version {
+            subscription::set_watermark(&mut *tx, tracking_table, version).await?;
+        }
+        tx.commit()
+            .await
+            .context("Failed to record the provisioned module subscription")?;
+
+        self.established.extend(modules.iter().cloned());
+        if let Some(version) = baseline_version {
+            self.watermark = Some(version);
+        }
+        Ok(())
+    }
+
+    /// Record an explicit adoption: subscribe each of `modules` not already
+    /// subscribed (source = adopt). Idempotent for already-subscribed ones.
+    pub async fn record_adopted(
+        &mut self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        modules: &BTreeSet<String>,
+    ) -> Result<()> {
+        use crate::migration_tracking::subscription;
+
+        let new: Vec<&String> = modules
+            .iter()
+            .filter(|m| !self.established.contains(*m))
+            .collect();
+        if new.is_empty() {
+            return Ok(());
+        }
+        let mut tx = pool.begin().await?;
+        for module in &new {
+            subscription::add_module(
+                &mut *tx,
+                tracking_table,
+                module,
+                &subscription::SubscriptionSource::Adopt,
+            )
+            .await?;
+        }
+        tx.commit()
+            .await
+            .context("Failed to record module adoption")?;
+        self.established.extend(new.into_iter().cloned());
+        Ok(())
+    }
+}
+
+/// The target's honest applied-baseline watermark: the highest baseline
+/// version all of whose registered sections completed, or `None`. The
+/// crossing-watermark fallback for targets provisioned before the
+/// subscription tables existed.
+async fn applied_baseline_watermark(
+    pool: &sqlx::PgPool,
+    tracking_table: &crate::config::types::TrackingTable,
+) -> Result<Option<u64>> {
+    let main = crate::migration_tracking::format_tracking_table_name(tracking_table)?;
+    let sections = format!(
+        r#""{}"."{}_sections""#,
+        tracking_table.schema, tracking_table.name
+    );
+    let watermark: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT MAX(m.version) FROM {main} m
+         WHERE m.is_baseline AND NOT EXISTS (
+             SELECT 1 FROM {sections} s
+             WHERE s.is_baseline AND s.migration_version = m.version
+               AND s.status <> 'completed')",
+        main = main,
+        sections = sections,
+    ))
+    .fetch_one(pool)
+    .await?;
+    Ok(watermark.map(crate::migration_tracking::version_from_db))
 }
 
 /// Migration versions `≤ through_version` whose base/established-module
@@ -1388,6 +1784,180 @@ mod tests {
         let hist = historical(&[("users", None)]);
         compute_baseline_remaps(&mut sections, &hist);
         assert_eq!(sections[0].remaps, vec![UNMODULED_DISPLAY.to_string()]);
+    }
+
+    /// Build a ReAnchor from `(section module, sources)` remap tuples and the
+    /// modules surviving in the post-V partition. `None` = the base.
+    fn re_anchor(
+        version: u64,
+        remap_sections: &[(Option<&str>, &[Option<&str>])],
+        surviving: &[&str],
+    ) -> ReAnchor {
+        ReAnchor {
+            version,
+            remap_sections: remap_sections
+                .iter()
+                .map(|(m, sources)| {
+                    (
+                        m.map(str::to_string),
+                        sources.iter().map(|s| s.map(str::to_string)).collect(),
+                    )
+                })
+                .collect(),
+            surviving_modules: surviving.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn subs(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_crossing_modularization_from_base_auto_subscribes() {
+        // §19c: (unmoduled) → {app, analytics}. The base is always whole →
+        // the rewrite applies even on an empty subscription.
+        let ra = re_anchor(
+            1200,
+            &[(Some("app"), &[None]), (Some("analytics"), &[None])],
+            &["app", "analytics"],
+        );
+        assert_eq!(
+            evaluate_crossing(&ra, &BTreeSet::new()),
+            CrossingCheck::Whole {
+                rewritten: subs(&["analytics", "app"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_split_rewrites_subscription() {
+        // app → app, analytics: 'app' keeps a section (self-included via
+        // remaps="app") and 'analytics' acquires from 'app'.
+        let ra = re_anchor(
+            1300,
+            &[
+                (Some("app"), &[Some("app")]),
+                (Some("analytics"), &[Some("app")]),
+            ],
+            &["app", "analytics"],
+        );
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["app"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["analytics", "app"])
+            },
+            "app survives (still in the partition); analytics auto-subscribes"
+        );
+    }
+
+    #[test]
+    fn test_crossing_merge_with_both_sources_collapses() {
+        // a, b → c: both subscribed → c subscribed, a and b (absorbed, no
+        // sections of their own) drop out.
+        let ra = re_anchor(1600, &[(Some("c"), &[Some("a"), Some("b")])], &["c"]);
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a", "b"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["c"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_merge_some_but_not_all_blocks() {
+        // a, b → c with only a subscribed → blocked on b (§19e).
+        let ra = re_anchor(1600, &[(Some("c"), &[Some("a"), Some("b")])], &["c"]);
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a"])),
+            CrossingCheck::Blocked {
+                missing: subs(&["b"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_move_into_pre_existing_module() {
+        // Part of a → existing b: self-inclusion stamps remaps="a,b". A
+        // target with a but not b is the merge case in different clothes.
+        let ra = re_anchor(
+            1700,
+            &[(Some("b"), &[Some("a"), Some("b")])],
+            &["a", "b"], // partial move: a keeps objects of its own
+        );
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a"])),
+            CrossingCheck::Blocked {
+                missing: subs(&["b"])
+            },
+            "adopt b before crossing"
+        );
+        // With both: rewrite applies; a survives (still in the partition).
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a", "b"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["a", "b"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_move_into_brand_new_module() {
+        // a → brand-new b: remaps="a" alone (no self-inclusion — b held
+        // nothing before) → auto-subscribe b; a wholly absorbed → drops out.
+        let ra = re_anchor(1700, &[(Some("b"), &[Some("a")])], &["b"]);
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["b"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_demotion_with_source_subscribed() {
+        // a → base: a subscribed → removed (its objects are base now).
+        let ra = re_anchor(1800, &[(None, &[Some("a")])], &[]);
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a", "other"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["other"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_demotion_without_source_blocks() {
+        // a → base on a target without a: the base must be whole everywhere →
+        // adopt a before crossing.
+        let ra = re_anchor(1800, &[(None, &[Some("a")])], &[]);
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["other"])),
+            CrossingCheck::Blocked {
+                missing: subs(&["a"])
+            }
+        );
+    }
+
+    #[test]
+    fn test_crossing_irrelevant_re_anchor_is_inert_but_crossed() {
+        // A split of analytics on a core-only target: sources entirely
+        // outside the subscription → wholeness vacuously satisfied, no
+        // mutation (the caller still records the crossing and advances the
+        // watermark).
+        let ra = re_anchor(
+            1900,
+            &[
+                (Some("analytics"), &[Some("analytics")]),
+                (Some("reports"), &[Some("analytics")]),
+            ],
+            &["analytics", "reports"],
+        );
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["core"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["core"])
+            }
+        );
     }
 
     #[test]

@@ -10,10 +10,7 @@ use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     format_tracking_table_name, initialize_sections, register_migration_start, version_from_db,
 };
-use crate::modules::{
-    ModuleSelection, literal_established_modules, modules_needing_baseline_content,
-    parse_section_files,
-};
+use crate::modules::{ModuleRuntime, ModuleSelection};
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -155,17 +152,20 @@ async fn apply_with_module_guard(
         );
     }
 
-    // Module projects: derive what's established here and refuse adoptions
-    // that need baseline content — `apply` only ever replays sections; a
-    // module whose pre-baseline state lives in a committed baseline must be
-    // adopted via `provision --modules`.
-    let established = if selection.named().is_some() {
-        ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
-        ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
-        let files = parse_section_files(migrations, &root_dir.join(&config.directories.baselines))?;
-        let established =
-            literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
-        let needs_baseline = modules_needing_baseline_content(selection, &established, &files);
+    // The stored subscription is THE establishment source (§13): guards, skip
+    // notices and the crossing loop all read it through the runtime.
+    let mut runtime = ModuleRuntime::load(
+        pool,
+        &config.migration.tracking_table,
+        &root_dir.join(&config.directories.baselines),
+    )
+    .await?;
+
+    if let Some(named) = selection.named() {
+        // The adoption guard (§14): `apply` only ever replays sections; a
+        // module whose pre-baseline state lives in a committed baseline must
+        // be adopted via `provision --modules`.
+        let needs_baseline = runtime.needing_baseline_content(named.iter());
         if !needs_baseline.is_empty() {
             anyhow::bail!(
                 "adopting module(s) {} here requires baseline content — their pre-baseline \
@@ -175,12 +175,14 @@ async fn apply_with_module_guard(
                 needs_baseline.join(",")
             );
         }
-        established
-    } else {
-        BTreeSet::new()
-    };
+        // Explicitly requesting a module IS its adoption (§13/§14): subscribe
+        // any newly requested modules before replaying their sections.
+        runtime
+            .record_adopted(pool, &config.migration.tracking_table, named)
+            .await?;
+    }
 
-    apply_pending_migrations(pool, config, migrations, selection, &established).await
+    apply_pending_migrations(pool, config, migrations, selection, &mut runtime).await
 }
 
 /// Apply migration files to a database, skipping any already recorded in the
@@ -191,12 +193,21 @@ async fn apply_with_module_guard(
 /// `migrate provision` can't diverge. The caller selects which migrations to
 /// consider (e.g. provision passes only those after the baseline it just
 /// applied) and is responsible for connecting to the target.
+///
+/// The `runtime` carries the target's stored subscription and the committed
+/// re-anchors; this loop interleaves the **crossing loop** (§13) with section
+/// execution: each re-anchor V is crossed after every version < V settles and
+/// before version V's own sections run, and a final sweep after the last
+/// migration consumes trailing re-anchors (a pure re-tag lands on a
+/// fully-up-to-date target). A wholeness failure at V errors out here, which
+/// is the strong membrane: nothing at or beyond V — base sections included —
+/// executes.
 pub(crate) async fn apply_pending_migrations(
     pool: &PgPool,
     config: &Config,
     migrations: &[ParsedMigration],
     selection: &ModuleSelection,
-    established: &BTreeSet<String>,
+    runtime: &mut ModuleRuntime,
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
 
@@ -232,6 +243,19 @@ pub(crate) async fn apply_pending_migrations(
 
     // Apply unapplied migrations
     for migration in migrations {
+        // Crossing loop: consume every re-anchor at or below this version
+        // (everything before it is settled — this loop runs in version order
+        // and migration V's own sections are tagged in the post-V vocabulary,
+        // so the crossing must land first). A wholeness failure bails here,
+        // refusing this and every later version — the strong membrane.
+        runtime
+            .cross_re_anchors_through(
+                pool,
+                &config.migration.tracking_table,
+                Some(migration.version),
+            )
+            .await?;
+
         // Skip migrations covered by a recorded baseline.
         if baseline_version.is_some_and(|bv| migration.version <= bv) {
             // Distinguish the benign case (covered by, or at, the baseline) from
@@ -367,7 +391,7 @@ pub(crate) async fn apply_pending_migrations(
             }
         }
         for module in &skipped_modules {
-            if established.contains(*module) {
+            if runtime.established.contains(*module) {
                 eprintln!(
                     "Warning: module '{}' is established on this target but not in the \
                      requested set — its sections in migration {} were skipped. This is \
@@ -395,7 +419,7 @@ pub(crate) async fn apply_pending_migrations(
             for earlier in &sections[..idx] {
                 if let Some(module) = earlier.module.as_deref()
                     && !selection.selects(Some(module))
-                    && established.contains(module)
+                    && runtime.established.contains(module)
                     && statuses.get(&earlier.name) != Some(&SectionStatus::Completed)
                 {
                     anyhow::bail!(
@@ -538,6 +562,15 @@ pub(crate) async fn apply_pending_migrations(
         let reporter = SectionReporter::new(selected.len(), false);
         reporter.migration_summary(duration, selected.len());
     }
+
+    // Final sweep: every migration is settled, so consume any re-anchors
+    // beyond the last migration. This is what makes a pure re-tag (a
+    // re-anchor with no accompanying DDL) land on the next bare apply of a
+    // fully-up-to-date target — the loop keys off the watermark, not off
+    // pending migrations.
+    runtime
+        .cross_re_anchors_through(pool, &config.migration.tracking_table, None)
+        .await?;
 
     Ok(())
 }

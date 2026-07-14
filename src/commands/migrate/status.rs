@@ -147,8 +147,11 @@ struct ModuleTally {
 }
 
 /// Print the "Modules" summary: one compact line per declared module plus the
-/// base. Establishment comes from [`literal_established_modules`] (the existing
-/// derivation); per-module counts and resume hints are tallied from the same
+/// base. Establishment comes from the STORED subscription (§13) when the
+/// subscription tables exist; [`literal_established_modules`] — what the
+/// section rows imply — is the audit-side cross-check, and the read-only
+/// fallback on a pre-subscription target (status never evolves the tracking
+/// schema). Per-module counts and resume hints are tallied from the same
 /// section rows via the shared [`section_module_from_files`] attribution.
 async fn print_module_rollup(
     config: &Config,
@@ -156,13 +159,50 @@ async fn print_module_rollup(
     pool: &sqlx::PgPool,
     sections_qualified: &str,
 ) -> Result<()> {
+    use crate::migration_tracking::subscription;
+
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
     let migrations = discover_migrations(&migrations_dir)?;
     let files = parse_section_files(&migrations, &baselines_dir)?;
 
-    let established =
+    let literal =
         literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
+    let stored =
+        if subscription::subscription_tables_exist(pool, &config.migration.tracking_table).await? {
+            Some(subscription::load_subscription(pool, &config.migration.tracking_table).await?)
+        } else {
+            None
+        };
+    let established = match &stored {
+        Some(sub) => sub.modules.clone(),
+        None => {
+            println!(
+                "Note: pre-subscription target — module subscription tables not present \
+                 (they arrive with the next apply/provision). Establishment below is \
+                 derived from recorded section rows."
+            );
+            literal.clone()
+        }
+    };
+
+    // Audit cross-check: section rows naming a module outside the stored
+    // subscription. (The reverse — subscribed with no rows yet, e.g. right
+    // after a re-tag crossing — is normal and not flagged.)
+    if let Some(sub) = &stored {
+        let divergent: Vec<&str> = literal
+            .difference(&sub.modules)
+            .map(String::as_str)
+            .collect();
+        if !divergent.is_empty() {
+            println!(
+                "Warning: recorded section rows name module(s) not in this target's \
+                 subscription: {}. Rows are historical literals; expected after a re-tag \
+                 that renamed/absorbed these modules, otherwise investigate.",
+                divergent.join(", ")
+            );
+        }
+    }
 
     // Tally every recorded section row by owning module (None = base).
     let rows: Vec<(i64, bool, String, String)> = sqlx::query_as(&format!(

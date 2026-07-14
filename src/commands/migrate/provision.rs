@@ -6,10 +6,7 @@ use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     format_tracking_table_name, register_baseline_start, version_to_db,
 };
-use crate::modules::{
-    ModuleSelection, literal_established_modules, modules_needing_baseline_content,
-    parse_section_files,
-};
+use crate::modules::{ModuleRuntime, ModuleSelection, parse_section_files};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::BTreeSet;
@@ -75,20 +72,25 @@ async fn provision_inner(
         );
     }
 
-    let (files, established_modules) = if selection.named().is_some() {
-        let files = parse_section_files(&migrations, &baselines_dir)?;
-        let established_modules =
-            literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
-        (files, established_modules)
+    // The stored subscription is THE establishment source (§13); the runtime
+    // also carries the committed re-anchors so the shared apply loop can run
+    // the crossing loop for anything above the watermark.
+    let mut runtime =
+        ModuleRuntime::load(pool, &config.migration.tracking_table, &baselines_dir).await?;
+
+    let files = if selection.named().is_some() {
+        parse_section_files(&migrations, &baselines_dir)?
     } else {
-        (Default::default(), BTreeSet::new())
+        Default::default()
     };
 
     // Already managed by pgmt: adopt any requested modules that need baseline
     // content, then behave like apply (catch up pending sections).
     if established {
-        let needs_baseline =
-            modules_needing_baseline_content(&selection, &established_modules, &files);
+        let needs_baseline = match selection.named() {
+            Some(named) => runtime.needing_baseline_content(named.iter()),
+            None => Vec::new(),
+        };
 
         if !needs_baseline.is_empty() {
             let baseline = latest_baseline
@@ -100,7 +102,7 @@ async fn provision_inner(
             // established here (or be adopted in the same run).
             for module in &needs_baseline {
                 for dep in &config.modules.modules[module].depends_on {
-                    if !established_modules.contains(dep) && !needs_baseline.contains(dep) {
+                    if !runtime.established.contains(dep) && !needs_baseline.contains(dep) {
                         anyhow::bail!(
                             "adopting module '{}' requires its dependency '{}' on this target; \
                              adopt them together: pgmt migrate provision --modules {},{}",
@@ -123,17 +125,18 @@ async fn provision_inner(
                 pool,
                 &config.migration.tracking_table,
                 &files,
-                &established_modules,
+                &runtime.established,
                 baseline.version,
             )
             .await?;
             if !pending.is_empty() {
-                let catch_up = if established_modules.is_empty() {
+                let catch_up = if runtime.established.is_empty() {
                     "pgmt migrate apply".to_string()
                 } else {
                     format!(
                         "pgmt migrate apply --modules {}",
-                        established_modules
+                        runtime
+                            .established
                             .iter()
                             .cloned()
                             .collect::<Vec<_>>()
@@ -206,13 +209,15 @@ async fn provision_inner(
             println!("Database is already provisioned; applying any pending migrations.");
         }
 
-        let established_after: BTreeSet<String> = if selection.named().is_some() {
-            literal_established_modules(pool, &config.migration.tracking_table, &files).await?
-        } else {
-            BTreeSet::new()
-        };
-        return apply_pending_migrations(pool, config, &migrations, &selection, &established_after)
-            .await;
+        // Explicitly requesting a module IS its adoption (§13/§14): subscribe
+        // any newly requested modules — both the baseline-adopted ones above
+        // and pure-replay ones the apply loop below will catch up.
+        if let Some(named) = selection.named() {
+            runtime
+                .record_adopted(pool, &config.migration.tracking_table, named)
+                .await?;
+        }
+        return apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await;
     }
 
     match latest_baseline {
@@ -251,14 +256,22 @@ async fn provision_inner(
             )
             .await?;
 
-            apply_pending_migrations(
-                pool,
-                config,
-                &post_baseline,
-                &selection,
-                &established_modules,
-            )
-            .await?;
+            // Provision NEVER crosses (§13): record the subscription from
+            // what was provisioned and initialize the crossing watermark to
+            // the baseline's version — every re-anchor ≤ it is moot. Later
+            // re-anchors among the post-baseline migrations are ordinary
+            // crossings for the shared apply loop below.
+            runtime
+                .record_provisioned(
+                    pool,
+                    &config.migration.tracking_table,
+                    &selection.named().cloned().unwrap_or_default(),
+                    Some(baseline.version),
+                )
+                .await?;
+
+            apply_pending_migrations(pool, config, &post_baseline, &selection, &mut runtime)
+                .await?;
             println!("✅ Provisioned from baseline {}.", baseline.version);
         }
         None => {
@@ -275,8 +288,18 @@ async fn provision_inner(
                 return Ok(());
             }
             println!("No baseline found; applying all migrations.");
-            apply_pending_migrations(pool, config, &migrations, &selection, &established_modules)
+            // Subscribe the requested modules; no baseline exists, so there
+            // is no watermark to initialize (and no re-anchors either —
+            // re-anchors are baselines).
+            runtime
+                .record_provisioned(
+                    pool,
+                    &config.migration.tracking_table,
+                    &selection.named().cloned().unwrap_or_default(),
+                    None,
+                )
                 .await?;
+            apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await?;
             println!("✅ Provisioned from migrations.");
         }
     }
