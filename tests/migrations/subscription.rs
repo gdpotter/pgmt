@@ -6,6 +6,7 @@
 use crate::helpers::harness::with_test_db;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::ensure_section_tracking_table;
+use pgmt::migration_tracking::section_tracking::incomplete_baseline_sections;
 use pgmt::migration_tracking::subscription::{
     Subscription, SubscriptionSource, add_module, ensure_subscription_tables, load_subscription,
     record_event, remove_module, set_watermark, subscription_tables_exist,
@@ -44,6 +45,49 @@ async fn test_evolve_step_creates_subscription_tables_idempotently() {
 
         let sub = load_subscription(db.pool(), &tt).await.unwrap();
         assert_eq!(sub.modules, set(&["app"]));
+    })
+    .await;
+}
+
+/// The incomplete-baseline guard's covered set (§9): a `satisfied` baseline
+/// section is covered exactly like `completed` (its objects are present under
+/// the source's name — a per-section adoption record), so it is NOT reported
+/// as incomplete. A genuinely crashed provision — a `failed` or `pending` row
+/// — still is, so the guard keeps blocking it.
+#[tokio::test]
+async fn test_satisfied_baseline_section_is_covered_crashed_still_blocks() {
+    with_test_db(async |db| {
+        let tt = tracking();
+        ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+
+        // A baseline at version 1400 with one section per terminal/covered
+        // state plus one genuinely crashed (failed) module section.
+        for (name, status, module) in [
+            ("app", "completed", Some("app")),
+            ("billing", "satisfied", Some("billing")),
+            ("analytics", "failed", Some("analytics")),
+        ] {
+            sqlx::query(
+                "INSERT INTO public.pgmt_migrations_sections
+                     (migration_version, is_baseline, section_name, section_order, status, module)
+                 VALUES (1400, TRUE, $1, 0, $2, $3)",
+            )
+            .bind(name)
+            .bind(status)
+            .bind(module)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        let incomplete = incomplete_baseline_sections(db.pool(), &tt).await.unwrap();
+        // Only the crashed analytics section is incomplete — completed and
+        // satisfied are both covered.
+        assert_eq!(incomplete.len(), 1, "{incomplete:?}");
+        assert_eq!(
+            incomplete[0],
+            (1400, "analytics".to_string(), Some("analytics".to_string()))
+        );
     })
     .await;
 }

@@ -883,3 +883,227 @@ async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
     })
     .await
 }
+
+/// Full merge `a, b → c` where `b` is REMOVED from pgmt.yaml in the same
+/// change (the previously-avoided cell). A target holding only `a`-side content
+/// hits the membrane: the error points at `provision --modules c` (completing
+/// the crossing through the re-anchor) and NEVER at the deleted source `b`.
+/// That provision acquires `b`'s remap section (creates the b-side objects) and
+/// records the a-side satisfied; the same run's crossing collapses the
+/// subscription to `{c}`.
+#[tokio::test]
+async fn test_full_merge_with_deleted_source() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // SUBSET target: a only (b never deployed — no y here).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(table_exists(&pool, "x").await?);
+        assert!(!table_exists(&pool, "y").await?);
+
+        // Merge a,b → c and DELETE b (and a) from config in the same change.
+        std::fs::remove_file(helper.project_root.join("schema/a/x.sql"))?;
+        std::fs::remove_file(helper.project_root.join("schema/b/y.sql"))?;
+        helper.write_schema_file("c/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("c/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  c:\n    paths: [\"schema/c/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "merge", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // The membrane: bare apply refuses, pointing at provision --modules c
+        // (completing the crossing through the re-anchor) — NEVER naming the
+        // deleted source b (`--modules b` would be an unknown module now).
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("provision --modules c"))
+            .stderr(predicate::str::contains("--modules b").not())
+            .stderr(predicate::str::contains("adopt b").not());
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["a".to_string()],
+            "a blocked crossing mutates nothing"
+        );
+        assert_eq!(crossing_events(&pool).await?.len(), 0);
+
+        // Complete the crossing through the re-anchor: provision --modules c
+        // acquires b's remap section (creates y) and records the a-side
+        // satisfied; the same run's crossing collapses to {c}.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "c",
+            ])
+            .assert()
+            .success();
+        assert!(table_exists(&pool, "y").await?, "b's remap section ran");
+        assert!(table_exists(&pool, "x").await?, "a's object stayed put");
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["c".to_string()],
+            "both sources whole -> c subscribed, absorbed a and b removed"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
+        assert_eq!(crossing_events(&pool).await?.len(), 1);
+
+        // Next bare apply crosses cleanly — the re-anchor is already consumed.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+        assert_eq!(subscription_modules(&pool).await?, vec!["c".to_string()]);
+        assert_eq!(crossing_events(&pool).await?.len(), 1);
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Fresh provision from a re-anchor applies BOTH its plain and its remap
+/// sections (the source is not established on a fresh target, so remap-section
+/// objects are created, not relabelled) and pins every section row completed.
+/// Provision never crosses: the watermark initializes to the baseline's
+/// version with no crossing events.
+#[tokio::test]
+async fn test_fresh_provision_from_re_anchor_runs_all_sections() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n",
+        )?;
+        helper.write_schema_file("app/users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file(
+            "app/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Split events into a brand-new module → a re-anchor (events becomes a
+        // remap section sourced from app).
+        std::fs::remove_file(helper.project_root.join("schema/app/events.sql"))?;
+        helper.write_schema_file(
+            "metrics/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n  metrics:\n    paths: [\"schema/metrics/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // FRESH target, provision --modules all directly from the re-anchor.
+        let fresh_url = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &fresh_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+
+        let pool = sqlx::PgPool::connect(&fresh_url).await?;
+        // Plain (app) and remap (metrics) section objects both exist.
+        assert!(table_exists(&pool, "users").await?);
+        assert!(table_exists(&pool, "events").await?);
+
+        // Every baseline section row is completed — the remap section RAN on a
+        // fresh target (its source is not established), it was not satisfied.
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM public.pgmt_migrations_sections WHERE is_baseline",
+        )
+        .fetch_all(&pool)
+        .await?;
+        assert!(!statuses.is_empty(), "baseline section rows are pinned");
+        assert!(
+            statuses.iter().all(|s| s == "completed"),
+            "fresh provision runs every section (no satisfied): {statuses:?}"
+        );
+
+        // Provision never crosses: watermark = baseline version, no events.
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64),
+            "provision initializes the watermark to the baseline's version"
+        );
+        assert_eq!(
+            crossing_events(&pool).await?.len(),
+            0,
+            "provision never crosses"
+        );
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["app".to_string(), "metrics".to_string()]
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
