@@ -354,11 +354,14 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
 
 /// Move into a PRE-EXISTING module via per-section adoption (§14). Provenance-
 /// cut stamps a plain `b` section (retained `z`) + a remap `b_2 remaps="a"`
-/// (acquired `y`). A target subscribed to `a` but not `b` adopts `b` THROUGH
-/// the unconsumed re-anchor itself: `provision --modules b` runs the plain
-/// section (creates `z`), records the remap section `satisfied` (`y` already
-/// present under `a`'s name — no collision), and the same run's crossing then
-/// relabels ownership. `a` survives (it still owns `x`).
+/// (acquired `y`). On a target subscribed to `a` but not `b`, bare apply hits
+/// the needed-modules gate (§13) — the crossing would relabel `y` into the
+/// unsubscribed pre-existing `b`, orphaning it — and BLOCKS with adopt-b
+/// guidance. Adopting `b` THROUGH the unconsumed re-anchor
+/// (`provision --modules b`) runs the plain section (creates `z`), records the
+/// remap section `satisfied` (`y` already present under `a`'s name — no
+/// collision), and the same run's crossing then relabels ownership. `a`
+/// survives (it still owns `x`).
 #[tokio::test]
 async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()> {
     with_cli_helper(async |helper| {
@@ -413,6 +416,25 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             baseline_sql.contains(r#"remaps="a""#) && !baseline_sql.contains("remaps=\"a,b\""),
             "pre-existing module: single-source remap section, no self-inclusion:\n{baseline_sql}"
         );
+
+        // The membrane: bare apply blocks — the crossing would relabel y into
+        // the unsubscribed pre-existing b (needed-modules gate, §13). The
+        // guidance names adopting b through the re-anchor, never the source a.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "adopt b before applying past {re_anchor_version}"
+            )))
+            .stderr(predicate::str::contains("provision --modules b"));
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["a".to_string()],
+            "a blocked crossing mutates nothing"
+        );
+        assert_eq!(crossing_events(&pool).await?.len(), 0);
 
         // Adopt b through the unconsumed re-anchor: baseline content is needed
         // (b's plain section), so `apply` would refuse — provision is the path.

@@ -842,11 +842,18 @@ pub enum CrossingCheck {
 ///   partial merge / move-into-pre-existing: the target has some of M under an
 ///   old name and lacks the rest). Guidance: `provision --modules M` (or, for
 ///   the base, adopt the unsatisfied sources first).
+/// - **Needed-modules gate (§13):** M is *needed* iff any of its remap
+///   sections is **source**-satisfied here — the crossing would relabel objects
+///   the target physically holds into M. Needed and brand-new (remap sections
+///   only) → auto-subscribe below. Needed, pre-existing (has a plain section)
+///   and NOT subscribed → **blocked**: adopt M first (`provision --modules M`,
+///   collision-free under §14 per-section adoption). A crossing must never
+///   relabel objects into an unsubscribed module — that orphans them (their
+///   future sections would skip at info level: silent drift on exactly the
+///   objects that moved).
 /// - Engaged and **all** satisfied → whole for M. Subscribe M when it is
 ///   already subscribed, or **brand-new** (no plain section → the crossing adds
-///   no objects: auto-subscribe). A module WITH a plain section that the target
-///   has not itself subscribed is left alone — it must be adopted to gain the
-///   plain content. Then drop any wholly-absorbed source (not in
+///   no objects: auto-subscribe). Then drop any wholly-absorbed source (not in
 ///   [`ReAnchor::surviving_modules`]).
 ///
 /// `applied_sections` is the set of section *names* of THIS re-anchor that the
@@ -878,6 +885,20 @@ pub fn evaluate_crossing(
 
         // Engaged: the target has a stake in this owning module.
         if !(is_base || subscribed || any_satisfied) {
+            continue;
+        }
+
+        // Needed-modules gate (§13): crossing would relabel objects the target
+        // physically holds into M (a source-satisfied remap section), but M is
+        // pre-existing (has a plain section) and not subscribed — relabeling
+        // now would orphan those objects into an unsubscribed module. Block:
+        // adopt M through the re-anchor first (§14 per-section adoption).
+        if let Some(m) = module
+            && !subscribed
+            && re_anchor.plain_modules.contains(m)
+            && sections.iter().any(|rs| source_established(&rs.source))
+        {
+            blocked_modules.insert(m.clone());
             continue;
         }
 
@@ -1076,10 +1097,13 @@ impl ModuleRuntime {
                         // Complete the crossing THROUGH the re-anchor — never
                         // name a source module (a merge may have deleted its
                         // declaration, §13).
+                        let list = modules.iter().cloned().collect::<Vec<_>>();
                         guidance.push_str(&format!(
-                            "\n  pgmt migrate provision --modules {}   \
+                            "\n  adopt {} before applying past {version}:\n  \
+                             pgmt migrate provision --modules {}   \
                              (completes the crossing through re-anchor {version})",
-                            modules.iter().cloned().collect::<Vec<_>>().join(",")
+                            list.join(", "),
+                            list.join(",")
                         ));
                     }
                     if !base_sources.is_empty() {
@@ -1092,8 +1116,8 @@ impl ModuleRuntime {
                         ));
                     }
                     anyhow::bail!(
-                        "re-anchor {version} cannot be crossed on this target — some of its \
-                         modules are only partially present.\n\
+                        "re-anchor {version} cannot be crossed on this target — module content \
+                         it would relabel is not fully adopted here.\n\
                          Nothing at or after version {version} was applied (the strong membrane: \
                          crossing with a partial module would split it across two vocabularies).\n\
                          Complete the crossing:{guidance}\n\
@@ -2185,9 +2209,10 @@ mod tests {
     #[test]
     fn test_crossing_move_into_pre_existing_module() {
         // Part of a → existing b: a plain `b` section (retained) + a remap
-        // `b_2 remaps="a"`. b has a plain section, so a target with a-but-not-b
-        // is NOT blocked (its b_2 is source-satisfied) — b simply isn't
-        // auto-subscribed; the target must adopt b to gain the plain content.
+        // `b_2 remaps="a"`. The needed-modules gate (§13): the crossing would
+        // relabel a-held objects into b, but b is pre-existing (plain section)
+        // and NOT subscribed → BLOCK — relabeling into an unsubscribed module
+        // would orphan those objects. Adopt b first.
         let ra = re_anchor(
             1700,
             &[("b_2", Some("b"), Some("a"))],
@@ -2196,16 +2221,21 @@ mod tests {
         );
         assert_eq!(
             evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
-            CrossingCheck::Whole {
-                rewritten: subs(&["a"])
-            },
-            "engaged and whole, but b has a plain section → not auto-subscribed"
+            blocked(&["b"], &[]),
+            "needed + pre-existing + not subscribed blocks the crossing"
         );
         // Once b is subscribed (adopted), the crossing keeps both; a survives.
         assert_eq!(
             evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["a", "b"])
+            }
+        );
+        // A target with neither a nor b is not engaged: irrelevant, no block.
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new()),
+            CrossingCheck::Whole {
+                rewritten: subs(&["other"])
             }
         );
     }
