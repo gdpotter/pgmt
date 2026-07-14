@@ -243,18 +243,35 @@ pub(crate) async fn apply_pending_migrations(
 
     // Apply unapplied migrations
     for migration in migrations {
-        // Crossing loop: consume every re-anchor at or below this version
-        // (everything before it is settled — this loop runs in version order
-        // and migration V's own sections are tagged in the post-V vocabulary,
-        // so the crossing must land first). A wholeness failure bails here,
-        // refusing this and every later version — the strong membrane.
+        // Crossing loop, phase order (§13): consume every re-anchor STRICTLY
+        // below this version single-shot (their versions are settled). A
+        // re-anchor AT this version is two-phase — gate-checked now (before
+        // V's sections; the gate's post-crossing vocabulary steers V's own
+        // selection and warnings), committed after V's sections complete
+        // (acquisition deltas live in migration V itself, §12). A wholeness
+        // failure bails at either point, refusing this and every later
+        // version — the strong membrane.
         runtime
             .cross_re_anchors_through(
                 pool,
                 &config.migration.tracking_table,
-                Some(migration.version),
+                Some(migration.version.saturating_sub(1)),
             )
             .await?;
+        let mut pending_crossing = runtime
+            .gate_re_anchor_at(pool, &config.migration.tracking_table, migration.version)
+            .await?;
+        // Commit helper for the early-exit paths: nothing of V remains to
+        // run, so the gated crossing commits immediately.
+        macro_rules! commit_pending {
+            () => {
+                if let Some(pending) = pending_crossing.take() {
+                    runtime
+                        .commit_crossing(pool, &config.migration.tracking_table, pending)
+                        .await?;
+                }
+            };
+        }
 
         // Skip migrations covered by a recorded baseline.
         if baseline_version.is_some_and(|bv| migration.version <= bv) {
@@ -288,6 +305,7 @@ pub(crate) async fn apply_pending_migrations(
                     migration.version
                 );
             }
+            commit_pending!();
             continue;
         }
 
@@ -378,6 +396,17 @@ pub(crate) async fn apply_pending_migrations(
             Default::default()
         };
 
+        // Version V's own selection and warnings see the POST-crossing
+        // vocabulary the gate computed (§13) — a split at V tags V's sections
+        // with the new names. Source-held checks below deliberately keep the
+        // PRE-crossing subscription: remap sources are pre-V vocabulary, and
+        // the commit (which drops absorbed sources) only lands after V's
+        // sections run.
+        let vocabulary: BTreeSet<String> = pending_crossing
+            .as_ref()
+            .map(|p| p.rewritten().clone())
+            .unwrap_or_else(|| runtime.established.clone());
+
         // Uniform execution rule for remap sections (modules.md §12): in ANY
         // artifact a remap section executes only where its source is absent,
         // and records `satisfied` where the source is established — the
@@ -415,7 +444,7 @@ pub(crate) async fn apply_pending_migrations(
             }
         }
         for module in &skipped_modules {
-            if runtime.established.contains(*module) {
+            if vocabulary.contains(*module) {
                 eprintln!(
                     "Warning: module '{}' is established on this target but not in the \
                      requested set — its sections in migration {} were skipped. This is \
@@ -443,7 +472,7 @@ pub(crate) async fn apply_pending_migrations(
             for earlier in &sections[..idx] {
                 if let Some(module) = earlier.module.as_deref()
                     && !selection.selects(Some(module))
-                    && runtime.established.contains(module)
+                    && vocabulary.contains(module)
                     && !statuses
                         .get(&earlier.name)
                         .is_some_and(|st| st.is_covered())
@@ -484,6 +513,7 @@ pub(crate) async fn apply_pending_migrations(
             });
             if fully_applied && to_satisfy.is_empty() {
                 debug!("Migration {} already applied, skipping", migration.version);
+                commit_pending!();
                 continue;
             }
             let done = selected
@@ -529,6 +559,7 @@ pub(crate) async fn apply_pending_migrations(
                     "Migration {} has no selected sections, skipping",
                     migration.version
                 );
+                commit_pending!();
                 continue;
             }
             println!(
@@ -618,6 +649,10 @@ pub(crate) async fn apply_pending_migrations(
         // Report completion
         let reporter = SectionReporter::new(to_run.len(), false);
         reporter.migration_summary(duration, to_run.len());
+
+        // Commit phase (§13): version V's sections are done, so the gated
+        // crossing finalizes — subscription rewrite, watermark, event.
+        commit_pending!();
     }
 
     // Final sweep: every migration is settled, so consume any re-anchors

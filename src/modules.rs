@@ -951,6 +951,24 @@ pub fn evaluate_crossing(
     }
 }
 
+/// A gate-passed crossing awaiting its commit (§13 two-phase): the gate ran
+/// before version V's sections; the commit (subscription rewrite, watermark,
+/// event) runs after they complete — acquisition deltas live in migration V
+/// itself (§12), so wholeness only finalizes once they've run.
+#[derive(Debug, Clone)]
+pub struct PendingCrossing {
+    version: u64,
+    rewritten: BTreeSet<String>,
+}
+
+impl PendingCrossing {
+    /// The post-crossing subscription the gate computed — the vocabulary
+    /// version V's own section selection and warnings must already see (§13).
+    pub fn rewritten(&self) -> &BTreeSet<String> {
+        &self.rewritten
+    }
+}
+
 /// The per-run module state a deploy command carries: the target's stored
 /// subscription plus the repo's committed re-anchors. Built once per command
 /// (under the advisory lock, after the tracking tables are ensured), mutated
@@ -1053,122 +1071,172 @@ impl ModuleRuntime {
     /// (`None` = all of them — the end-of-apply sweep that makes a pure
     /// re-tag land on a fully-up-to-date target).
     ///
-    /// Per re-anchor V: check wholeness against the subscription; on success
-    /// rewrite the subscription through V's remaps, record the crossing event
-    /// and advance the watermark — all in ONE transaction (the caller holds
-    /// the advisory lock). On wholeness failure, error — the caller must
-    /// treat this as the strong membrane: no section of any version > V (V
-    /// included) may run, base sections included.
-    ///
-    /// Crossing ≠ mutation: a re-anchor whose sources are entirely outside
-    /// the subscription still records its crossing and advances the
-    /// watermark (evaluated and consumed).
+    /// Single-shot gate+commit per re-anchor: only correct when nothing of
+    /// those versions remains to run in this apply — i.e. for re-anchors
+    /// strictly below the migration being processed, and for the final sweep.
+    /// A re-anchor AT a pending migration's version goes through the split
+    /// [`Self::gate_re_anchor_at`] / [`Self::commit_crossing`] pair instead
+    /// (two-phase, §13): its acquisition delta lives in migration V itself,
+    /// so wholeness only finalizes once V's sections have run.
     pub async fn cross_re_anchors_through(
         &mut self,
         pool: &sqlx::PgPool,
         tracking_table: &crate::config::types::TrackingTable,
         ceiling: Option<u64>,
     ) -> Result<()> {
-        use crate::migration_tracking::subscription;
-
         for i in 0..self.re_anchors.len() {
-            let re_anchor = &self.re_anchors[i];
+            let re_anchor = self.re_anchors[i].clone();
             if self.watermark.is_some_and(|w| re_anchor.version <= w) {
                 continue; // already consumed, or moot (≤ the provision baseline)
             }
             if ceiling.is_some_and(|c| re_anchor.version > c) {
                 break; // not yet reached in the apply order
             }
-
-            // Section names of THIS re-anchor the target has a completed|
-            // satisfied row for (§14 per-section adoption). Feeds the extended
-            // wholeness predicate.
-            let applied_sections =
-                crossed_baseline_sections(pool, tracking_table, re_anchor.version).await?;
-
-            match evaluate_crossing(re_anchor, &self.established, &applied_sections) {
-                CrossingCheck::Blocked {
-                    modules,
-                    base_sources,
-                } => {
-                    let version = re_anchor.version;
-                    let mut guidance = String::new();
-                    if !modules.is_empty() {
-                        // Complete the crossing THROUGH the re-anchor — never
-                        // name a source module (a merge may have deleted its
-                        // declaration, §13).
-                        let list = modules.iter().cloned().collect::<Vec<_>>();
-                        guidance.push_str(&format!(
-                            "\n  adopt {} before applying past {version}:\n  \
-                             pgmt migrate provision --modules {}   \
-                             (completes the crossing through re-anchor {version})",
-                            list.join(", "),
-                            list.join(",")
-                        ));
-                    }
-                    if !base_sources.is_empty() {
-                        // Demotion into the base: the base must be whole
-                        // everywhere, so the demoted source(s) must be adopted.
-                        guidance.push_str(&format!(
-                            "\n  adopt {} before applying past {version} \
-                             (the base must be whole everywhere)",
-                            base_sources.iter().cloned().collect::<Vec<_>>().join(", ")
-                        ));
-                    }
-                    anyhow::bail!(
-                        "re-anchor {version} cannot be crossed on this target — module content \
-                         it would relabel is not fully adopted here.\n\
-                         Nothing at or after version {version} was applied (the strong membrane: \
-                         crossing with a partial module would split it across two vocabularies).\n\
-                         Complete the crossing:{guidance}\n\
-                         then re-run.",
-                    );
-                }
-                CrossingCheck::Whole { rewritten } => {
-                    let mut tx = pool.begin().await?;
-                    for module in rewritten.difference(&self.established) {
-                        subscription::add_module(
-                            &mut *tx,
-                            tracking_table,
-                            module,
-                            &subscription::SubscriptionSource::Crossing(re_anchor.version),
-                        )
-                        .await?;
-                    }
-                    for module in self.established.difference(&rewritten) {
-                        subscription::remove_module(&mut *tx, tracking_table, module).await?;
-                    }
-                    subscription::set_watermark(&mut *tx, tracking_table, re_anchor.version)
-                        .await?;
-                    subscription::record_event(
-                        &mut *tx,
-                        tracking_table,
-                        "crossing",
-                        Some(re_anchor.version),
-                        &self.established,
-                        &rewritten,
-                    )
-                    .await?;
-                    tx.commit().await.with_context(|| {
-                        format!(
-                            "Failed to record crossing of re-anchor {}",
-                            re_anchor.version
-                        )
-                    })?;
-
-                    if rewritten != self.established {
-                        println!(
-                            "Crossed re-anchor {}: subscription {} -> {}",
-                            re_anchor.version,
-                            subscription::render_subscription_set(&self.established),
-                            subscription::render_subscription_set(&rewritten),
-                        );
-                    }
-                    self.established = rewritten;
-                    self.watermark = Some(re_anchor.version);
-                }
-            }
+            let pending = self
+                .gate_re_anchor(pool, tracking_table, &re_anchor)
+                .await?;
+            self.commit_crossing(pool, tracking_table, pending).await?;
         }
+        Ok(())
+    }
+
+    /// **Gate phase** of the two-phase crossing (§13): evaluate the re-anchor
+    /// at exactly `version` (if one exists above the watermark) against the
+    /// subscription, WITHOUT writing anything. The caller runs version V's
+    /// sections next and then calls [`Self::commit_crossing`] with the
+    /// returned pending crossing. On wholeness failure this bails — the
+    /// strong membrane: nothing at or after V may run.
+    pub async fn gate_re_anchor_at(
+        &self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        version: u64,
+    ) -> Result<Option<PendingCrossing>> {
+        let Some(re_anchor) = self
+            .re_anchors
+            .iter()
+            .find(|ra| ra.version == version && self.watermark.is_none_or(|w| ra.version > w))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.gate_re_anchor(pool, tracking_table, re_anchor).await?,
+        ))
+    }
+
+    /// Evaluate one re-anchor against the subscription (no writes). Whole →
+    /// the pending crossing to commit after the version's sections run;
+    /// Blocked → bail with membrane guidance.
+    async fn gate_re_anchor(
+        &self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        re_anchor: &ReAnchor,
+    ) -> Result<PendingCrossing> {
+        // Section names of THIS re-anchor the target has a completed|
+        // satisfied row for (§14 per-section adoption). Feeds the extended
+        // wholeness predicate.
+        let applied_sections =
+            crossed_baseline_sections(pool, tracking_table, re_anchor.version).await?;
+
+        match evaluate_crossing(re_anchor, &self.established, &applied_sections) {
+            CrossingCheck::Blocked {
+                modules,
+                base_sources,
+            } => {
+                let version = re_anchor.version;
+                let mut guidance = String::new();
+                if !modules.is_empty() {
+                    // Complete the crossing THROUGH the re-anchor — never
+                    // name a source module (a merge may have deleted its
+                    // declaration, §13).
+                    let list = modules.iter().cloned().collect::<Vec<_>>();
+                    guidance.push_str(&format!(
+                        "\n  adopt {} before applying past {version}:\n  \
+                         pgmt migrate provision --modules {}   \
+                         (completes the crossing through re-anchor {version})",
+                        list.join(", "),
+                        list.join(",")
+                    ));
+                }
+                if !base_sources.is_empty() {
+                    // Demotion into the base: the base must be whole
+                    // everywhere, so the demoted source(s) must be adopted.
+                    guidance.push_str(&format!(
+                        "\n  adopt {} before applying past {version} \
+                         (the base must be whole everywhere)",
+                        base_sources.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                anyhow::bail!(
+                    "re-anchor {version} cannot be crossed on this target — module content \
+                     it would relabel is not fully adopted here.\n\
+                     Nothing at or after version {version} was applied (the strong membrane: \
+                     crossing with a partial module would split it across two vocabularies).\n\
+                     Complete the crossing:{guidance}\n\
+                     then re-run.",
+                );
+            }
+            CrossingCheck::Whole { rewritten } => Ok(PendingCrossing {
+                version: re_anchor.version,
+                rewritten,
+            }),
+        }
+    }
+
+    /// **Commit phase** of the two-phase crossing (§13): rewrite the
+    /// subscription through the gated re-anchor's remaps, record the crossing
+    /// event and advance the watermark — one transaction (the caller holds
+    /// the advisory lock). Runs after the version's own sections completed
+    /// (acquisition deltas live in migration V, §12), so wholeness has
+    /// finalized. Crossing ≠ mutation: an untouched subscription still
+    /// records its crossing and advances the watermark.
+    pub async fn commit_crossing(
+        &mut self,
+        pool: &sqlx::PgPool,
+        tracking_table: &crate::config::types::TrackingTable,
+        pending: PendingCrossing,
+    ) -> Result<()> {
+        use crate::migration_tracking::subscription;
+
+        let PendingCrossing { version, rewritten } = pending;
+        let mut tx = pool.begin().await?;
+        for module in rewritten.difference(&self.established) {
+            subscription::add_module(
+                &mut *tx,
+                tracking_table,
+                module,
+                &subscription::SubscriptionSource::Crossing(version),
+            )
+            .await?;
+        }
+        for module in self.established.difference(&rewritten) {
+            subscription::remove_module(&mut *tx, tracking_table, module).await?;
+        }
+        subscription::set_watermark(&mut *tx, tracking_table, version).await?;
+        subscription::record_event(
+            &mut *tx,
+            tracking_table,
+            "crossing",
+            Some(version),
+            &self.established,
+            &rewritten,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .with_context(|| format!("Failed to record crossing of re-anchor {}", version))?;
+
+        if rewritten != self.established {
+            println!(
+                "Crossed re-anchor {}: subscription {} -> {}",
+                version,
+                subscription::render_subscription_set(&self.established),
+                subscription::render_subscription_set(&rewritten),
+            );
+        }
+        self.established = rewritten;
+        self.watermark = Some(version);
         Ok(())
     }
 
