@@ -352,13 +352,15 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
     .await
 }
 
-/// Move into a PRE-EXISTING module the target lacks: self-inclusion stamps
-/// `remaps="a,b"`, so a target subscribed to `a` but not `b` hits
-/// some-but-not-all — the membrane error names the adoption; adopting `b`
-/// (pure replay — the only baseline is the unconsumed re-anchor itself, which
-/// is never an adoption source) then lets the crossing succeed.
+/// Move into a PRE-EXISTING module via per-section adoption (§14). Provenance-
+/// cut stamps a plain `b` section (retained `z`) + a remap `b_2 remaps="a"`
+/// (acquired `y`). A target subscribed to `a` but not `b` adopts `b` THROUGH
+/// the unconsumed re-anchor itself: `provision --modules b` runs the plain
+/// section (creates `z`), records the remap section `satisfied` (`y` already
+/// present under `a`'s name — no collision), and the same run's crossing then
+/// relabels ownership. `a` survives (it still owns `x`).
 #[tokio::test]
-async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> {
+async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         let base = base_config(helper)?;
@@ -394,7 +396,8 @@ async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> 
         assert!(table_exists(&pool, "y").await?);
         assert!(!table_exists(&pool, "z").await?);
 
-        // Re-tag: y moves a → b (b pre-existing). Self-inclusion stamps both.
+        // Re-tag: y moves a → b (b pre-existing). Provenance-cut: plain `b`
+        // (z) + a remap `b_2 remaps="a"` (y). Never `remaps="a,b"`.
         std::fs::remove_file(helper.project_root.join("schema/a/y.sql"))?;
         helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
         next_version_tick();
@@ -407,35 +410,17 @@ async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> 
         let baseline_sql =
             helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
         assert!(
-            baseline_sql.contains(r#"module="b" remaps="a,b""#),
-            "pre-existing module self-includes:\n{baseline_sql}"
+            baseline_sql.contains(r#"remaps="a""#) && !baseline_sql.contains("remaps=\"a,b\""),
+            "pre-existing module: single-source remap section, no self-inclusion:\n{baseline_sql}"
         );
 
-        // The membrane: bare apply refuses, naming the adoption (replay — the
-        // re-anchor itself is not an adoption source).
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(format!(
-                "adopt b before applying past {re_anchor_version}"
-            )))
-            .stderr(predicate::str::contains("migrate apply --modules b"));
-        assert_eq!(
-            subscription_modules(&pool).await?,
-            vec!["a".to_string()],
-            "a blocked crossing mutates nothing"
-        );
-        assert_eq!(crossing_events(&pool).await?.len(), 0);
-
-        // Adopt b by replay: its pre-crossing history (z) lands, then the
-        // same run crosses the re-anchor with both sources whole.
+        // Adopt b through the unconsumed re-anchor: baseline content is needed
+        // (b's plain section), so `apply` would refuse — provision is the path.
         helper
             .command()
             .args([
                 "migrate",
-                "apply",
+                "provision",
                 "--target-url",
                 &helper.dev_database_url,
                 "--modules",
@@ -443,6 +428,9 @@ async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> 
             ])
             .assert()
             .success();
+
+        // Plain section ran (z created); the remap section did not (y untouched,
+        // no collision) but is recorded satisfied; the crossing relabelled.
         assert!(table_exists(&pool, "z").await?);
         assert_eq!(
             subscription_modules(&pool).await?,
@@ -454,6 +442,30 @@ async fn test_move_into_pre_existing_module_membrane_then_adopt() -> Result<()> 
             Some(re_anchor_version as i64)
         );
         assert_eq!(crossing_events(&pool).await?.len(), 1);
+
+        // b's remap sections (source `a` held) recorded `satisfied` — nothing
+        // ran for them; its plain sections ran and recorded `completed`. Every
+        // b baseline row is terminal-covered (no pending/running/failed).
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM public.pgmt_migrations_sections
+             WHERE is_baseline AND module = 'b' ORDER BY section_name",
+        )
+        .fetch_all(&pool)
+        .await?;
+        assert!(
+            statuses.iter().any(|s| s == "satisfied"),
+            "b has a source-satisfied remap section: {statuses:?}"
+        );
+        assert!(
+            statuses.iter().any(|s| s == "completed"),
+            "b has a run plain section: {statuses:?}"
+        );
+        assert!(
+            statuses
+                .iter()
+                .all(|s| s == "satisfied" || s == "completed"),
+            "no b baseline section is left pending/failed: {statuses:?}"
+        );
 
         pool.close().await;
         Ok(())
@@ -513,9 +525,16 @@ async fn test_merge_with_both_sources_collapses() -> Result<()> {
         let re_anchor_version = latest_baseline_version(helper)?;
         let baseline_sql =
             helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        // Provenance-cut: c is brand-new, all acquired — one remap section per
+        // source, never a comma-list, never self.
         assert!(
-            baseline_sql.contains(r#"module="c" remaps="a,b""#),
-            "merge stamps every distinct prior owner:\n{baseline_sql}"
+            baseline_sql.contains(r#"module="c" remaps="a""#)
+                && baseline_sql.contains(r#"module="c" remaps="b""#),
+            "merge splits into one remap section per source:\n{baseline_sql}"
+        );
+        assert!(
+            !baseline_sql.contains("remaps=\"a,b\""),
+            "the comma-list form is retired:\n{baseline_sql}"
         );
 
         helper
@@ -608,10 +627,17 @@ async fn test_demotion_crossing_and_strong_membrane() -> Result<()> {
         let re_anchor_version = latest_baseline_version(helper)?;
         let baseline_sql =
             helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        // Provenance-cut: the retained base object (meta) stays in a plain
+        // `default` section; the demoted module's object goes into its own
+        // unmoduled remap section `remaps="a"` (no self-inclusion, no
+        // comma-list).
         assert!(
-            baseline_sql.contains(r#"name="default" remaps="(unmoduled),a""#),
-            "demotion: an unmoduled section listing the demoted module as a source \
-             (self-included base — the section also retained base objects):\n{baseline_sql}"
+            baseline_sql.contains(r#"remaps="a""#),
+            "demotion: an unmoduled remap section records the demoted module as source:\n{baseline_sql}"
+        );
+        assert!(
+            !baseline_sql.contains("remaps=\"(unmoduled),a\""),
+            "the self-included comma-list form is retired:\n{baseline_sql}"
         );
 
         // A LATER base-only migration — the membrane must refuse even this.

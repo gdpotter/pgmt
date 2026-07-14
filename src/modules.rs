@@ -722,6 +722,17 @@ pub async fn literal_established_modules(
     Ok(established)
 }
 
+/// One provenance-cut remap section of a re-anchor (§12): its owning module
+/// (`None` = the base, a demotion target) and its single acquired-from source
+/// (`None` = the base). Named so the wholeness check can look up whether the
+/// target already applied it (a completed|satisfied row, §14 per-section rule).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemapSection {
+    pub name: String,
+    pub module: Option<String>,
+    pub source: Option<String>,
+}
+
 /// A committed **re-anchoring baseline**: a baseline file with at least one
 /// `remaps=` section (§12). Re-anchors are the only baselines apply ever
 /// consumes — as one-time *crossings* (§13) that rewrite the target's stored
@@ -729,50 +740,61 @@ pub async fn literal_established_modules(
 #[derive(Debug, Clone)]
 pub struct ReAnchor {
     pub version: u64,
-    /// `(section's module, remap sources)` for every section carrying
-    /// `remaps=`. `None` = the base on both slots (an unmoduled section is a
-    /// demotion target; an `(unmoduled)` source is the base).
-    pub remap_sections: Vec<(Option<String>, Vec<Option<String>>)>,
-    /// Modules that still exist in the post-V partition — i.e. own at least
-    /// one section in this baseline (a full schema snapshot). A remap *source*
-    /// survives the crossing iff it is in here; a wholly-absorbed module is
-    /// not, and drops out of the subscription. Self-interpreting from the
-    /// checksummed artifact — never from mutable yaml.
+    /// Every provenance-cut remap section (one source apiece).
+    pub remap_sections: Vec<RemapSection>,
+    /// Modules that own at least one **plain** (non-remap) section in this
+    /// baseline — i.e. carry objects the target may not already hold. A module
+    /// whose only content is remap sections is "brand-new" at this crossing:
+    /// its objects are already present under the source names, so a
+    /// source-holding target auto-subscribes (the crossing adds no objects). A
+    /// module WITH a plain section is not auto-subscribed — it must be adopted
+    /// (the plain section runs).
+    pub plain_modules: BTreeSet<String>,
+    /// Modules that still own at least one section (plain or remap) in the
+    /// post-V partition. A remap *source* survives the crossing iff it is in
+    /// here; a wholly-absorbed module is not, and drops out of the
+    /// subscription. Self-interpreting from the checksummed artifact.
     pub surviving_modules: BTreeSet<String>,
 }
 
 /// Parse the committed baselines and return the re-anchors among them, in
 /// version order. A baseline with no `remaps=` sections is not a re-anchor.
 pub fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec<ReAnchor>> {
+    let to_module = |r: &str| {
+        if r == UNMODULED_DISPLAY {
+            None
+        } else {
+            Some(r.to_string())
+        }
+    };
+
     let mut re_anchors = Vec::new();
     for baseline in crate::migration::discover_baselines(baselines_dir)? {
         let sql = std::fs::read_to_string(&baseline.path)?;
         let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
-        let remap_sections: Vec<(Option<String>, Vec<Option<String>>)> = sections
+        let remap_sections: Vec<RemapSection> = sections
             .iter()
-            .filter(|s| !s.remaps.is_empty())
-            .map(|s| {
-                let sources = s
-                    .remaps
-                    .iter()
-                    .map(|r| {
-                        if r == UNMODULED_DISPLAY {
-                            None
-                        } else {
-                            Some(r.clone())
-                        }
-                    })
-                    .collect();
-                (s.module.clone(), sources)
+            .filter_map(|s| {
+                s.remaps.first().map(|source| RemapSection {
+                    name: s.name.clone(),
+                    module: s.module.clone(),
+                    source: to_module(source),
+                })
             })
             .collect();
         if remap_sections.is_empty() {
             continue;
         }
+        let plain_modules = sections
+            .iter()
+            .filter(|s| s.remaps.is_empty())
+            .filter_map(|s| s.module.clone())
+            .collect();
         let surviving_modules = sections.iter().filter_map(|s| s.module.clone()).collect();
         re_anchors.push(ReAnchor {
             version: baseline.version,
             remap_sections,
+            plain_modules,
             surviving_modules,
         });
     }
@@ -790,70 +812,121 @@ pub enum CrossingCheck {
     /// subscription is still *crossed* (evaluated and consumed, watermark
     /// advances), just not a mutation.
     Whole { rewritten: BTreeSet<String> },
-    /// Wholeness fails: these source modules must be adopted before the
-    /// target can apply past this re-anchor (the strong membrane, §13).
-    Blocked { missing: BTreeSet<String> },
+    /// Wholeness fails (the strong membrane, §13). The crossing cannot complete
+    /// because some owning module's content is only partially present.
+    Blocked {
+        /// Owning **modules** whose crossing is incomplete — complete it
+        /// through the re-anchor with `provision --modules <these>`. Never a
+        /// source module (a merge may have deleted its declaration, §13).
+        modules: BTreeSet<String>,
+        /// Sources of blocked **base** (demotion) remap sections — the base
+        /// must be whole everywhere, so these must be adopted first. (The one
+        /// case whose owning "module" is the base and so has no
+        /// `provision --modules` completion; guidance names the source.)
+        base_sources: BTreeSet<String>,
+    },
 }
 
-/// The wholeness rule (§13), as pure set operations on the subscription.
-/// Per remap section:
+/// The extended wholeness rule (§13). A remap section is **satisfied** iff its
+/// source is established (objects present under the source's name → the
+/// crossing relabels) OR the target has already applied the section (a
+/// completed|satisfied row — §14 per-section adoption). Wholeness at V requires
+/// every remap section of every owning module the target is *engaged* with to
+/// be satisfied.
 ///
-/// - A source is *established* if it is the base (always whole on a target
-///   that settled every version < V — the crossing's position guarantees
-///   that) or a subscribed module.
-/// - Section into a **module**: no source established → irrelevant here, no
-///   change. All established → the rewrite applies: subscribe the section's
-///   module (brand-new modules auto-subscribe — the target already holds
-///   every object they own; a *pre-existing* module lists itself as a source
-///   via self-inclusion (§12), so a target lacking it hits
-///   some-but-not-all instead). Some-but-not-all → blocked on the missing
-///   sources (merge / move-into-pre-existing).
-/// - Section into the **base** (demotion): always relevant — the base is
-///   whole everywhere, so every source must be established or the crossing
-///   blocks.
-/// - A source module survives iff it still exists in the post-V partition
-///   ([`ReAnchor::surviving_modules`]); wholly-absorbed sources drop out.
-pub fn evaluate_crossing(re_anchor: &ReAnchor, subscription: &BTreeSet<String>) -> CrossingCheck {
+/// Per owning module M (grouping its remap sections; the base is one such "M"):
+/// - **Engaged** iff M is the base, or M is subscribed, or ≥1 of M's remap
+///   sections is satisfied (the target holds some content destined for M).
+///   A module the target has no stake in is skipped — irrelevant.
+/// - Engaged but **not all** its remap sections satisfied → **blocked** (a
+///   partial merge / move-into-pre-existing: the target has some of M under an
+///   old name and lacks the rest). Guidance: `provision --modules M` (or, for
+///   the base, adopt the unsatisfied sources first).
+/// - Engaged and **all** satisfied → whole for M. Subscribe M when it is
+///   already subscribed, or **brand-new** (no plain section → the crossing adds
+///   no objects: auto-subscribe). A module WITH a plain section that the target
+///   has not itself subscribed is left alone — it must be adopted to gain the
+///   plain content. Then drop any wholly-absorbed source (not in
+///   [`ReAnchor::surviving_modules`]).
+///
+/// `applied_sections` is the set of section *names* of THIS re-anchor that the
+/// target has a completed|satisfied row for.
+pub fn evaluate_crossing(
+    re_anchor: &ReAnchor,
+    subscription: &BTreeSet<String>,
+    applied_sections: &BTreeSet<String>,
+) -> CrossingCheck {
+    let source_established =
+        |s: &Option<String>| s.as_ref().is_none_or(|m| subscription.contains(m));
+    let satisfied =
+        |rs: &RemapSection| source_established(&rs.source) || applied_sections.contains(&rs.name);
+
+    // Group the remap sections by owning module (None = the base).
+    let mut by_module: BTreeMap<Option<String>, Vec<&RemapSection>> = BTreeMap::new();
+    for rs in &re_anchor.remap_sections {
+        by_module.entry(rs.module.clone()).or_default().push(rs);
+    }
+
     let mut rewritten = subscription.clone();
-    let mut missing: BTreeSet<String> = BTreeSet::new();
+    let mut blocked_modules: BTreeSet<String> = BTreeSet::new();
+    let mut blocked_base_sources: BTreeSet<String> = BTreeSet::new();
 
-    for (target, sources) in &re_anchor.remap_sections {
-        let is_established =
-            |s: &Option<String>| s.as_ref().is_none_or(|m| subscription.contains(m));
-        let any_established = sources.iter().any(is_established);
-        let all_established = sources.iter().all(is_established);
+    for (module, sections) in &by_module {
+        let is_base = module.is_none();
+        let subscribed = module.as_ref().is_some_and(|m| subscription.contains(m));
+        let any_satisfied = sections.iter().any(|rs| satisfied(rs));
 
-        // A module-target section with no established source is someone
-        // else's remap; a base-target section (demotion) is always relevant.
-        let relevant = target.is_none() || any_established;
-        if !relevant {
-            continue;
-        }
-        if !all_established {
-            missing.extend(
-                sources
-                    .iter()
-                    .filter(|s| !is_established(s))
-                    .flatten()
-                    .cloned(),
-            );
+        // Engaged: the target has a stake in this owning module.
+        if !(is_base || subscribed || any_satisfied) {
             continue;
         }
 
-        if let Some(module) = target {
-            rewritten.insert(module.clone());
+        if !sections.iter().all(|rs| satisfied(rs)) {
+            match module {
+                Some(m) => {
+                    blocked_modules.insert(m.clone());
+                }
+                None => {
+                    for rs in sections.iter().filter(|rs| !satisfied(rs)) {
+                        if let Some(src) = &rs.source {
+                            blocked_base_sources.insert(src.clone());
+                        }
+                    }
+                }
+            }
+            continue;
         }
-        for source in sources.iter().flatten() {
-            if !re_anchor.surviving_modules.contains(source) {
-                rewritten.remove(source);
+
+        // Whole for this module. Subscribe it when appropriate, then drop
+        // wholly-absorbed sources.
+        let auto_subscribe = module
+            .as_ref()
+            .is_some_and(|m| subscribed || !re_anchor.plain_modules.contains(m));
+        if let Some(m) = module
+            && auto_subscribe
+        {
+            rewritten.insert(m.clone());
+        }
+        // The base (demotion) always absorbs its sources; a module only when
+        // it is being subscribed at this crossing.
+        if is_base || auto_subscribe {
+            for rs in sections {
+                if let Some(src) = &rs.source
+                    && !re_anchor.surviving_modules.contains(src)
+                {
+                    rewritten.remove(src);
+                }
             }
         }
     }
 
-    if missing.is_empty() {
+    if blocked_modules.is_empty() && blocked_base_sources.is_empty() {
         CrossingCheck::Whole { rewritten }
     } else {
-        CrossingCheck::Blocked { missing }
+        CrossingCheck::Blocked {
+            modules: blocked_modules,
+            base_sources: blocked_base_sources,
+        }
     }
 }
 
@@ -986,37 +1059,45 @@ impl ModuleRuntime {
                 break; // not yet reached in the apply order
             }
 
-            match evaluate_crossing(re_anchor, &self.established) {
-                CrossingCheck::Blocked { missing } => {
-                    let needs_baseline = self.needing_baseline_content(missing.iter());
-                    let replay: Vec<String> = missing
-                        .iter()
-                        .filter(|m| !needs_baseline.contains(*m))
-                        .cloned()
-                        .collect();
+            // Section names of THIS re-anchor the target has a completed|
+            // satisfied row for (§14 per-section adoption). Feeds the extended
+            // wholeness predicate.
+            let applied_sections =
+                crossed_baseline_sections(pool, tracking_table, re_anchor.version).await?;
+
+            match evaluate_crossing(re_anchor, &self.established, &applied_sections) {
+                CrossingCheck::Blocked {
+                    modules,
+                    base_sources,
+                } => {
+                    let version = re_anchor.version;
                     let mut guidance = String::new();
-                    if !replay.is_empty() {
+                    if !modules.is_empty() {
+                        // Complete the crossing THROUGH the re-anchor — never
+                        // name a source module (a merge may have deleted its
+                        // declaration, §13).
                         guidance.push_str(&format!(
-                            "\n  pgmt migrate apply --modules {}   (replay)",
-                            replay.join(",")
+                            "\n  pgmt migrate provision --modules {}   \
+                             (completes the crossing through re-anchor {version})",
+                            modules.iter().cloned().collect::<Vec<_>>().join(",")
                         ));
                     }
-                    if !needs_baseline.is_empty() {
+                    if !base_sources.is_empty() {
+                        // Demotion into the base: the base must be whole
+                        // everywhere, so the demoted source(s) must be adopted.
                         guidance.push_str(&format!(
-                            "\n  pgmt migrate provision --modules {}   (needs baseline content)",
-                            needs_baseline.join(",")
+                            "\n  adopt {} before applying past {version} \
+                             (the base must be whole everywhere)",
+                            base_sources.iter().cloned().collect::<Vec<_>>().join(", ")
                         ));
                     }
                     anyhow::bail!(
-                        "re-anchor {version} remaps module(s) this target only partially has: \
-                         adopt {missing_list} before applying past {version}.\n\
-                         Nothing at or after version {version} was applied (crossing a re-anchor \
-                         with a partial module would leave it split across two vocabularies).\n\
-                         Adopt first:{guidance}\n\
+                        "re-anchor {version} cannot be crossed on this target — some of its \
+                         modules are only partially present.\n\
+                         Nothing at or after version {version} was applied (the strong membrane: \
+                         crossing with a partial module would split it across two vocabularies).\n\
+                         Complete the crossing:{guidance}\n\
                          then re-run.",
-                        version = re_anchor.version,
-                        missing_list = missing.iter().cloned().collect::<Vec<_>>().join(", "),
-                        guidance = guidance,
                     );
                 }
                 CrossingCheck::Whole { rewritten } => {
@@ -1137,6 +1218,30 @@ impl ModuleRuntime {
         self.established.extend(new.into_iter().cloned());
         Ok(())
     }
+}
+
+/// Section names of the baseline at `version` the target has a covered
+/// (completed|satisfied) row for — the §14 per-section adoption record the
+/// extended wholeness predicate ([`evaluate_crossing`]) consults.
+async fn crossed_baseline_sections(
+    pool: &sqlx::PgPool,
+    tracking_table: &crate::config::types::TrackingTable,
+    version: u64,
+) -> Result<BTreeSet<String>> {
+    let sections = format!(
+        r#""{}"."{}_sections""#,
+        tracking_table.schema, tracking_table.name
+    );
+    let names: Vec<String> = sqlx::query_scalar(&format!(
+        "SELECT section_name FROM {sections}
+         WHERE is_baseline AND migration_version = $1
+           AND status IN ('completed', 'satisfied')",
+        sections = sections,
+    ))
+    .bind(crate::migration_tracking::version_to_db(version)?)
+    .fetch_all(pool)
+    .await?;
+    Ok(names.into_iter().collect())
 }
 
 /// The target's honest applied-baseline watermark: the highest baseline
@@ -1948,24 +2053,26 @@ mod tests {
         );
     }
 
-    /// Build a ReAnchor from `(section module, sources)` remap tuples and the
-    /// modules surviving in the post-V partition. `None` = the base.
+    /// Build a ReAnchor from provenance-cut remap sections `(name, owning
+    /// module, single source)`, the modules that own a **plain** section, and
+    /// the modules surviving the post-V partition. `None` = the base.
     fn re_anchor(
         version: u64,
-        remap_sections: &[(Option<&str>, &[Option<&str>])],
+        remap_sections: &[(&str, Option<&str>, Option<&str>)],
+        plain: &[&str],
         surviving: &[&str],
     ) -> ReAnchor {
         ReAnchor {
             version,
             remap_sections: remap_sections
                 .iter()
-                .map(|(m, sources)| {
-                    (
-                        m.map(str::to_string),
-                        sources.iter().map(|s| s.map(str::to_string)).collect(),
-                    )
+                .map(|(name, module, source)| RemapSection {
+                    name: name.to_string(),
+                    module: module.map(str::to_string),
+                    source: source.map(str::to_string),
                 })
                 .collect(),
+            plain_modules: plain.iter().map(|s| s.to_string()).collect(),
             surviving_modules: surviving.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -1974,17 +2081,29 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
+    fn blocked(modules: &[&str], base_sources: &[&str]) -> CrossingCheck {
+        CrossingCheck::Blocked {
+            modules: subs(modules),
+            base_sources: subs(base_sources),
+        }
+    }
+
     #[test]
     fn test_crossing_modularization_from_base_auto_subscribes() {
-        // §19c: (unmoduled) → {app, analytics}. The base is always whole →
-        // the rewrite applies even on an empty subscription.
+        // §19c: (unmoduled) → {app, analytics}. Each module's only content is a
+        // remap section sourced from the base (always whole), no plain section
+        // → auto-subscribe on an empty subscription.
         let ra = re_anchor(
             1200,
-            &[(Some("app"), &[None]), (Some("analytics"), &[None])],
+            &[
+                ("app", Some("app"), None),
+                ("analytics", Some("analytics"), None),
+            ],
+            &[],
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &BTreeSet::new()),
+            evaluate_crossing(&ra, &BTreeSet::new(), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             }
@@ -1993,32 +2112,35 @@ mod tests {
 
     #[test]
     fn test_crossing_split_rewrites_subscription() {
-        // app → app, analytics: 'app' keeps a section (self-included via
-        // remaps="app") and 'analytics' acquires from 'app'.
+        // app → app, analytics: 'app' keeps a PLAIN section (no remap) and
+        // 'analytics' is a brand-new remap section sourced from 'app'.
         let ra = re_anchor(
             1300,
-            &[
-                (Some("app"), &[Some("app")]),
-                (Some("analytics"), &[Some("app")]),
-            ],
+            &[("analytics", Some("analytics"), Some("app"))],
+            &["app"],
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["app"])),
+            evaluate_crossing(&ra, &subs(&["app"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             },
-            "app survives (still in the partition); analytics auto-subscribes"
+            "app survives (plain section, still subscribed); analytics auto-subscribes"
         );
     }
 
     #[test]
     fn test_crossing_merge_with_both_sources_collapses() {
-        // a, b → c: both subscribed → c subscribed, a and b (absorbed, no
-        // sections of their own) drop out.
-        let ra = re_anchor(1600, &[(Some("c"), &[Some("a"), Some("b")])], &["c"]);
+        // a, b → c: two remap sections (one per source), c brand-new (no plain).
+        // Both sources subscribed → c auto-subscribes, a and b (absorbed) drop.
+        let ra = re_anchor(
+            1600,
+            &[("c", Some("c"), Some("a")), ("c_2", Some("c"), Some("b"))],
+            &[],
+            &["c"],
+        );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"])),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
             }
@@ -2027,35 +2149,61 @@ mod tests {
 
     #[test]
     fn test_crossing_merge_some_but_not_all_blocks() {
-        // a, b → c with only a subscribed → blocked on b (§19e).
-        let ra = re_anchor(1600, &[(Some("c"), &[Some("a"), Some("b")])], &["c"]);
+        // a, b → c with only a subscribed → c engaged (its a-section satisfied)
+        // but not whole → blocked ON THE OWNING MODULE c, never naming b (§19e).
+        let ra = re_anchor(
+            1600,
+            &[("c", Some("c"), Some("a")), ("c_2", Some("c"), Some("b"))],
+            &[],
+            &["c"],
+        );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"])),
-            CrossingCheck::Blocked {
-                missing: subs(&["b"])
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
+            blocked(&["c"], &[])
+        );
+    }
+
+    #[test]
+    fn test_crossing_merge_applied_row_satisfies() {
+        // Same merge, but the target adopted c's b-section (a satisfied|completed
+        // row) → both sections satisfied → whole even though b was never
+        // subscribed. c auto-subscribes; the absorbed sources drop.
+        let ra = re_anchor(
+            1600,
+            &[("c", Some("c"), Some("a")), ("c_2", Some("c"), Some("b"))],
+            &[],
+            &["c"],
+        );
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a"]), &subs(&["c_2"])),
+            CrossingCheck::Whole {
+                rewritten: subs(&["c"])
             }
         );
     }
 
     #[test]
     fn test_crossing_move_into_pre_existing_module() {
-        // Part of a → existing b: self-inclusion stamps remaps="a,b". A
-        // target with a but not b is the merge case in different clothes.
+        // Part of a → existing b: a plain `b` section (retained) + a remap
+        // `b_2 remaps="a"`. b has a plain section, so a target with a-but-not-b
+        // is NOT blocked (its b_2 is source-satisfied) — b simply isn't
+        // auto-subscribed; the target must adopt b to gain the plain content.
         let ra = re_anchor(
             1700,
-            &[(Some("b"), &[Some("a"), Some("b")])],
+            &[("b_2", Some("b"), Some("a"))],
+            &["b"],
             &["a", "b"], // partial move: a keeps objects of its own
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"])),
-            CrossingCheck::Blocked {
-                missing: subs(&["b"])
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
+            CrossingCheck::Whole {
+                rewritten: subs(&["a"])
             },
-            "adopt b before crossing"
+            "engaged and whole, but b has a plain section → not auto-subscribed"
         );
-        // With both: rewrite applies; a survives (still in the partition).
+        // Once b is subscribed (adopted), the crossing keeps both; a survives.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"])),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["a", "b"])
             }
@@ -2064,11 +2212,11 @@ mod tests {
 
     #[test]
     fn test_crossing_move_into_brand_new_module() {
-        // a → brand-new b: remaps="a" alone (no self-inclusion — b held
-        // nothing before) → auto-subscribe b; a wholly absorbed → drops out.
-        let ra = re_anchor(1700, &[(Some("b"), &[Some("a")])], &["b"]);
+        // a → brand-new b: single remap section, no plain → auto-subscribe b;
+        // a wholly absorbed → drops out.
+        let ra = re_anchor(1700, &[("b", Some("b"), Some("a"))], &[], &["b"]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"])),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["b"])
             }
@@ -2078,9 +2226,9 @@ mod tests {
     #[test]
     fn test_crossing_demotion_with_source_subscribed() {
         // a → base: a subscribed → removed (its objects are base now).
-        let ra = re_anchor(1800, &[(None, &[Some("a")])], &[]);
+        let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "other"])),
+            evaluate_crossing(&ra, &subs(&["a", "other"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
             }
@@ -2090,32 +2238,28 @@ mod tests {
     #[test]
     fn test_crossing_demotion_without_source_blocks() {
         // a → base on a target without a: the base must be whole everywhere →
-        // adopt a before crossing.
-        let ra = re_anchor(1800, &[(None, &[Some("a")])], &[]);
+        // blocked, naming the source to adopt (the base owns the section, so
+        // there is no `provision --modules` completion).
+        let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["other"])),
-            CrossingCheck::Blocked {
-                missing: subs(&["a"])
-            }
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new()),
+            blocked(&[], &["a"])
         );
     }
 
     #[test]
     fn test_crossing_irrelevant_re_anchor_is_inert_but_crossed() {
-        // A split of analytics on a core-only target: sources entirely
-        // outside the subscription → wholeness vacuously satisfied, no
-        // mutation (the caller still records the crossing and advances the
-        // watermark).
+        // A split of analytics on a core-only target: the reports remap section
+        // is sourced from analytics (not subscribed, not applied) → reports is
+        // not engaged → skipped. Wholeness vacuously holds, no mutation.
         let ra = re_anchor(
             1900,
-            &[
-                (Some("analytics"), &[Some("analytics")]),
-                (Some("reports"), &[Some("analytics")]),
-            ],
+            &[("reports", Some("reports"), Some("analytics"))],
+            &["analytics"],
             &["analytics", "reports"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["core"])),
+            evaluate_crossing(&ra, &subs(&["core"]), &BTreeSet::new()),
             CrossingCheck::Whole {
                 rewritten: subs(&["core"])
             }
