@@ -8,7 +8,7 @@ use crate::migration::{
     validate_baseline_against_catalog,
 };
 use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, sectioned_migration_sql,
+    HistoricalAttribution, evaluate_module_generation, render_migration_with_acquisitions,
     write_sectioned_baseline,
 };
 use anyhow::{Result, anyhow};
@@ -118,7 +118,7 @@ pub async fn cmd_migrate_update_with_options(
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 
-    if !migration_result.has_changes {
+    if !migration_result.has_changes && !partition_diverged {
         println!("No changes detected - updating migration to be empty");
 
         // Update the migration file to be empty since no changes are needed
@@ -129,29 +129,13 @@ pub async fn cmd_migrate_update_with_options(
             latest_migration.path.display()
         );
 
-        if !partition_diverged {
-            return Ok(());
-        }
-        // Pure re-tag: fall through so the re-anchoring baseline regenerates.
-    } else {
-        // Step 4: Update migration file (module projects write module-tagged
-        // sections; everything else the plain form).
-        let migration_sql = match &module_gen {
-            Some(module_gen) => sectioned_migration_sql(
-                &migration_result.steps,
-                &old_catalog,
-                &new_catalog,
-                &module_gen.partition,
-                &file_mapping,
-                &historical,
-            )?,
-            None => migration_result.migration_sql.clone(),
-        };
-        std::fs::write(&latest_migration.path, &migration_sql)?;
-        println!("Updated migration: {}", latest_migration.path.display());
+        return Ok(());
     }
 
-    // Step 5: Optionally update the corresponding baseline
+    // Step 5 runs before step 4 for module projects: at a re-anchor, the
+    // migration's acquisition sections (§11/§12) derive from the baseline's
+    // provenance cut, so the baseline must be sectioned first.
+    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -163,14 +147,14 @@ pub async fn cmd_migrate_update_with_options(
         })
         .await?;
         if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
+            baseline_sections = Some(write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?;
+            )?);
         }
         println!("Updated baseline: {}", result.path.display());
 
@@ -193,6 +177,28 @@ pub async fn cmd_migrate_update_with_options(
             "Skipping baseline update (baseline does not exist and create_baselines_by_default is false)"
         );
     }
+
+    // Step 4 (after 5 by design): update the migration file — ordinary diff
+    // sections plus, at a re-anchor, the acquisition sections (§11/§12).
+    let migration_sql: String = match &module_gen {
+        Some(module_gen) => render_migration_with_acquisitions(
+            if migration_result.has_changes {
+                &migration_result.steps
+            } else {
+                &[]
+            },
+            baseline_sections.as_deref(),
+            &old_catalog,
+            &new_catalog,
+            &module_gen.partition,
+            &file_mapping,
+            &historical,
+        )?
+        .unwrap_or_else(|| "-- No changes detected\n".to_string()),
+        None => migration_result.migration_sql.clone(),
+    };
+    std::fs::write(&latest_migration.path, &migration_sql)?;
+    println!("Updated migration: {}", latest_migration.path.display());
 
     println!("Migration update complete!");
     Ok(())
@@ -346,19 +352,6 @@ pub async fn cmd_migrate_update_specific(
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 
-    // Module projects render module-tagged sections.
-    let migration_sql = match &module_gen {
-        Some(module_gen) if migration_result.has_changes => sectioned_migration_sql(
-            &migration_result.steps,
-            &old_catalog,
-            &new_catalog,
-            &module_gen.partition,
-            &file_mapping,
-            &historical,
-        )?,
-        _ => migration_result.migration_sql.clone(),
-    };
-
     if !migration_result.has_changes {
         if is_latest {
             println!("No changes detected - updating migration to be empty");
@@ -411,54 +404,10 @@ pub async fn cmd_migrate_update_specific(
         // Pure re-tag: fall through so the re-anchoring baseline regenerates.
     }
 
-    // Write the migration file
-    if migration_result.has_changes && dry_run {
-        println!(
-            "📝 Preview: Generated migration content ({} chars)",
-            migration_result.migration_sql.len()
-        );
-        if is_latest {
-            println!("🔄 Would update: {}", target_migration.path.display());
-        } else {
-            let new_filename = format!(
-                "{}{}_{}.sql",
-                config.migration.filename_prefix,
-                new_version,
-                new_description.replace(' ', "_")
-            );
-            let new_path = migrations_dir.join(&new_filename);
-            println!(
-                "🔄 Would rename {} → {}",
-                target_migration.version, new_version
-            );
-            println!("   Delete: {}", target_migration.path.display());
-            println!("   Create: {}", new_path.display());
-        }
-        println!("\n📋 Migration preview:\n{}", migration_sql);
-    } else if migration_result.has_changes && is_latest {
-        // For latest migration, overwrite the existing file (current behavior)
-        std::fs::write(&target_migration.path, &migration_sql)?;
-        println!("Updated migration: {}", target_migration.path.display());
-    } else if migration_result.has_changes {
-        // For older migration, delete old file and create new one with fresh timestamp
-        std::fs::remove_file(&target_migration.path)?;
-        let new_filename = format!(
-            "{}{}_{}.sql",
-            config.migration.filename_prefix,
-            new_version,
-            new_description.replace(' ', "_")
-        );
-        let new_path = migrations_dir.join(&new_filename);
-        std::fs::write(&new_path, &migration_sql)?;
-        println!(
-            "Migration {} updated to {} (renumbered)",
-            target_migration.version, new_version
-        );
-        println!("Deleted: {}", target_migration.path.display());
-        println!("Created: {}", new_path.display());
-    }
-
-    // Handle baseline updates (similar to existing logic)
+    // Handle baseline updates FIRST for module projects: at a re-anchor the
+    // migration's acquisition sections (§11/§12) derive from the baseline's
+    // provenance cut.
+    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -470,14 +419,14 @@ pub async fn cmd_migrate_update_specific(
         })
         .await?;
         if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
+            baseline_sections = Some(write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?;
+            )?);
         }
         if is_latest {
             println!("Updated baseline: {}", result.path.display());
@@ -504,6 +453,81 @@ pub async fn cmd_migrate_update_specific(
         );
     } else {
         println!("Skipping baseline creation (create_baselines_by_default is false)");
+    }
+
+    // The migration content: ordinary diff sections plus, at a re-anchor, the
+    // acquisition sections (§11/§12). `None` = nothing to write (the
+    // no-changes handling above already produced the file).
+    let migration_sql: Option<String> = match &module_gen {
+        Some(module_gen) => render_migration_with_acquisitions(
+            if migration_result.has_changes {
+                &migration_result.steps
+            } else {
+                &[]
+            },
+            baseline_sections.as_deref(),
+            &old_catalog,
+            &new_catalog,
+            &module_gen.partition,
+            &file_mapping,
+            &historical,
+        )?,
+        None => migration_result
+            .has_changes
+            .then(|| migration_result.migration_sql.clone()),
+    };
+
+    // Write the migration file
+    if let Some(migration_sql) = &migration_sql {
+        if dry_run {
+            println!(
+                "📝 Preview: Generated migration content ({} chars)",
+                migration_sql.len()
+            );
+            if is_latest {
+                println!("🔄 Would update: {}", target_migration.path.display());
+            } else {
+                let new_filename = format!(
+                    "{}{}_{}.sql",
+                    config.migration.filename_prefix,
+                    new_version,
+                    new_description.replace(' ', "_")
+                );
+                let new_path = migrations_dir.join(&new_filename);
+                println!(
+                    "🔄 Would rename {} → {}",
+                    target_migration.version, new_version
+                );
+                println!("   Delete: {}", target_migration.path.display());
+                println!("   Create: {}", new_path.display());
+            }
+            println!("\n📋 Migration preview:\n{}", migration_sql);
+        } else if is_latest {
+            // For latest migration, overwrite the existing file (current behavior)
+            std::fs::write(&target_migration.path, migration_sql)?;
+            println!("Updated migration: {}", target_migration.path.display());
+        } else {
+            // For older migration, delete old file and create new one with a
+            // fresh timestamp. The no-changes fall-through (a pure re-tag with
+            // acquisitions) already moved the file; only delete what exists.
+            if target_migration.path.exists() {
+                std::fs::remove_file(&target_migration.path)?;
+                println!("Deleted: {}", target_migration.path.display());
+            }
+            let new_filename = format!(
+                "{}{}_{}.sql",
+                config.migration.filename_prefix,
+                new_version,
+                new_description.replace(' ', "_")
+            );
+            let new_path = migrations_dir.join(&new_filename);
+            std::fs::write(&new_path, migration_sql)?;
+            println!(
+                "Migration {} updated to {} (renumbered)",
+                target_migration.version, new_version
+            );
+            println!("Created: {}", new_path.display());
+        }
     }
 
     if dry_run {

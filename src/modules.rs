@@ -220,11 +220,16 @@ pub struct StepSection {
     pub name: String,
     /// Owning module (`None` = the base).
     pub module: Option<String>,
-    /// Prior owner of this section's objects (re-anchoring baselines only): a
-    /// single acquired-from module, `(unmoduled)` for the base. Empty for a
-    /// plain (retained/brand-new) section and for every ordinary migration
-    /// section. Provenance-cut guarantees at most one entry (§12).
+    /// Prior owner of this section's objects (re-anchors and their paired
+    /// acquisition migration sections, §11/§12): a single acquired-from
+    /// module, `(unmoduled)` for the base. Empty for a plain
+    /// (retained/brand-new) section and for every ordinary migration section.
+    /// Provenance-cut guarantees at most one entry.
     pub remaps: Vec<String>,
+    /// Reviewer-facing SQL comment rendered above the section header
+    /// (acquisition sections only, §11): states the audience — runs only on
+    /// targets without the source.
+    pub comment: Option<String>,
     pub steps: Vec<crate::diff::operations::MigrationStep>,
 }
 
@@ -377,25 +382,34 @@ pub fn provenance_cut_baseline_sections(
     }
 
     // Re-derive §8 names across the full re-cut section list.
-    let mut out = Vec::with_capacity(runs.len());
+    let mut out: Vec<StepSection> = runs
+        .into_iter()
+        .map(|run| StepSection {
+            name: String::new(),
+            module: run.module,
+            remaps: run.remap.into_iter().collect(),
+            comment: None,
+            steps: run.steps,
+        })
+        .collect();
+    assign_section_names(&mut out);
+    out
+}
+
+/// Assign §8 names in place: a module's first section is the module name
+/// (`default` for the base), later ones get `_2`, `_3`, … in file order.
+pub fn assign_section_names(sections: &mut [StepSection]) {
     let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for run in runs {
-        let base_name = run.module.as_deref().unwrap_or("default").to_string();
+    for section in sections.iter_mut() {
+        let base_name = section.module.as_deref().unwrap_or("default").to_string();
         let count = name_counts.entry(base_name.clone()).or_insert(0);
         *count += 1;
-        let name = if *count == 1 {
+        section.name = if *count == 1 {
             base_name
         } else {
             format!("{}_{}", base_name, count)
         };
-        out.push(StepSection {
-            name,
-            module: run.module,
-            remaps: run.remap.into_iter().collect(),
-            steps: run.steps,
-        });
     }
-    out
 }
 
 /// Section migration steps by module: annotate each step with its owning
@@ -486,28 +500,19 @@ pub fn sectionize_steps(
 
     // Cut the (now maximally contiguous) order at module boundaries.
     let mut sections: Vec<StepSection> = Vec::new();
-    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
     for node in ordered {
         match sections.last_mut() {
             Some(last) if last.module == node.module => last.steps.push(node.step),
-            _ => {
-                let base_name = node.module.as_deref().unwrap_or("default").to_string();
-                let count = name_counts.entry(base_name.clone()).or_insert(0);
-                *count += 1;
-                let name = if *count == 1 {
-                    base_name
-                } else {
-                    format!("{}_{}", base_name, count)
-                };
-                sections.push(StepSection {
-                    name,
-                    module: node.module,
-                    remaps: Vec::new(),
-                    steps: vec![node.step],
-                });
-            }
+            _ => sections.push(StepSection {
+                name: String::new(),
+                module: node.module,
+                remaps: Vec::new(),
+                comment: None,
+                steps: vec![node.step],
+            }),
         }
     }
+    assign_section_names(&mut sections);
 
     Ok(sections)
 }
@@ -526,6 +531,9 @@ pub fn render_sectioned_migration(sections: &[StepSection]) -> String {
         }
         if !section.remaps.is_empty() {
             header.push_str(&format!(" remaps=\"{}\"", section.remaps.join(",")));
+        }
+        if let Some(comment) = &section.comment {
+            header = format!("{}\n{}", comment, header);
         }
         let step_sql: Vec<String> = section
             .steps
@@ -812,18 +820,20 @@ pub enum CrossingCheck {
     /// subscription is still *crossed* (evaluated and consumed, watermark
     /// advances), just not a mutation.
     Whole { rewritten: BTreeSet<String> },
-    /// Wholeness fails (the strong membrane, §13). The crossing cannot complete
-    /// because some owning module's content is only partially present.
+    /// Wholeness fails (the strong membrane, §13). The crossing cannot
+    /// complete on this target.
     Blocked {
-        /// Owning **modules** whose crossing is incomplete — complete it
-        /// through the re-anchor with `provision --modules <these>`. Never a
-        /// source module (a merge may have deleted its declaration, §13).
-        modules: BTreeSet<String>,
-        /// Sources of blocked **base** (demotion) remap sections — the base
-        /// must be whole everywhere, so these must be adopted first. (The one
-        /// case whose owning "module" is the base and so has no
-        /// `provision --modules` completion; guidance names the source.)
-        base_sources: BTreeSet<String>,
+        /// The needed-modules gate (the only surviving membrane in the
+        /// merge/move family, §13): destination modules the crossing would
+        /// relabel held objects into, which are pre-existing and not
+        /// subscribed here — adopt them first (`provision --modules <these>`).
+        /// Never a source module (a merge may have deleted its declaration).
+        needs_adoption: BTreeSet<String>,
+        /// Remap section names this target cannot satisfy at all: source
+        /// absent, never applied, and migration V carries no acquisition
+        /// section that will run here — an artifact generated before
+        /// migration-borne acquisition (§12). Regenerate the re-anchor.
+        unsatisfiable: BTreeSet<String>,
     },
 }
 
@@ -838,10 +848,10 @@ pub enum CrossingCheck {
 /// - **Engaged** iff M is the base, or M is subscribed, or ≥1 of M's remap
 ///   sections is satisfied (the target holds some content destined for M).
 ///   A module the target has no stake in is skipped — irrelevant.
-/// - Engaged but **not all** its remap sections satisfied → **blocked** (a
-///   partial merge / move-into-pre-existing: the target has some of M under an
-///   old name and lacks the rest). Guidance: `provision --modules M` (or, for
-///   the base, adopt the unsatisfied sources first).
+/// - Engaged but some remap section neither satisfied nor satisfiable by the
+///   pending migration's acquisition sections → **blocked** as unsatisfiable:
+///   only reachable with artifacts generated before migration-borne
+///   acquisition (§12) — regenerate the re-anchor.
 /// - **Needed-modules gate (§13):** M is *needed* iff any of its remap
 ///   sections is **source**-satisfied here — the crossing would relabel objects
 ///   the target physically holds into M. Needed and brand-new (remap sections
@@ -851,21 +861,34 @@ pub enum CrossingCheck {
 ///   relabel objects into an unsubscribed module — that orphans them (their
 ///   future sections would skip at info level: silent drift on exactly the
 ///   objects that moved).
-/// - Engaged and **all** satisfied → whole for M. Subscribe M when it is
+/// - Engaged and every remap section satisfied or satisfiable → whole for M.
+///   A section is *satisfiable* when migration V carries its acquisition
+///   section and M is run-eligible (base / subscribed / brand-new) — it will
+///   run in this apply before the commit (§13 two-phase). Subscribe M when it is
 ///   already subscribed, or **brand-new** (no plain section → the crossing adds
 ///   no objects: auto-subscribe). Then drop any wholly-absorbed source (not in
 ///   [`ReAnchor::surviving_modules`]).
 ///
 /// `applied_sections` is the set of section *names* of THIS re-anchor that the
-/// target has a completed|satisfied row for.
+/// target has a completed|satisfied row for. `acquirable` is the set of
+/// `(module, source)` pairs carried as remap sections by the pending migration
+/// at V in THIS apply (§12 migration-borne acquisition) — empty when V's
+/// migration is not about to run (single-shot crossings, the final sweep):
+/// such a section is *satisfiable* because it **will run in this apply**,
+/// provided its owning module is run-eligible (the base, subscribed, or
+/// brand-new-and-auto-subscribing).
 pub fn evaluate_crossing(
     re_anchor: &ReAnchor,
     subscription: &BTreeSet<String>,
     applied_sections: &BTreeSet<String>,
+    acquirable: &BTreeSet<(Option<String>, Option<String>)>,
 ) -> CrossingCheck {
     let source_established =
         |s: &Option<String>| s.as_ref().is_none_or(|m| subscription.contains(m));
-    let satisfied =
+    // Satisfied by present state: objects here under the source's name, or the
+    // section itself already applied. (Engagement counts only this — a merely
+    // *acquirable* section gives the target no stake.)
+    let satisfied_now =
         |rs: &RemapSection| source_established(&rs.source) || applied_sections.contains(&rs.name);
 
     // Group the remap sections by owning module (None = the base).
@@ -875,13 +898,13 @@ pub fn evaluate_crossing(
     }
 
     let mut rewritten = subscription.clone();
-    let mut blocked_modules: BTreeSet<String> = BTreeSet::new();
-    let mut blocked_base_sources: BTreeSet<String> = BTreeSet::new();
+    let mut needs_adoption: BTreeSet<String> = BTreeSet::new();
+    let mut unsatisfiable: BTreeSet<String> = BTreeSet::new();
 
     for (module, sections) in &by_module {
         let is_base = module.is_none();
         let subscribed = module.as_ref().is_some_and(|m| subscription.contains(m));
-        let any_satisfied = sections.iter().any(|rs| satisfied(rs));
+        let any_satisfied = sections.iter().any(|rs| satisfied_now(rs));
 
         // Engaged: the target has a stake in this owning module.
         if !(is_base || subscribed || any_satisfied) {
@@ -898,23 +921,30 @@ pub fn evaluate_crossing(
             && re_anchor.plain_modules.contains(m)
             && sections.iter().any(|rs| source_established(&rs.source))
         {
-            blocked_modules.insert(m.clone());
+            needs_adoption.insert(m.clone());
             continue;
         }
 
-        if !sections.iter().all(|rs| satisfied(rs)) {
-            match module {
-                Some(m) => {
-                    blocked_modules.insert(m.clone());
-                }
-                None => {
-                    for rs in sections.iter().filter(|rs| !satisfied(rs)) {
-                        if let Some(src) = &rs.source {
-                            blocked_base_sources.insert(src.clone());
-                        }
-                    }
-                }
-            }
+        // Will-run eligibility (§13 gate): M's acquisition sections in
+        // migration V execute here when M is the base (flows with every
+        // apply), subscribed, or brand-new and auto-subscribing at this
+        // crossing. (Pre-existing-unsubscribed was caught above.)
+        let run_eligible = match module {
+            None => true,
+            Some(m) => subscribed || !re_anchor.plain_modules.contains(m),
+        };
+        let satisfiable = |rs: &RemapSection| {
+            satisfied_now(rs)
+                || (run_eligible && acquirable.contains(&(rs.module.clone(), rs.source.clone())))
+        };
+
+        if !sections.iter().all(|rs| satisfiable(rs)) {
+            unsatisfiable.extend(
+                sections
+                    .iter()
+                    .filter(|rs| !satisfiable(rs))
+                    .map(|rs| rs.name.clone()),
+            );
             continue;
         }
 
@@ -941,12 +971,12 @@ pub fn evaluate_crossing(
         }
     }
 
-    if blocked_modules.is_empty() && blocked_base_sources.is_empty() {
+    if needs_adoption.is_empty() && unsatisfiable.is_empty() {
         CrossingCheck::Whole { rewritten }
     } else {
         CrossingCheck::Blocked {
-            modules: blocked_modules,
-            base_sources: blocked_base_sources,
+            needs_adoption,
+            unsatisfiable,
         }
     }
 }
@@ -1092,8 +1122,10 @@ impl ModuleRuntime {
             if ceiling.is_some_and(|c| re_anchor.version > c) {
                 break; // not yet reached in the apply order
             }
+            // Single-shot: nothing of this version remains to run, so no
+            // acquisition section is "about to run" — pass an empty set.
             let pending = self
-                .gate_re_anchor(pool, tracking_table, &re_anchor)
+                .gate_re_anchor(pool, tracking_table, &re_anchor, &BTreeSet::new())
                 .await?;
             self.commit_crossing(pool, tracking_table, pending).await?;
         }
@@ -1111,6 +1143,7 @@ impl ModuleRuntime {
         pool: &sqlx::PgPool,
         tracking_table: &crate::config::types::TrackingTable,
         version: u64,
+        acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<Option<PendingCrossing>> {
         let Some(re_anchor) = self
             .re_anchors
@@ -1120,7 +1153,8 @@ impl ModuleRuntime {
             return Ok(None);
         };
         Ok(Some(
-            self.gate_re_anchor(pool, tracking_table, re_anchor).await?,
+            self.gate_re_anchor(pool, tracking_table, re_anchor, acquirable)
+                .await?,
         ))
     }
 
@@ -1132,6 +1166,7 @@ impl ModuleRuntime {
         pool: &sqlx::PgPool,
         tracking_table: &crate::config::types::TrackingTable,
         re_anchor: &ReAnchor,
+        acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<PendingCrossing> {
         // Section names of THIS re-anchor the target has a completed|
         // satisfied row for (§14 per-section adoption). Feeds the extended
@@ -1139,42 +1174,41 @@ impl ModuleRuntime {
         let applied_sections =
             crossed_baseline_sections(pool, tracking_table, re_anchor.version).await?;
 
-        match evaluate_crossing(re_anchor, &self.established, &applied_sections) {
+        match evaluate_crossing(re_anchor, &self.established, &applied_sections, acquirable) {
             CrossingCheck::Blocked {
-                modules,
-                base_sources,
+                needs_adoption,
+                unsatisfiable,
             } => {
                 let version = re_anchor.version;
-                let mut guidance = String::new();
-                if !modules.is_empty() {
-                    // Complete the crossing THROUGH the re-anchor — never
-                    // name a source module (a merge may have deleted its
-                    // declaration, §13).
-                    let list = modules.iter().cloned().collect::<Vec<_>>();
-                    guidance.push_str(&format!(
-                        "\n  adopt {} before applying past {version}:\n  \
-                         pgmt migrate provision --modules {}   \
-                         (completes the crossing through re-anchor {version})",
-                        list.join(", "),
-                        list.join(",")
-                    ));
-                }
-                if !base_sources.is_empty() {
-                    // Demotion into the base: the base must be whole
-                    // everywhere, so the demoted source(s) must be adopted.
-                    guidance.push_str(&format!(
-                        "\n  adopt {} before applying past {version} \
-                         (the base must be whole everywhere)",
-                        base_sources.iter().cloned().collect::<Vec<_>>().join(", ")
-                    ));
+                if !needs_adoption.is_empty() {
+                    // The needed-modules gate — the only surviving membrane in
+                    // the merge/move family (§13). Names the DESTINATION
+                    // module (always in config), never a source.
+                    let list = needs_adoption.iter().cloned().collect::<Vec<_>>();
+                    anyhow::bail!(
+                        "re-anchor {version} would relabel objects this target holds into \
+                         module(s) {list_disp}, which it does not subscribe — that would \
+                         orphan them.\n\
+                         Nothing at or after version {version} was applied (the strong \
+                         membrane).\n\
+                         Adopt {list_disp} before applying past {version}:\n  \
+                         pgmt migrate provision --modules {list_args}\n\
+                         then re-run.",
+                        list_disp = list.join(", "),
+                        list_args = list.join(","),
+                    );
                 }
                 anyhow::bail!(
-                    "re-anchor {version} cannot be crossed on this target — module content \
-                     it would relabel is not fully adopted here.\n\
-                     Nothing at or after version {version} was applied (the strong membrane: \
-                     crossing with a partial module would split it across two vocabularies).\n\
-                     Complete the crossing:{guidance}\n\
-                     then re-run.",
+                    "re-anchor {version} has remap section(s) this target cannot satisfy: \
+                     {sections} — the source is absent, the section was never applied, and \
+                     the migration at {version} carries no acquisition section that would \
+                     run here.\n\
+                     Nothing at or after version {version} was applied (the strong \
+                     membrane).\n\
+                     This artifact predates migration-borne acquisition (modules.md §12): \
+                     regenerate the re-anchor with a current pgmt \
+                     (pgmt migrate new <description> --create-baseline).",
+                    sections = unsatisfiable.iter().cloned().collect::<Vec<_>>().join(", "),
                 );
             }
             CrossingCheck::Whole { rewritten } => Ok(PendingCrossing {
@@ -1501,27 +1535,6 @@ pub fn evaluate_module_generation(
     }))
 }
 
-/// Cut generated migration steps into module-tagged sections and render them
-/// as the migration file's SQL.
-pub fn sectioned_migration_sql(
-    steps: &[crate::diff::operations::MigrationStep],
-    old_catalog: &Catalog,
-    new_catalog: &Catalog,
-    partition: &ModulePartition,
-    file_mapping: &FileToObjectMapping,
-    historical: &HistoricalAttribution,
-) -> Result<String> {
-    let sections = sectionize_steps(
-        steps,
-        old_catalog,
-        new_catalog,
-        partition,
-        file_mapping,
-        historical,
-    )?;
-    Ok(render_sectioned_migration(&sections))
-}
-
 /// Rewrite a freshly generated baseline file into per-module sections, with
 /// `remaps` recording prior ownership wherever it changed — the re-anchor
 /// record establishment derivation reads. Baselines are pure creates, so only
@@ -1533,7 +1546,7 @@ pub fn write_sectioned_baseline(
     partition: &ModulePartition,
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
-) -> Result<()> {
+) -> Result<Vec<StepSection>> {
     let sections = sectionize_steps(
         steps,
         &Catalog::empty(),
@@ -1544,7 +1557,73 @@ pub fn write_sectioned_baseline(
     )?;
     let sections = provenance_cut_baseline_sections(sections, historical);
     std::fs::write(path, render_sectioned_migration(&sections))?;
-    Ok(())
+    Ok(sections)
+}
+
+/// The acquisition sections migration V carries when ownership moves at
+/// re-anchor V (§11, §12): clones of the baseline's MODULE-sourced remap
+/// sections — the moved objects' CREATE DDL, destination-tagged (unmoduled
+/// for demotions), with the reviewer-facing audience comment. Base-sourced
+/// moves (`remaps="(unmoduled)"`, e.g. modularizing an existing project) are
+/// excluded: the base is established everywhere, so those sections are
+/// satisfied on every target by construction and stay baseline-only (§19c).
+pub fn acquisition_sections(baseline_sections: &[StepSection]) -> Vec<StepSection> {
+    baseline_sections
+        .iter()
+        .filter(|s| {
+            s.remaps
+                .first()
+                .is_some_and(|source| source != UNMODULED_DISPLAY)
+        })
+        .map(|s| {
+            let source = s.remaps.first().expect("filtered on non-empty remaps");
+            StepSection {
+                name: String::new(), // re-derived when merged into the migration
+                module: s.module.clone(),
+                remaps: s.remaps.clone(),
+                comment: Some(format!(
+                    "-- objects moved from module '{source}'; runs only on targets without\n                     -- it — targets holding '{source}' already have them (satisfied).",
+                )),
+                steps: s.steps.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Render migration V's SQL as its ordinary diff sections plus the
+/// acquisition sections derived from the same-version re-anchor baseline
+/// (§11/§12). Returns `None` when there is nothing to write at all — no DDL
+/// and no module-sourced moves (a pure base-sourced re-tag stays
+/// baseline-only). Section names are re-derived across the combined list so
+/// acquisition sections continue the §8 numbering.
+#[allow(clippy::too_many_arguments)]
+pub fn render_migration_with_acquisitions(
+    migration_steps: &[crate::diff::operations::MigrationStep],
+    baseline_sections: Option<&[StepSection]>,
+    old_catalog: &Catalog,
+    new_catalog: &Catalog,
+    partition: &ModulePartition,
+    file_mapping: &FileToObjectMapping,
+    historical: &HistoricalAttribution,
+) -> Result<Option<String>> {
+    let mut sections = if migration_steps.is_empty() {
+        Vec::new()
+    } else {
+        sectionize_steps(
+            migration_steps,
+            old_catalog,
+            new_catalog,
+            partition,
+            file_mapping,
+            historical,
+        )?
+    };
+    sections.extend(acquisition_sections(baseline_sections.unwrap_or(&[])));
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    assign_section_names(&mut sections);
+    Ok(Some(render_sectioned_migration(&sections)))
 }
 
 /// Findings from validating cross-module object references.
@@ -1979,6 +2058,7 @@ mod tests {
             name: module.unwrap_or("default").to_string(),
             module: module.map(str::to_string),
             remaps: Vec::new(),
+            comment: None,
             steps: objects
                 .iter()
                 .map(|name| {
@@ -2173,11 +2253,24 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    fn blocked(modules: &[&str], base_sources: &[&str]) -> CrossingCheck {
+    fn blocked(needs_adoption: &[&str], unsatisfiable: &[&str]) -> CrossingCheck {
         CrossingCheck::Blocked {
-            modules: subs(modules),
-            base_sources: subs(base_sources),
+            needs_adoption: subs(needs_adoption),
+            unsatisfiable: unsatisfiable.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// (module, source) pairs the pending migration carries as acquisition
+    /// sections — the will-run input to [`evaluate_crossing`].
+    fn acq(pairs: &[(Option<&str>, Option<&str>)]) -> BTreeSet<(Option<String>, Option<String>)> {
+        pairs
+            .iter()
+            .map(|(m, s)| (m.map(str::to_string), s.map(str::to_string)))
+            .collect()
+    }
+
+    fn no_acq() -> BTreeSet<(Option<String>, Option<String>)> {
+        BTreeSet::new()
     }
 
     #[test]
@@ -2195,7 +2288,7 @@ mod tests {
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &BTreeSet::new(), &BTreeSet::new()),
+            evaluate_crossing(&ra, &BTreeSet::new(), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             }
@@ -2213,7 +2306,7 @@ mod tests {
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["app"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["app"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             },
@@ -2232,7 +2325,7 @@ mod tests {
             &["c"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
             }
@@ -2240,9 +2333,11 @@ mod tests {
     }
 
     #[test]
-    fn test_crossing_merge_some_but_not_all_blocks() {
-        // a, b → c with only a subscribed → c engaged (its a-section satisfied)
-        // but not whole → blocked ON THE OWNING MODULE c, never naming b (§19e).
+    fn test_crossing_merge_some_but_not_all_acquires_via_migration() {
+        // a, b → c with only a subscribed. Migration V carries the
+        // acquisition sections (§12), c is brand-new and engaged → the
+        // `remaps="b"` section WILL RUN in this apply → whole: c subscribes,
+        // absorbed a and b drop. §16 merge cell: "runs".
         let ra = re_anchor(
             1600,
             &[("c", Some("c"), Some("a")), ("c_2", Some("c"), Some("b"))],
@@ -2250,8 +2345,21 @@ mod tests {
             &["c"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
-            blocked(&["c"], &[])
+            evaluate_crossing(
+                &ra,
+                &subs(&["a"]),
+                &BTreeSet::new(),
+                &acq(&[(Some("c"), Some("a")), (Some("c"), Some("b"))]),
+            ),
+            CrossingCheck::Whole {
+                rewritten: subs(&["c"])
+            }
+        );
+        // Without the acquisition sections (an artifact predating
+        // migration-borne acquisition, §12) the b-section is unsatisfiable.
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
+            blocked(&[], &["c_2"])
         );
     }
 
@@ -2267,7 +2375,7 @@ mod tests {
             &["c"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &subs(&["c_2"])),
+            evaluate_crossing(&ra, &subs(&["a"]), &subs(&["c_2"]), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
             }
@@ -2288,20 +2396,32 @@ mod tests {
             &["a", "b"], // partial move: a keeps objects of its own
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
             blocked(&["b"], &[]),
             "needed + pre-existing + not subscribed blocks the crossing"
         );
+        // The surviving membrane fires even when migration V could acquire:
+        // relabeling into an unsubscribed pre-existing module orphans objects
+        // — availability never overrides the needed-modules gate.
+        assert_eq!(
+            evaluate_crossing(
+                &ra,
+                &subs(&["a"]),
+                &BTreeSet::new(),
+                &acq(&[(Some("b"), Some("a"))]),
+            ),
+            blocked(&["b"], &[]),
+        );
         // Once b is subscribed (adopted), the crossing keeps both; a survives.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["a", "b"])
             }
         );
         // A target with neither a nor b is not engaged: irrelevant, no block.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
             }
@@ -2314,7 +2434,7 @@ mod tests {
         // a wholly absorbed → drops out.
         let ra = re_anchor(1700, &[("b", Some("b"), Some("a"))], &[], &["b"]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["b"])
             }
@@ -2326,7 +2446,7 @@ mod tests {
         // a → base: a subscribed → removed (its objects are base now).
         let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "other"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["a", "other"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
             }
@@ -2334,14 +2454,26 @@ mod tests {
     }
 
     #[test]
-    fn test_crossing_demotion_without_source_blocks() {
-        // a → base on a target without a: the base must be whole everywhere →
-        // blocked, naming the source to adopt (the base owns the section, so
-        // there is no `provision --modules` completion).
+    fn test_crossing_demotion_without_source_acquires_via_migration() {
+        // a → base on a target without a: the base must be whole everywhere.
+        // Migration V's unmoduled acquisition section flows with the base on
+        // every apply (§12/§16: "runs") → whole, no membrane.
         let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new()),
-            blocked(&[], &["a"])
+            evaluate_crossing(
+                &ra,
+                &subs(&["other"]),
+                &BTreeSet::new(),
+                &acq(&[(None, Some("a"))]),
+            ),
+            CrossingCheck::Whole {
+                rewritten: subs(&["other"])
+            }
+        );
+        // Without it (pre-§12 artifact): unsatisfiable.
+        assert_eq!(
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_acq()),
+            blocked(&[], &["default"])
         );
     }
 
@@ -2357,7 +2489,7 @@ mod tests {
             &["analytics", "reports"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["core"]), &BTreeSet::new()),
+            evaluate_crossing(&ra, &subs(&["core"]), &BTreeSet::new(), &no_acq()),
             CrossingCheck::Whole {
                 rewritten: subs(&["core"])
             }

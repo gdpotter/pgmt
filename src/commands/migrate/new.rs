@@ -7,7 +7,7 @@ use crate::migration::{
     validate_baseline_against_catalog,
 };
 use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, sectioned_migration_sql,
+    HistoricalAttribution, evaluate_module_generation, render_migration_with_acquisitions,
     write_sectioned_baseline,
 };
 use crate::prompts::prompt_required_string_with_validation;
@@ -135,31 +135,12 @@ pub async fn cmd_migrate_new(
         return Ok(());
     }
 
-    if migration_result.has_changes {
-        // Module projects write the same steps cut into module-tagged
-        // sections; everything else writes the plain (header-less) form.
-        let migration_sql = match &module_gen {
-            Some(module_gen) => sectioned_migration_sql(
-                &migration_result.steps,
-                &old_catalog,
-                &new_catalog,
-                &module_gen.partition,
-                &file_mapping,
-                &historical,
-            )?,
-            None => migration_result.migration_sql.clone(),
-        };
-        let migration_path = migrations_dir.join(&migration_result.migration_filename);
-        std::fs::write(&migration_path, &migration_sql)?;
-        println!("Created migration: {}", migration_path.display());
-    } else {
-        // Pure re-tag: ownership moved but no DDL changed. The re-anchoring
-        // baseline below records the new partition; there is no migration.
-        println!("No schema changes - emitting re-anchoring baseline only.");
-    }
-
-    // --create-baseline opts in for this run; absence falls back to config
-    // (the flag can only add, never suppress a configured default)
+    // Baseline first (--create-baseline opts in for this run; absence falls
+    // back to config — the flag can only add, never suppress a configured
+    // default): when the partition re-anchors, migration V's acquisition
+    // sections (§11/§12) derive from the baseline's provenance cut, so the
+    // baseline's sections must exist before the migration is rendered.
+    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
     if should_create_baseline {
         // Generate the baseline from the full desired catalog, not the migration
         // SQL — the migration is a delta against the prior state, so writing it
@@ -174,18 +155,18 @@ pub async fn cmd_migrate_new(
         })
         .await?;
 
-        // Module projects rewrite the baseline into per-module sections, with
-        // `remaps` recording prior ownership wherever it changed — the
-        // re-anchor record that establishment derivation reads.
+        // Module projects rewrite the baseline into provenance-cut per-module
+        // sections, with `remaps` recording prior ownership wherever it
+        // changed — the re-anchor record crossings consume.
         if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
+            baseline_sections = Some(write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?;
+            )?);
         }
         println!("Created baseline: {}", result.path.display());
 
@@ -204,6 +185,41 @@ pub async fn cmd_migrate_new(
         }
     } else {
         println!("Skipping baseline creation (use --create-baseline to create one)");
+    }
+
+    // The migration: ordinary diff sections plus, at a re-anchor, the
+    // acquisition sections for module-sourced moves (§11/§12 — base-sourced
+    // moves are satisfied everywhere by construction and stay baseline-only).
+    let migration_sql: Option<String> = match &module_gen {
+        Some(module_gen) => render_migration_with_acquisitions(
+            if migration_result.has_changes {
+                &migration_result.steps
+            } else {
+                &[]
+            },
+            baseline_sections.as_deref(),
+            &old_catalog,
+            &new_catalog,
+            &module_gen.partition,
+            &file_mapping,
+            &historical,
+        )?,
+        None => migration_result
+            .has_changes
+            .then(|| migration_result.migration_sql.clone()),
+    };
+    match migration_sql {
+        Some(sql) => {
+            let migration_path = migrations_dir.join(&migration_result.migration_filename);
+            std::fs::write(&migration_path, &sql)?;
+            println!("Created migration: {}", migration_path.display());
+        }
+        None => {
+            // Pure base-sourced re-tag (e.g. modularizing an existing
+            // project): ownership moved but nothing needs acquiring anywhere.
+            // The re-anchoring baseline above records the new partition.
+            println!("No schema changes - emitting re-anchoring baseline only.");
+        }
     }
 
     println!("Migration generation complete!");

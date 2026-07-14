@@ -426,7 +426,7 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             .assert()
             .failure()
             .stderr(predicate::str::contains(format!(
-                "adopt b before applying past {re_anchor_version}"
+                "Adopt b before applying past {re_anchor_version}"
             )))
             .stderr(predicate::str::contains("provision --modules b"));
         assert_eq!(
@@ -581,12 +581,13 @@ async fn test_merge_with_both_sources_collapses() -> Result<()> {
     .await
 }
 
-/// Demotion `a → (unmoduled)`: with the source subscribed the crossing
-/// removes it (its objects are base now); without it, the crossing blocks —
-/// the base must be whole everywhere — and the STRONG membrane refuses even
-/// the BASE sections of every later version.
+/// Demotion `a → (unmoduled)` runs BOTH ways on plain apply (§12/§16): with
+/// the source subscribed, the unmoduled acquisition section in migration V
+/// records `satisfied` (objects already present) and the crossing removes `a`
+/// (its objects are base now); without it, the acquisition section flows with
+/// the base and creates the demoted content — no membrane, nothing to adopt.
 #[tokio::test]
-async fn test_demotion_crossing_and_strong_membrane() -> Result<()> {
+async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         let base = base_config(helper)?;
@@ -661,8 +662,24 @@ async fn test_demotion_crossing_and_strong_membrane() -> Result<()> {
             !baseline_sql.contains("remaps=\"(unmoduled),a\""),
             "the self-included comma-list form is retired:\n{baseline_sql}"
         );
+        // The same-version MIGRATION carries the acquisition delta (§12): an
+        // unmoduled remap section with x's DDL and the reviewer comment.
+        let migration_files = helper.list_migration_files()?;
+        let demote_file = migration_files
+            .iter()
+            .find(|f| f.contains("demote"))
+            .expect("the demote migration exists");
+        let migration_sql = helper.read_migration_file(demote_file)?;
+        assert!(
+            migration_sql.contains(r#"name="default" remaps="a""#),
+            "migration V carries the unmoduled acquisition section:\n{migration_sql}"
+        );
+        assert!(
+            migration_sql.contains("objects moved from module 'a'"),
+            "reviewer-facing comment above the acquisition section:\n{migration_sql}"
+        );
 
-        // A LATER base-only migration — the membrane must refuse even this.
+        // A LATER base-only migration — flows everywhere after the crossing.
         helper.write_schema_file(
             "meta.sql",
             "CREATE TABLE meta (id SERIAL PRIMARY KEY, note TEXT);",
@@ -697,38 +714,62 @@ async fn test_demotion_crossing_and_strong_membrane() -> Result<()> {
         .fetch_one(&pool1)
         .await?;
         assert!(note_exists);
+
+        // Target 1's acquisition section recorded `satisfied` (it held x
+        // under a's name — nothing ran).
+        let satisfied1: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.pgmt_migrations_sections
+             WHERE NOT is_baseline AND status = 'satisfied'",
+        )
+        .fetch_one(&pool1)
+        .await?;
+        assert!(
+            satisfied1 >= 1,
+            "source-held acquisition records satisfied rows (got {satisfied1})"
+        );
         pool1.close().await;
 
-        // Target 2 (a never subscribed): the crossing blocks — and the strong
-        // membrane refuses the base migration BEYOND the re-anchor too.
+        // Target 2 (a never subscribed, no x): plain apply RUNS the unmoduled
+        // acquisition section — demoted content is base content and flows to
+        // everyone (§16 demotion cell) — then the crossing commits and the
+        // later base migration runs. No membrane, nothing to adopt.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &target2_url])
             .assert()
-            .failure()
-            .stderr(predicate::str::contains(format!(
-                "adopt a before applying past {re_anchor_version}"
-            )));
+            .success();
         let pool2 = sqlx::PgPool::connect(&target2_url).await?;
+        let x_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = 'x')",
+        )
+        .fetch_one(&pool2)
+        .await?;
+        assert!(x_exists, "the acquisition section created the demoted table");
         let note_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns
              WHERE table_name = 'meta' AND column_name = 'note')",
         )
         .fetch_one(&pool2)
         .await?;
-        assert!(
-            !note_exists,
-            "strong membrane: base sections of versions past the blocked crossing must not run"
+        assert!(note_exists, "the later base migration flowed through");
+        assert_eq!(
+            crossing_watermark(&pool2).await?,
+            Some(re_anchor_version as i64)
         );
-        // Zero trace of the refused migration, and no crossing recorded.
-        let base_change_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM public.pgmt_migrations WHERE description = 'base_change'",
+        assert_eq!(
+            subscription_modules(&pool2).await?,
+            vec!["k".to_string()],
+            "the base is never listed; nothing else subscribed"
+        );
+        // The acquisition executed here: a completed row, not satisfied.
+        let satisfied2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.pgmt_migrations_sections
+             WHERE NOT is_baseline AND status = 'satisfied'",
         )
         .fetch_one(&pool2)
         .await?;
-        assert_eq!(base_change_rows, 0);
-        assert_eq!(crossing_events(&pool2).await?.len(), 0);
-        assert_eq!(subscription_modules(&pool2).await?, vec!["k".to_string()]);
+        assert_eq!(satisfied2, 0, "source-absent acquisition actually ran");
         pool2.close().await;
 
         Ok(())
@@ -906,15 +947,15 @@ async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
     .await
 }
 
-/// Full merge `a, b → c` where `b` is REMOVED from pgmt.yaml in the same
-/// change (the previously-avoided cell). A target holding only `a`-side content
-/// hits the membrane: the error points at `provision --modules c` (completing
-/// the crossing through the re-anchor) and NEVER at the deleted source `b`.
-/// That provision acquires `b`'s remap section (creates the b-side objects) and
-/// records the a-side satisfied; the same run's crossing collapses the
-/// subscription to `{c}`.
+/// §19e / §16 merge cell: full merge `a, b → c` with `b` REMOVED from
+/// pgmt.yaml in the same change, on a target holding only `a`-side content —
+/// PLAIN APPLY crosses. Migration V carries the acquisition delta (§12): the
+/// `remaps="b"` section executes (creates the b-side objects), the
+/// `remaps="a"` section records `satisfied`, and the two-phase commit then
+/// collapses the subscription to `{c}`. No membrane, no provision detour, and
+/// nothing ever names the deleted source `b`.
 #[tokio::test]
-async fn test_full_merge_with_deleted_source() -> Result<()> {
+async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         let base = base_config(helper)?;
@@ -967,45 +1008,38 @@ async fn test_full_merge_with_deleted_source() -> Result<()> {
             .success();
         let re_anchor_version = latest_baseline_version(helper)?;
 
-        // The membrane: bare apply refuses, pointing at provision --modules c
-        // (completing the crossing through the re-anchor) — NEVER naming the
-        // deleted source b (`--modules b` would be an unknown module now).
+        // The same-version migration carries one acquisition section per
+        // source, each with the reviewer-facing audience comment (§11).
+        let migration_files = helper.list_migration_files()?;
+        let merge_file = migration_files
+            .iter()
+            .find(|f| f.contains("merge"))
+            .expect("the merge migration exists");
+        let migration_sql = helper.read_migration_file(merge_file)?;
+        assert!(
+            migration_sql.contains(r#"module="c" remaps="a""#)
+                && migration_sql.contains(r#"module="c" remaps="b""#),
+            "migration V carries one acquisition section per source:\n{migration_sql}"
+        );
+        assert!(
+            migration_sql.contains("objects moved from module 'b'"),
+            "reviewer comment states the audience:\n{migration_sql}"
+        );
+
+        // PLAIN APPLY crosses (§16 merge cell: "runs"): the remaps="b" section
+        // executes, the remaps="a" section records satisfied, the commit
+        // subscribes c and drops the absorbed sources.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
-            .failure()
-            .stderr(predicate::str::contains("provision --modules c"))
-            .stderr(predicate::str::contains("--modules b").not())
-            .stderr(predicate::str::contains("adopt b").not());
-        assert_eq!(
-            subscription_modules(&pool).await?,
-            vec!["a".to_string()],
-            "a blocked crossing mutates nothing"
-        );
-        assert_eq!(crossing_events(&pool).await?.len(), 0);
-
-        // Complete the crossing through the re-anchor: provision --modules c
-        // acquires b's remap section (creates y) and records the a-side
-        // satisfied; the same run's crossing collapses to {c}.
-        helper
-            .command()
-            .args([
-                "migrate",
-                "provision",
-                "--target-url",
-                &helper.dev_database_url,
-                "--modules",
-                "c",
-            ])
-            .assert()
             .success();
-        assert!(table_exists(&pool, "y").await?, "b's remap section ran");
-        assert!(table_exists(&pool, "x").await?, "a's object stayed put");
+        assert!(table_exists(&pool, "y").await?, "b's acquisition ran");
+        assert!(table_exists(&pool, "x").await?, "a's objects stayed put");
         assert_eq!(
             subscription_modules(&pool).await?,
             vec!["c".to_string()],
-            "both sources whole -> c subscribed, absorbed a and b removed"
+            "commit: c subscribed, absorbed a and b removed"
         );
         assert_eq!(
             crossing_watermark(&pool).await?,
@@ -1013,7 +1047,25 @@ async fn test_full_merge_with_deleted_source() -> Result<()> {
         );
         assert_eq!(crossing_events(&pool).await?.len(), 1);
 
-        // Next bare apply crosses cleanly — the re-anchor is already consumed.
+        // Uniform rule on the rows: the a-sourced section satisfied (objects
+        // were already here), the b-sourced one completed (it ran).
+        let statuses: Vec<(String, String)> = sqlx::query_as(
+            "SELECT section_name, status FROM public.pgmt_migrations_sections
+             WHERE NOT is_baseline AND migration_version = $1 ORDER BY section_order",
+        )
+        .bind(re_anchor_version as i64)
+        .fetch_all(&pool)
+        .await?;
+        assert!(
+            statuses.iter().any(|(_, st)| st == "satisfied"),
+            "a-sourced acquisition satisfied: {statuses:?}"
+        );
+        assert!(
+            statuses.iter().any(|(_, st)| st == "completed"),
+            "b-sourced acquisition executed: {statuses:?}"
+        );
+
+        // Consumed once: another bare apply records nothing new.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])

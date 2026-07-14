@@ -258,20 +258,6 @@ pub(crate) async fn apply_pending_migrations(
                 Some(migration.version.saturating_sub(1)),
             )
             .await?;
-        let mut pending_crossing = runtime
-            .gate_re_anchor_at(pool, &config.migration.tracking_table, migration.version)
-            .await?;
-        // Commit helper for the early-exit paths: nothing of V remains to
-        // run, so the gated crossing commits immediately.
-        macro_rules! commit_pending {
-            () => {
-                if let Some(pending) = pending_crossing.take() {
-                    runtime
-                        .commit_crossing(pool, &config.migration.tracking_table, pending)
-                        .await?;
-                }
-            };
-        }
 
         // Skip migrations covered by a recorded baseline.
         if baseline_version.is_some_and(|bv| migration.version <= bv) {
@@ -305,7 +291,15 @@ pub(crate) async fn apply_pending_migrations(
                     migration.version
                 );
             }
-            commit_pending!();
+            // Nothing of this version runs here, so a re-anchor at it is a
+            // single-shot gate+commit.
+            runtime
+                .cross_re_anchors_through(
+                    pool,
+                    &config.migration.tracking_table,
+                    Some(migration.version),
+                )
+                .await?;
             continue;
         }
 
@@ -375,26 +369,44 @@ pub(crate) async fn apply_pending_migrations(
             }
         }
 
-        // Module selection: run the selected modules' (+ base) sections; the
-        // rest are skipped and leave NO rows (derived skipped-ness,
-        // no trace of unrequested work). Skips are signalled two-tier: an
-        // established module being left behind is schema drift (warning); a
-        // never-established one is expected on subset targets (info).
-        let selected: Vec<&crate::migration::section_parser::MigrationSection> = sections
+        // Two-phase gate (§13): a re-anchor AT this version is gate-checked
+        // now — before V's sections — and committed only after they complete
+        // (acquisition deltas live in migration V itself, §12). The gate sees
+        // which (module, source) acquisition sections this migration carries:
+        // a remap section is satisfiable when it WILL run in this apply.
+        let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
             .iter()
-            .filter(|section| selection.selects(section.module.as_deref()))
+            .filter(|s| !s.remaps.is_empty())
+            .map(|s| {
+                let source = s.remaps.first().and_then(|r| {
+                    if r == crate::modules::UNMODULED_DISPLAY {
+                        None
+                    } else {
+                        Some(r.clone())
+                    }
+                });
+                (s.module.clone(), source)
+            })
             .collect();
-        let statuses = if registered.is_some() {
-            section_statuses(
+        let mut pending_crossing = runtime
+            .gate_re_anchor_at(
                 pool,
                 &config.migration.tracking_table,
                 migration.version,
-                false,
+                &acquirable,
             )
-            .await?
-        } else {
-            Default::default()
-        };
+            .await?;
+        // Commit helper for the early-exit paths: nothing of V remains to
+        // run, so the gated crossing commits immediately.
+        macro_rules! commit_pending {
+            () => {
+                if let Some(pending) = pending_crossing.take() {
+                    runtime
+                        .commit_crossing(pool, &config.migration.tracking_table, pending)
+                        .await?;
+                }
+            };
+        }
 
         // Version V's own selection and warnings see the POST-crossing
         // vocabulary the gate computed (§13) — a split at V tags V's sections
@@ -406,6 +418,38 @@ pub(crate) async fn apply_pending_migrations(
             .as_ref()
             .map(|p| p.rewritten().clone())
             .unwrap_or_else(|| runtime.established.clone());
+
+        // Module selection: ordinary sections run when their module is
+        // requested (+ the base, always); the rest skip and leave NO rows
+        // (derived skipped-ness, no trace of unrequested work). REMAP
+        // (acquisition) sections are crossing work (§12/§13): they run
+        // wherever their owning module is in the post-crossing vocabulary —
+        // the base always, auto-subscribing brand-new modules included —
+        // independent of the requested set (declining would leave the
+        // crossing's module partial).
+        let section_selected = |s: &crate::migration::section_parser::MigrationSection| {
+            if s.remaps.is_empty() {
+                selection.selects(s.module.as_deref())
+            } else {
+                match s.module.as_deref() {
+                    None => true,
+                    Some(m) => vocabulary.contains(m) || selection.selects(Some(m)),
+                }
+            }
+        };
+        let selected: Vec<&crate::migration::section_parser::MigrationSection> =
+            sections.iter().filter(|s| section_selected(s)).collect();
+        let statuses = if registered.is_some() {
+            section_statuses(
+                pool,
+                &config.migration.tracking_table,
+                migration.version,
+                false,
+            )
+            .await?
+        } else {
+            Default::default()
+        };
 
         // Uniform execution rule for remap sections (modules.md §12): in ANY
         // artifact a remap section executes only where its source is absent,
@@ -424,7 +468,7 @@ pub(crate) async fn apply_pending_migrations(
         let to_satisfy: Vec<(i32, crate::migration::section_parser::MigrationSection)> = sections
             .iter()
             .enumerate()
-            .filter(|(_, s)| selection.selects(s.module.as_deref()) && satisfied_by_source(s))
+            .filter(|(_, s)| section_selected(s) && satisfied_by_source(s))
             .filter(|(_, s)| !statuses.get(&s.name).is_some_and(|st| st.is_covered()))
             .map(|(i, s)| (i as i32, s.clone()))
             .collect();
@@ -435,7 +479,7 @@ pub(crate) async fn apply_pending_migrations(
         let mut skipped_modules: BTreeSet<&str> = BTreeSet::new();
         for section in &sections {
             if let Some(module) = section.module.as_deref()
-                && !selection.selects(Some(module))
+                && !section_selected(section)
                 && !statuses
                     .get(&section.name)
                     .is_some_and(|st| st.is_covered())
@@ -466,12 +510,12 @@ pub(crate) async fn apply_pending_migrations(
         // modules' objects don't exist here; real cross-module needs are
         // covered by the dependency-closure guard.)
         for (idx, section) in sections.iter().enumerate() {
-            if !selection.selects(section.module.as_deref()) {
+            if !section_selected(section) {
                 continue;
             }
             for earlier in &sections[..idx] {
                 if let Some(module) = earlier.module.as_deref()
-                    && !selection.selects(Some(module))
+                    && !section_selected(earlier)
                     && vocabulary.contains(module)
                     && !statuses
                         .get(&earlier.name)
@@ -536,7 +580,7 @@ pub(crate) async fn apply_pending_migrations(
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| {
-                    selection.selects(s.module.as_deref())
+                    section_selected(s)
                         && !satisfied_by_source(s)
                         && !statuses.contains_key(&s.name)
                 })
@@ -576,9 +620,7 @@ pub(crate) async fn apply_pending_migrations(
                 sections
                     .iter()
                     .enumerate()
-                    .filter(|(_, s)| {
-                        selection.selects(s.module.as_deref()) && !satisfied_by_source(s)
-                    })
+                    .filter(|(_, s)| section_selected(s) && !satisfied_by_source(s))
                     .map(|(i, s)| (i as i32, s.clone()))
                     .collect();
             register_migration_start(
