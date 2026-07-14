@@ -220,7 +220,26 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
             "lock_timeout" => builder.lock_timeout = Some(parse_duration(&value)?),
             "module" => builder.module = Some(value),
             "remaps" => {
-                builder.remaps = Some(value.split(',').map(|s| s.trim().to_string()).collect())
+                // Provenance-cut sections (modules.md §12): a remap section is
+                // acquired from exactly ONE prior owner, so `remaps` carries a
+                // single source. The comma-list form is retired — a baseline
+                // stamped under the old multi-source rule must be regenerated.
+                let sources: Vec<String> = value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if sources.len() > 1 {
+                    return Err(anyhow!(
+                        "section 'remaps' at line {} lists {} sources ('{}'); a provenance-cut \
+                         remap section is acquired from exactly one prior owner (modules.md §12). \
+                         Regenerate this baseline with a current pgmt.",
+                        builder.start_line,
+                        sources.len(),
+                        value
+                    ));
+                }
+                builder.remaps = Some(sources);
             }
             _ => {
                 return Err(anyhow!(

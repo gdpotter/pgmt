@@ -204,9 +204,10 @@ pub struct StepSection {
     pub name: String,
     /// Owning module (`None` = the base).
     pub module: Option<String>,
-    /// Prior owners of this section's objects (re-anchoring baselines only):
-    /// distinct historical modules that differ from the current owner,
-    /// `(unmoduled)` for the base. Empty for ordinary migrations.
+    /// Prior owner of this section's objects (re-anchoring baselines only): a
+    /// single acquired-from module, `(unmoduled)` for the base. Empty for a
+    /// plain (retained/brand-new) section and for every ordinary migration
+    /// section. Provenance-cut guarantees at most one entry (§12).
     pub remaps: Vec<String>,
     pub steps: Vec<crate::diff::operations::MigrationStep>,
 }
@@ -294,51 +295,91 @@ pub fn detect_partition_divergence(
     Ok(divergence)
 }
 
-/// Fill in `remaps` on baseline sections: the distinct prior owners of a
-/// section's objects, recording where its objects came from so a target can
-/// consume the re-anchor as a crossing (§12, §13).
+/// Provenance-cut a re-anchor's baseline sections (§12): re-section the
+/// module-cut steps so that **no section mixes retained and acquired objects**.
 ///
-/// **Self-inclusion (§12).** A section that *retained* prior objects of its
-/// own alongside acquired ones lists **itself** as a source
-/// (`module="billing" remaps="billing,billing_legacy"`) — that is what lets
-/// the checksummed artifact distinguish "objects moved into a brand-new
-/// module" (`remaps="a"`, crossing auto-subscribes) from "objects moved into a
-/// pre-existing module" (`remaps="a,b"`, wholeness may fail: adopt `b` first).
-/// The rule:
+/// A **plain** section (no `remaps`) holds the objects a module already owned
+/// — its prior owner is the section's own module, or the object is brand-new
+/// (no history). A **remap** section holds objects acquired from exactly **one**
+/// prior owner: `remaps="a"`, or `remaps="(unmoduled)"` when the source is the
+/// base. Objects acquired from two prior owners → two remap sections. A module
+/// never lists itself; provenance lives in the section *structure*, not in a
+/// comma-list attribute value (that form is retired — §12, supersedes the
+/// same-day self-inclusion rule).
 ///
-/// - Collect the distinct prior owners of every object that has history
-///   (brand-new objects contribute nothing).
-/// - If *nothing moved* — every prior owner is the section's own module, or
-///   there is no history at all — stamp **no** `remaps`; the section stays
-///   inert to crossings.
-/// - Otherwise stamp **every** distinct prior owner, including the section's
-///   own module when it appears among them (an object it retained).
-pub fn compute_baseline_remaps(sections: &mut [StepSection], historical: &HistoricalAttribution) {
+/// The cut runs over the topological order the module-cut already produced and
+/// starts a new section whenever the (module, provenance) pair changes, so each
+/// emitted section is a contiguous same-provenance run and dependency order is
+/// preserved (§8). Section names are re-derived per §8: a module's first
+/// section is the module name, later ones get `_2`, `_3`, … (`default*` for the
+/// base).
+///
+/// Why: a remap section's objects are, by definition, already present on any
+/// target that holds its source, so the checksummed artifact itself tells
+/// provision/adoption what to run per target (§14 per-section rule) and lets a
+/// blocked crossing be completed through the re-anchor (§13 extended predicate)
+/// — with no access to pre-pivot files, and without ever naming a dead module.
+pub fn provenance_cut_baseline_sections(
+    sections: Vec<StepSection>,
+    historical: &HistoricalAttribution,
+) -> Vec<StepSection> {
+    use crate::diff::operations::MigrationStep;
     use crate::diff::operations::SqlRenderer;
 
-    for section in sections.iter_mut() {
-        // Distinct prior owners of this section's objects (None = the base).
-        let mut priors: BTreeSet<Option<String>> = BTreeSet::new();
-        for step in &section.steps {
+    // A contiguous run of one module's steps sharing one provenance bucket.
+    struct Run {
+        module: Option<String>,
+        /// The remap source (`Some(source_display)`), or `None` for a plain
+        /// (retained/brand-new) run.
+        remap: Option<String>,
+        steps: Vec<MigrationStep>,
+    }
+
+    let mut runs: Vec<Run> = Vec::new();
+    for section in sections {
+        let own = section.module.clone();
+        for step in section.steps {
             let id = step.db_object_id();
-            if let Some(prior) = historical.object_modules.get(&id) {
-                priors.insert(prior.clone());
+            // Provenance bucket: `None` (plain) when the prior owner is the
+            // section's own module or the object is brand-new; otherwise the
+            // single prior owner, displayed (`(unmoduled)` for the base).
+            let remap = match historical.object_modules.get(&id) {
+                Some(prior) if prior.as_deref() != own.as_deref() => {
+                    Some(display_module(prior.as_deref()).to_string())
+                }
+                _ => None,
+            };
+            match runs.last_mut() {
+                Some(last) if last.module == own && last.remap == remap => last.steps.push(step),
+                _ => runs.push(Run {
+                    module: own.clone(),
+                    remap,
+                    steps: vec![step],
+                }),
             }
         }
-        // "Nothing moved": every prior owner equals the section's own module
-        // (or there is no history). The section is inert to crossings.
-        let moved = priors
-            .iter()
-            .any(|p| p.as_deref() != section.module.as_deref());
-        section.remaps = if moved {
-            priors
-                .iter()
-                .map(|p| display_module(p.as_deref()).to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
     }
+
+    // Re-derive §8 names across the full re-cut section list.
+    let mut out = Vec::with_capacity(runs.len());
+    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for run in runs {
+        let base_name = run.module.as_deref().unwrap_or("default").to_string();
+        let count = name_counts.entry(base_name.clone()).or_insert(0);
+        *count += 1;
+        let name = if *count == 1 {
+            base_name
+        } else {
+            format!("{}_{}", base_name, count)
+        };
+        out.push(StepSection {
+            name,
+            module: run.module,
+            remaps: run.remap.into_iter().collect(),
+            steps: run.steps,
+        });
+    }
+    out
 }
 
 /// Section migration steps by module: annotate each step with its owning
@@ -1286,7 +1327,7 @@ pub fn write_sectioned_baseline(
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
 ) -> Result<()> {
-    let mut sections = sectionize_steps(
+    let sections = sectionize_steps(
         steps,
         &Catalog::empty(),
         new_catalog,
@@ -1294,7 +1335,7 @@ pub fn write_sectioned_baseline(
         file_mapping,
         historical,
     )?;
-    compute_baseline_remaps(&mut sections, historical);
+    let sections = provenance_cut_baseline_sections(sections, historical);
     std::fs::write(path, render_sectioned_migration(&sections))?;
     Ok(())
 }
@@ -1755,61 +1796,146 @@ mod tests {
         h
     }
 
+    /// Assert a section's `(name, module, remaps)` shape compactly.
+    fn shape(section: &StepSection) -> (String, Option<String>, Vec<String>) {
+        (
+            section.name.clone(),
+            section.module.clone(),
+            section.remaps.clone(),
+        )
+    }
+
     #[test]
-    fn test_remap_move_into_brand_new_module() {
-        // Objects moved from 'a' into brand-new module 'b'. 'b' held nothing
-        // before, so self is NOT a source: remaps="a" alone.
-        let mut sections = vec![step_section(Some("b"), &["x", "y"])];
+    fn test_provenance_cut_move_into_brand_new_module() {
+        // Objects moved from 'a' into brand-new module 'b' (held nothing
+        // before): a SINGLE remap section `remaps="a"` — no plain section.
+        let sections = vec![step_section(Some("b"), &["x", "y"])];
         let hist = historical(&[("x", Some("a")), ("y", Some("a"))]);
-        compute_baseline_remaps(&mut sections, &hist);
-        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            shape(&out[0]),
+            (
+                "b".to_string(),
+                Some("b".to_string()),
+                vec!["a".to_string()]
+            )
+        );
     }
 
     #[test]
-    fn test_remap_move_into_pre_existing_module() {
-        // Module 'b' retained its own object (prior 'b') and acquired one from
-        // 'a' → self-inclusion: remaps="a,b".
-        let mut sections = vec![step_section(Some("b"), &["own", "acquired"])];
+    fn test_provenance_cut_move_into_pre_existing_module() {
+        // 'b' retained its own object AND acquired one from 'a': provenance-cut
+        // splits into a plain `b` (retained) + a remap `b_2 remaps="a"`. No
+        // section mixes retained and acquired objects; 'b' never lists itself.
+        let sections = vec![step_section(Some("b"), &["own", "acquired"])];
         let hist = historical(&[("own", Some("b")), ("acquired", Some("a"))]);
-        compute_baseline_remaps(&mut sections, &hist);
-        assert_eq!(sections[0].remaps, vec!["a".to_string(), "b".to_string()]);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(
+            out.len(),
+            2,
+            "{:?}",
+            out.iter().map(shape).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            shape(&out[0]),
+            ("b".to_string(), Some("b".to_string()), Vec::<String>::new())
+        );
+        assert_eq!(
+            shape(&out[1]),
+            (
+                "b_2".to_string(),
+                Some("b".to_string()),
+                vec!["a".to_string()]
+            )
+        );
     }
 
     #[test]
-    fn test_remap_untouched_module_stamps_nothing() {
-        // Every object was already owned by 'b' (only-self) → nothing moved.
-        let mut sections = vec![step_section(Some("b"), &["p", "q"])];
+    fn test_provenance_cut_untouched_module_stays_plain() {
+        // Every object was already owned by 'b' → one plain section, no remaps.
+        let sections = vec![step_section(Some("b"), &["p", "q"])];
         let hist = historical(&[("p", Some("b")), ("q", Some("b"))]);
-        compute_baseline_remaps(&mut sections, &hist);
-        assert!(sections[0].remaps.is_empty(), "{:?}", sections[0].remaps);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            shape(&out[0]),
+            ("b".to_string(), Some("b".to_string()), Vec::<String>::new())
+        );
     }
 
     #[test]
-    fn test_remap_untouched_module_with_brand_new_objects_stamps_nothing() {
-        // Retained own objects plus brand-new (no history) ones — still nothing
-        // acquired from elsewhere.
-        let mut sections = vec![step_section(Some("b"), &["kept", "fresh"])];
+    fn test_provenance_cut_untouched_with_brand_new_objects_stays_plain() {
+        // Retained own objects plus brand-new (no history) ones — all plain,
+        // nothing acquired from elsewhere.
+        let sections = vec![step_section(Some("b"), &["kept", "fresh"])];
         let hist = historical(&[("kept", Some("b"))]); // "fresh" has no history
-        compute_baseline_remaps(&mut sections, &hist);
-        assert!(sections[0].remaps.is_empty(), "{:?}", sections[0].remaps);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].remaps.is_empty(), "{:?}", out[0].remaps);
     }
 
     #[test]
-    fn test_remap_demotion_into_base() {
-        // Unmoduled (base) section whose objects came from module 'a'.
-        let mut sections = vec![step_section(None, &["x"])];
+    fn test_provenance_cut_demotion_into_base() {
+        // Unmoduled (base) section whose objects came from module 'a': a base
+        // remap section `remaps="a"` (demotion expressed by module absence).
+        let sections = vec![step_section(None, &["x"])];
         let hist = historical(&[("x", Some("a"))]);
-        compute_baseline_remaps(&mut sections, &hist);
-        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            shape(&out[0]),
+            ("default".to_string(), None, vec!["a".to_string()])
+        );
     }
 
     #[test]
-    fn test_remap_modularization_from_base() {
-        // Module 'app' whose objects were previously unmoduled (the base).
-        let mut sections = vec![step_section(Some("app"), &["users"])];
+    fn test_provenance_cut_modularization_from_base() {
+        // Module 'app' whose objects were previously unmoduled (the base):
+        // `remaps="(unmoduled)"`.
+        let sections = vec![step_section(Some("app"), &["users"])];
         let hist = historical(&[("users", None)]);
-        compute_baseline_remaps(&mut sections, &hist);
-        assert_eq!(sections[0].remaps, vec![UNMODULED_DISPLAY.to_string()]);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            shape(&out[0]),
+            (
+                "app".to_string(),
+                Some("app".to_string()),
+                vec![UNMODULED_DISPLAY.to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn test_provenance_cut_acquisition_from_two_sources_splits() {
+        // Module 'c' acquires from BOTH 'a' and 'b' (a merge): two remap
+        // sections, one per source. No comma-list, no mixing.
+        let sections = vec![step_section(Some("c"), &["from_a", "from_b"])];
+        let hist = historical(&[("from_a", Some("a")), ("from_b", Some("b"))]);
+        let out = provenance_cut_baseline_sections(sections, &hist);
+        assert_eq!(
+            out.len(),
+            2,
+            "{:?}",
+            out.iter().map(shape).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            shape(&out[0]),
+            (
+                "c".to_string(),
+                Some("c".to_string()),
+                vec!["a".to_string()]
+            )
+        );
+        assert_eq!(
+            shape(&out[1]),
+            (
+                "c_2".to_string(),
+                Some("c".to_string()),
+                vec!["b".to_string()]
+            )
+        );
     }
 
     /// Build a ReAnchor from `(section module, sources)` remap tuples and the
