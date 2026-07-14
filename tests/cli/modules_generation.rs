@@ -486,3 +486,59 @@ async fn test_migrate_baseline_checkpoint_keeps_module_sections() -> Result<()> 
     })
     .await
 }
+
+/// Full-replay pin (modules.md §12): shadow replay builds history with every
+/// module present, so migration REMAP sections are always satisfied-skipped in
+/// replay — executing them would double-create. A hand-placed acquisition
+/// migration above the latest baseline (the one shape replay would otherwise
+/// execute) must replay cleanly: `migrate new` reconstructs the starting state
+/// through it without an "already exists" failure and reports no diff.
+#[tokio::test]
+async fn test_replay_skips_migration_remap_sections_no_double_create() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(
+            helper,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id INT PRIMARY KEY);")?;
+        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id INT PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // A later migration carrying a remap (acquisition) section whose DDL
+        // would collide with migration 1's objects if replay executed it:
+        // exactly what an acquisition section looks like on a target that
+        // lacks the source, and exactly what replay must satisfied-skip
+        // (every module — hence y — is already present during full replay).
+        let initial = helper.list_migration_files()?;
+        let initial_version: u64 = initial[0]
+            .split('_')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .expect("migration filename starts with its version");
+        helper.write_migration_file(
+            &format!("{}_acquire.sql", initial_version + 1),
+            "-- objects moved from module 'a'; runs only on targets without\n\
+             -- it — targets holding 'a' already have them (satisfied).\n\
+             -- pgmt:section name=\"b\" module=\"b\" remaps=\"a\"\n\
+             CREATE TABLE y (id INT PRIMARY KEY);\n",
+        )?;
+
+        // Replay-driven generation succeeds (no double-create) and sees no
+        // spurious diff — the remap section contributed nothing to replay.
+        helper
+            .command()
+            .args(["migrate", "new", "noop"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("No changes detected"));
+
+        Ok(())
+    })
+    .await
+}

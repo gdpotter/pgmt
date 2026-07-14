@@ -575,6 +575,21 @@ async fn test_merge_with_both_sources_collapses() -> Result<()> {
             Some(re_anchor_version as i64)
         );
 
+        // Source-holding variant of §19e: the target held BOTH sources, so
+        // every acquisition section in migration V recorded `satisfied` —
+        // nothing executed, the crossing relabelled.
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM public.pgmt_migrations_sections
+             WHERE NOT is_baseline AND migration_version = $1",
+        )
+        .bind(re_anchor_version as i64)
+        .fetch_all(&pool)
+        .await?;
+        assert!(
+            !statuses.is_empty() && statuses.iter().all(|st| st == "satisfied"),
+            "both sources held -> every acquisition section satisfied: {statuses:?}"
+        );
+
         pool.close().await;
         Ok(())
     })
