@@ -15,7 +15,6 @@ use crate::migration::{
     ParsedMigration, discover_migrations, find_baseline_for_version, find_latest_baseline,
     parse_migration_sections, validate_sections,
 };
-use crate::migration_tracking::{ensure_section_tracking_table, initialize_sections};
 use crate::modules::HistoricalAttribution;
 use crate::progress::SectionReporter;
 use crate::validation::validate_baseline_consistency;
@@ -210,7 +209,8 @@ pub async fn replay_history_for_checkpoint(
     Ok((base, catalog, attribution))
 }
 
-/// Apply baseline SQL to a real target database (used by `migrate provision`).
+/// Execute a baseline's pre-parsed sections against a real target database
+/// (used by `migrate provision`).
 ///
 /// Unlike [`load_baseline_into_shadow`], this does NOT clean the database or
 /// apply the roles file: the target is a real, long-lived database whose roles
@@ -222,27 +222,20 @@ pub async fn replay_history_for_checkpoint(
 /// whole file applies atomically, exactly as before sections existed. A
 /// multi-section baseline gets per-section atomicity with resume: a re-run
 /// skips sections already recorded Completed.
+///
+/// **Precondition:** the caller has already parsed + selected the sections
+/// (each paired with its stable index in the FULL baseline file), ensured the
+/// tracking tables exist, and registered the Pending section rows (via
+/// [`crate::migration_tracking::register_baseline_start`]). This runs execution
+/// only — it neither ensures the section table nor re-initializes rows, which
+/// would be redundant work after registration.
 pub async fn apply_baseline_to_target(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
-    baseline_sql: &str,
+    sections: &[(i32, MigrationSection)],
     source: &str,
-    select_section: impl Fn(&MigrationSection) -> bool,
 ) -> Result<()> {
-    // Pair each selected section with its index in the FULL baseline file
-    // (enumerate before filtering) so section_order stays stable per version —
-    // a module subset provision registers only a subset in each call.
-    let sections: Vec<(i32, MigrationSection)> = parse_baseline_sections(baseline_sql, source)?
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| (i as i32, s))
-        .filter(|(_, s)| select_section(s))
-        .collect();
-
-    ensure_section_tracking_table(pool, tracking_table).await?;
-    initialize_sections(pool, tracking_table, version, true, &sections).await?;
-
     let reporter = SectionReporter::new(sections.len(), false);
     let mut executor = SectionExecutor::new(
         pool.clone(),
@@ -251,7 +244,7 @@ pub async fn apply_baseline_to_target(
         ExecutionMode::Production,
         true,
     );
-    for (_, section) in &sections {
+    for (_, section) in sections {
         executor
             .execute_section(version, section)
             .await

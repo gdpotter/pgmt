@@ -261,17 +261,83 @@ async fn migrate_tracking_table_schema(
     Ok(())
 }
 
-/// Register a baseline as started on a target: insert its tracking row
-/// (is_baseline = TRUE) and the Pending section rows for the sections being
-/// applied, in ONE transaction, before anything executes — the same
-/// first-touch semantics migrations use. Idempotent (`ON CONFLICT DO
-/// NOTHING`): a resumed provision or a later module adoption re-registers
-/// harmlessly, preserving existing section statuses.
+/// Register a migration/baseline as started: insert its main tracking row and
+/// its Pending section rows in ONE transaction, before any section executes.
+///
+/// Writing the row at start (rather than on completion) is what lets a failed
+/// run resume: the version row exists, and "fully applied" is *derived* — every
+/// section in the (checksummed) file has a Completed row. That distinction is
+/// only sound because this insert is atomic: a crash can never leave a version
+/// row with zero section rows. `insert_pending_section` uses `ON CONFLICT DO
+/// NOTHING`, so a resumed run preserves any rows a prior attempt left.
+///
+/// `on_conflict_ignore` governs the MAIN-row insert only, and is the sole
+/// behavioural difference between the two public wrappers: a baseline
+/// re-registers harmlessly (a resumed provision or a later module adoption
+/// touches the same version), so it ignores the conflict; a migration inserts
+/// exactly once.
 ///
 /// Each section is paired with its `section_order` — its index in the FULL
-/// baseline file — rather than a local `enumerate()`, so orders stay stable
-/// per version across the separate registration calls a module subset deploy
-/// makes (see [`section_tracking::initialize_sections`]).
+/// file — rather than a local `enumerate()`, so orders stay stable per version
+/// across the separate registration calls a module subset deploy makes (see
+/// [`section_tracking::initialize_sections`]).
+#[allow(clippy::too_many_arguments)]
+async fn register_start(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    description: &str,
+    checksum: &str,
+    sections: &[(i32, crate::migration::section_parser::MigrationSection)],
+    is_baseline: bool,
+    on_conflict_ignore: bool,
+) -> Result<()> {
+    let tracking_table_name = format_tracking_table_name(tracking_table)?;
+    let sections_table = section_tracking::format_sections_table_name(tracking_table);
+    let kind = if is_baseline { "baseline" } else { "migration" };
+    let conflict = if on_conflict_ignore {
+        " ON CONFLICT (version, is_baseline) DO NOTHING"
+    } else {
+        ""
+    };
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(&format!(
+        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, $4){}",
+        tracking_table_name, conflict
+    ))
+    .bind(version_to_db(version)?)
+    .bind(description)
+    .bind(checksum)
+    .bind(is_baseline)
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("Failed to record {} {} in tracking table", kind, version))?;
+
+    for (order, section) in sections {
+        section_tracking::insert_pending_section(
+            &mut *tx,
+            &sections_table,
+            version,
+            is_baseline,
+            *order,
+            section,
+        )
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .with_context(|| format!("Failed to register {} {} start", kind, version))?;
+
+    Ok(())
+}
+
+/// Register a baseline as started: the main row (idempotent — `ON CONFLICT DO
+/// NOTHING`, so a resumed provision or later module adoption re-registers
+/// harmlessly) plus its Pending section rows. Ensures the main tracking table
+/// exists first (the section table is the caller's precondition). See
+/// [`register_start`].
 pub async fn register_baseline_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -280,62 +346,22 @@ pub async fn register_baseline_start(
     checksum: &str,
     sections: &[(i32, crate::migration::section_parser::MigrationSection)],
 ) -> Result<()> {
-    let tracking_table_name = format_tracking_table_name(tracking_table)?;
-    let sections_table = section_tracking::format_sections_table_name(tracking_table);
-
     ensure_tracking_table_exists(pool, tracking_table).await?;
-
-    let mut tx = pool.begin().await?;
-    sqlx::query(&format!(
-        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, TRUE)
-         ON CONFLICT (version, is_baseline) DO NOTHING",
-        tracking_table_name
-    ))
-    .bind(version_to_db(version)?)
-    .bind(description)
-    .bind(checksum)
-    .execute(&mut *tx)
+    register_start(
+        pool,
+        tracking_table,
+        version,
+        description,
+        checksum,
+        sections,
+        true,
+        true,
+    )
     .await
-    .with_context(|| format!("Failed to record baseline {} in tracking table", version))?;
-
-    for (order, section) in sections {
-        section_tracking::insert_pending_section(
-            &mut *tx,
-            &sections_table,
-            version,
-            true,
-            *order,
-            section,
-        )
-        .await?;
-    }
-
-    tx.commit()
-        .await
-        .with_context(|| format!("Failed to register baseline {} start", version))?;
-
-    Ok(())
 }
 
-/// Register a migration as started: insert its tracking row and its Pending
-/// section rows in ONE transaction, before any section executes.
-///
-/// Writing the row at start (rather than on completion) is what lets a failed
-/// migration resume: the version row exists, and "fully applied" is *derived*
-/// — every section in the (checksummed) file has a Completed row. Legacy rows
-/// with NO section rows at all were recorded on completion by older pgmt and
-/// are fully applied by construction. That distinction is only sound because
-/// this insert is atomic: a crash can never leave a version row with zero
-/// section rows.
-///
-/// `ON CONFLICT DO NOTHING` on the section rows preserves any rows left by a
-/// pre-refactor crashed apply (sections used to be initialized before the
-/// version row existed), so their Completed statuses keep driving resume.
-///
-/// Each section is paired with its `section_order` — its index in the FULL
-/// migration file — rather than a local `enumerate()`, so orders stay stable
-/// per version across the separate registration calls a module subset deploy
-/// makes (see [`section_tracking::initialize_sections`]).
+/// Register a migration as started: the main row (inserted exactly once) plus
+/// its Pending section rows. See [`register_start`].
 pub async fn register_migration_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -344,38 +370,17 @@ pub async fn register_migration_start(
     checksum: &str,
     sections: &[(i32, crate::migration::section_parser::MigrationSection)],
 ) -> Result<()> {
-    let tracking_table_name = format_tracking_table_name(tracking_table)?;
-    let sections_table = section_tracking::format_sections_table_name(tracking_table);
-
-    let mut tx = pool.begin().await?;
-    sqlx::query(&format!(
-        "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, FALSE)",
-        tracking_table_name
-    ))
-    .bind(version_to_db(version)?)
-    .bind(description)
-    .bind(checksum)
-    .execute(&mut *tx)
+    register_start(
+        pool,
+        tracking_table,
+        version,
+        description,
+        checksum,
+        sections,
+        false,
+        false,
+    )
     .await
-    .with_context(|| format!("Failed to record migration {} in tracking table", version))?;
-
-    for (order, section) in sections {
-        section_tracking::insert_pending_section(
-            &mut *tx,
-            &sections_table,
-            version,
-            false,
-            *order,
-            section,
-        )
-        .await?;
-    }
-
-    tx.commit()
-        .await
-        .with_context(|| format!("Failed to register migration {} start", version))?;
-
-    Ok(())
 }
 
 /// Calculate checksum for migration content

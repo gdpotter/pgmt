@@ -376,13 +376,21 @@ async fn test_apply_baseline_to_target_creates_objects() -> Result<()> {
     with_test_db(async |db| {
         let baseline_sql = "CREATE TABLE accounts (id SERIAL PRIMARY KEY, name TEXT NOT NULL);";
         let tracking_table = pgmt::config::types::TrackingTable::default();
+        pgmt::migration_tracking::ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+        let sections: Vec<(i32, _)> = pgmt::migration::parse_migration_sections(
+            std::path::Path::new("baseline_1.sql"),
+            baseline_sql,
+        )?
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (i as i32, s))
+        .collect();
         pgmt::migration::baseline::apply_baseline_to_target(
             db.pool(),
             &tracking_table,
             1,
-            baseline_sql,
+            &sections,
             "baseline_1.sql",
-            |_| true,
         )
         .await?;
 
@@ -409,13 +417,21 @@ async fn test_apply_baseline_to_target_is_atomic() -> Result<()> {
         // so the whole file still applies atomically.
         let baseline_sql = "CREATE TABLE good (id INT); CREATE TABLE good (id INT);";
         let tracking_table = pgmt::config::types::TrackingTable::default();
+        pgmt::migration_tracking::ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+        let sections: Vec<(i32, _)> = pgmt::migration::parse_migration_sections(
+            std::path::Path::new("bad.sql"),
+            baseline_sql,
+        )?
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (i as i32, s))
+        .collect();
         let result = pgmt::migration::baseline::apply_baseline_to_target(
             db.pool(),
             &tracking_table,
             1,
-            baseline_sql,
+            &sections,
             "bad.sql",
-            |_| true,
         )
         .await;
         assert!(result.is_err(), "duplicate table should fail the baseline");

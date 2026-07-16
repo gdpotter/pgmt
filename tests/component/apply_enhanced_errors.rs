@@ -173,13 +173,22 @@ CREATE TABLE users (
         // Baselines run through the section executor; its errors carry the
         // source file, the failing section, and rich SQL context.
         let tracking_table = pgmt::config::types::TrackingTable::default();
+        pgmt::migration_tracking::ensure_section_tracking_table(shadow_db.pool(), &tracking_table)
+            .await?;
+        let sections: Vec<(i32, _)> = pgmt::migration::parse_migration_sections(
+            std::path::Path::new("V001__test_migration.sql"),
+            invalid_migration_sql,
+        )?
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (i as i32, s))
+        .collect();
         let result = pgmt::migration::baseline::apply_baseline_to_target(
             shadow_db.pool(),
             &tracking_table,
             1,
-            invalid_migration_sql,
+            &sections,
             "V001__test_migration.sql",
-            |_| true,
         )
         .await;
 

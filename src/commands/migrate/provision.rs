@@ -372,6 +372,8 @@ async fn register_and_apply_baseline(
     // against the registered rows and sync any unapplied ones.
     let full_sections =
         crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?;
+    crate::migration::validate_sections(&full_sections)
+        .with_context(|| format!("Invalid section configuration in baseline ({})", source))?;
     let had_checksummed =
         crate::migration_tracking::section_tracking::validate_and_sync_section_checksums(
             pool,
@@ -417,14 +419,14 @@ async fn register_and_apply_baseline(
 
     // Pair each selected section with its index in the FULL baseline file
     // (enumerate before filtering) so section_order stays stable per version
-    // across the separate registration calls a subset provision makes.
-    let selected: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
-        crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| (i as i32, s))
-            .filter(|(_, s)| select_section(s))
-            .collect();
+    // across the separate registration calls a subset provision makes. Reuse
+    // the sections already parsed above — no second (or third) parse.
+    let selected: Vec<(i32, crate::migration::section_parser::MigrationSection)> = full_sections
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| select_section(s))
+        .map(|(i, s)| (i as i32, s.clone()))
+        .collect();
     register_baseline_start(
         pool,
         &config.migration.tracking_table,
@@ -438,9 +440,8 @@ async fn register_and_apply_baseline(
         pool,
         &config.migration.tracking_table,
         version,
-        baseline_sql,
+        &selected,
         source,
-        select_section,
     )
     .await
 }

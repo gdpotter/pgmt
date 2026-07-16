@@ -192,6 +192,11 @@ async fn apply_with_module_guard(
 /// consider (e.g. provision passes only those after the baseline it just
 /// applied) and is responsible for connecting to the target.
 ///
+/// **Precondition:** the tracking tables already exist. Both command entry
+/// points (`cmd_migrate_apply` → `apply_with_module_guard`, and
+/// `cmd_migrate_provision` → `provision_inner`) ensure them once up front, so
+/// this shared loop does not — a redundant ensure on every call bought nothing.
+///
 /// The `runtime` carries the target's stored subscription and the committed
 /// re-anchors; this loop interleaves the **crossing loop** (§13) with section
 /// execution: each re-anchor V is crossed after every version < V settles and
@@ -208,10 +213,6 @@ pub(crate) async fn apply_pending_migrations(
     runtime: &mut ModuleRuntime,
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
-
-    // Ensure the tracking tables exist (and are migrated to the current shape)
-    ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
-    ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
 
     // All tracking rows: version + checksum + is_baseline.
     let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
