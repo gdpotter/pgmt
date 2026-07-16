@@ -89,36 +89,46 @@ fn resolve_for_ordering(dep: &DbObjectId) -> DbObjectId {
     }
 }
 
-/// Internal function to order steps using the existing object-based dependency system
-fn order_steps_by_dependencies(
-    steps: Vec<MigrationStep>,
+/// The seven shared ordering edge rules, computed once over `steps`.
+///
+/// Returns directed edges as `(before_idx, after_idx)` index pairs — `before`
+/// must be emitted before `after` — in the deterministic sequence the legacy
+/// two-batch path emits them (comment attachment, catalog `forward_deps`
+/// reversed for drops with a step-declared fallback, same-id
+/// drop→create→alter, namespace-slot drop-before-create, routine-overload
+/// drop-before-create, extensions-first). Also returns the missing catalog
+/// dependencies encountered, so each consumer decides whether to warn.
+///
+/// This is the SINGLE derivation of the edge rules. Both ordering paths
+/// consume it: the legacy `order_steps_by_dependencies` feeds the pairs into a
+/// petgraph toposort in emission order (byte-stability), and the module
+/// `annotate` folds them into a dependency set. The two genuine module-only
+/// deltas live annotate-side, visible as deltas: `skip_relationship_providers`
+/// (a relationship step shares its object's id but does not PROVIDE the
+/// object) and the separately-added `owned_by` edge.
+#[allow(clippy::type_complexity)]
+fn collect_edges(
+    steps: &[MigrationStep],
     old_catalog: &Catalog,
     new_catalog: &Catalog,
-) -> anyhow::Result<Vec<MigrationStep>> {
-    let mut graph: DiGraph<usize, ()> = DiGraph::new();
+    skip_relationship_providers: bool,
+) -> (Vec<(usize, usize)>, Vec<(DbObjectId, DbObjectId)>) {
     let mut id_to_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
-    let mut node_indices = Vec::new();
-
-    // Add each step as a node in the graph
     for (i, step) in steps.iter().enumerate() {
-        let idx = graph.add_node(i);
-        node_indices.push(idx);
         id_to_indices.entry(step.id()).or_default().push(i);
     }
 
-    // Track missing dependencies for warnings
+    let mut edges: Vec<(usize, usize)> = Vec::new();
     let mut missing_deps: Vec<(DbObjectId, DbObjectId)> = Vec::new();
 
     for (i, step) in steps.iter().enumerate() {
         let is_drop = step.operation_kind() == OperationKind::Drop;
 
         if let DbObjectId::Comment { object_id } = &step.id() {
-            // Try exact match on the inner object
+            // Comments attach after the step that creates/alters their object.
             if let Some(indices) = id_to_indices.get(object_id.as_ref()) {
                 for &dep_i in indices {
-                    let from = node_indices[dep_i];
-                    let to = node_indices[i];
-                    graph.add_edge(from, to, ());
+                    edges.push((dep_i, i));
                 }
             }
 
@@ -131,9 +141,7 @@ fn order_steps_by_dependencies(
                 };
                 if let Some(indices) = id_to_indices.get(&table_id) {
                     for &dep_i in indices {
-                        let from = node_indices[dep_i];
-                        let to = node_indices[i];
-                        graph.add_edge(from, to, ());
+                        edges.push((dep_i, i));
                     }
                 }
             }
@@ -155,9 +163,19 @@ fn order_steps_by_dependencies(
                 let resolved_dep = resolve_for_ordering(dep);
                 if let Some(indices) = id_to_indices.get(&resolved_dep) {
                     for &dep_i in indices {
-                        let from = node_indices[if is_drop { i } else { dep_i }];
-                        let to = node_indices[if is_drop { dep_i } else { i }];
-                        graph.add_edge(from, to, ());
+                        // A relationship step (FK create, OWNED BY) shares its
+                        // object's id but does not PROVIDE the object — binding
+                        // "X depends on seq" to seq's OWNED BY step would make
+                        // the table wait on an ALTER that waits on the table.
+                        if skip_relationship_providers && !is_drop && steps[dep_i].is_relationship()
+                        {
+                            continue;
+                        }
+                        if is_drop {
+                            edges.push((i, dep_i));
+                        } else {
+                            edges.push((dep_i, i));
+                        }
                     }
                 } else {
                     let catalog = if is_drop { old_catalog } else { new_catalog };
@@ -177,10 +195,11 @@ fn order_steps_by_dependencies(
                 let resolved_dep = resolve_for_ordering(dep);
                 if let Some(indices) = id_to_indices.get(&resolved_dep) {
                     for &dep_i in indices {
+                        if skip_relationship_providers && steps[dep_i].is_relationship() {
+                            continue;
+                        }
                         // Always: dependency comes before this step
-                        let from = node_indices[dep_i];
-                        let to = node_indices[i];
-                        graph.add_edge(from, to, ());
+                        edges.push((dep_i, i));
                     }
                 } else {
                     // For step-level deps, check new_catalog (these are for "create" scenarios)
@@ -192,47 +211,24 @@ fn order_steps_by_dependencies(
         }
     }
 
-    // Warn about missing dependencies (excluding system schemas)
-    for (object_id, missing_dep) in &missing_deps {
-        // Skip system schema dependencies - these are expected to be missing
-        if let Some(schema) = missing_dep.schema()
-            && is_system_schema(schema)
-        {
-            continue;
-        }
-
-        warn!(
-            "{:?} depends on {:?} which is not in the catalog (may be filtered by config)",
-            object_id, missing_dep
-        );
-    }
-
-    let mut drop_indices = BTreeMap::new();
-    let mut create_indices = BTreeMap::new();
-    let mut other_indices = BTreeMap::new();
+    let mut drop_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
+    let mut create_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
+    let mut other_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
 
     for (i, step) in steps.iter().enumerate() {
         let id = step.id();
         match step.operation_kind() {
-            OperationKind::Drop => {
-                drop_indices.entry(id).or_insert_with(Vec::new).push(i);
-            }
-            OperationKind::Create => {
-                create_indices.entry(id).or_insert_with(Vec::new).push(i);
-            }
-            OperationKind::Alter => {
-                other_indices.entry(id).or_insert_with(Vec::new).push(i);
-            }
+            OperationKind::Drop => drop_indices.entry(id).or_default().push(i),
+            OperationKind::Create => create_indices.entry(id).or_default().push(i),
+            OperationKind::Alter => other_indices.entry(id).or_default().push(i),
         }
     }
 
-    for (id, drops) in drop_indices {
-        if let Some(creates) = create_indices.get(&id) {
-            for &drop_i in &drops {
+    for (id, drops) in &drop_indices {
+        if let Some(creates) = create_indices.get(id) {
+            for &drop_i in drops {
                 for &create_i in creates {
-                    let from = node_indices[drop_i];
-                    let to = node_indices[create_i];
-                    graph.add_edge(from, to, ());
+                    edges.push((drop_i, create_i));
                 }
             }
         }
@@ -270,7 +266,7 @@ fn order_steps_by_dependencies(
                 for &drop_i in drops {
                     for &create_i in creates {
                         if drop_i != create_i {
-                            graph.add_edge(node_indices[drop_i], node_indices[create_i], ());
+                            edges.push((drop_i, create_i));
                         }
                     }
                 }
@@ -278,13 +274,11 @@ fn order_steps_by_dependencies(
         }
     }
 
-    for (id, creates) in create_indices {
-        if let Some(others) = other_indices.get(&id) {
-            for &create_i in &creates {
+    for (id, creates) in &create_indices {
+        if let Some(others) = other_indices.get(id) {
+            for &create_i in creates {
                 for &other_i in others {
-                    let from = node_indices[create_i];
-                    let to = node_indices[other_i];
-                    graph.add_edge(from, to, ());
+                    edges.push((create_i, other_i));
                 }
             }
         }
@@ -301,9 +295,7 @@ fn order_steps_by_dependencies(
     // order) only ever points earlier → later, so it cannot introduce a cycle.
     for indices in other_indices.values() {
         for window in indices.windows(2) {
-            let from = node_indices[window[0]];
-            let to = node_indices[window[1]];
-            graph.add_edge(from, to, ());
+            edges.push((window[0], window[1]));
         }
     }
 
@@ -339,9 +331,7 @@ fn order_steps_by_dependencies(
             if let Some(creates) = func_creates.get(key) {
                 for &drop_i in drops {
                     for &create_i in creates {
-                        let from = node_indices[drop_i];
-                        let to = node_indices[create_i];
-                        graph.add_edge(from, to, ());
+                        edges.push((drop_i, create_i));
                     }
                 }
             }
@@ -382,10 +372,48 @@ fn order_steps_by_dependencies(
 
     for &ext_i in &extension_create_indices {
         for &obj_i in &non_extension_create_indices {
-            let from = node_indices[ext_i];
-            let to = node_indices[obj_i];
-            graph.add_edge(from, to, ());
+            edges.push((ext_i, obj_i));
         }
+    }
+
+    (edges, missing_deps)
+}
+
+/// Internal function to order steps using the existing object-based dependency system
+fn order_steps_by_dependencies(
+    steps: Vec<MigrationStep>,
+    old_catalog: &Catalog,
+    new_catalog: &Catalog,
+) -> anyhow::Result<Vec<MigrationStep>> {
+    let mut graph: DiGraph<usize, ()> = DiGraph::new();
+    let mut node_indices = Vec::new();
+
+    // Add each step as a node in the graph
+    for (i, _step) in steps.iter().enumerate() {
+        node_indices.push(graph.add_node(i));
+    }
+
+    // The legacy two-batch path carries no relationship-provider skip: it keeps
+    // relationship steps in their own batch instead (see `diff_order`).
+    let (edges, missing_deps) = collect_edges(&steps, old_catalog, new_catalog, false);
+
+    for (from, to) in edges {
+        graph.add_edge(node_indices[from], node_indices[to], ());
+    }
+
+    // Warn about missing dependencies (excluding system schemas)
+    for (object_id, missing_dep) in &missing_deps {
+        // Skip system schema dependencies - these are expected to be missing
+        if let Some(schema) = missing_dep.schema()
+            && is_system_schema(schema)
+        {
+            continue;
+        }
+
+        warn!(
+            "{:?} depends on {:?} which is not in the catalog (may be filtered by config)",
+            object_id, missing_dep
+        );
     }
 
     let index_to_step_idx: BTreeMap<_, _> = node_indices
@@ -467,94 +495,28 @@ pub fn annotate(
     new_catalog: &Catalog,
     module_of: &mut dyn FnMut(&MigrationStep) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<Vec<PlannedStep>> {
+    // The shared edge rules, with the relationship-provider skip active (a
+    // relationship step shares its object's id but does not PROVIDE it).
+    // Missing catalog deps are ignored here — the module path does not warn.
+    let (edges, _missing) = collect_edges(&steps, old_catalog, new_catalog, true);
+
+    let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); steps.len()];
+    for (before, after) in edges {
+        if before != after {
+            deps[after].insert(before);
+        }
+    }
+
+    // MODULE-ONLY DELTA: the owned_by edge. `ALTER SEQUENCE ... OWNED BY
+    // schema.table.column` must follow its owning table's steps, but `owned_by`
+    // is an unparsed string the catalogs never see, so no shared rule records
+    // it. The legacy path instead orders every relationship step in a second
+    // batch after all primary steps, which covers this implicitly.
     let mut id_to_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
     for (i, step) in steps.iter().enumerate() {
         id_to_indices.entry(step.id()).or_default().push(i);
     }
-
-    let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); steps.len()];
-    let add_edge = |deps: &mut Vec<BTreeSet<usize>>, before: usize, after: usize| {
-        if before != after {
-            deps[after].insert(before);
-        }
-    };
-
     for (i, step) in steps.iter().enumerate() {
-        let is_drop = step.operation_kind() == OperationKind::Drop;
-
-        // Comments attach after the step that creates/alters their object
-        // (and, for constraint comments, after the parent table — PKs can be
-        // inline in CREATE TABLE).
-        if let DbObjectId::Comment { object_id } = &step.id() {
-            if let Some(indices) = id_to_indices.get(object_id.as_ref()) {
-                for &dep_i in indices {
-                    add_edge(&mut deps, dep_i, i);
-                }
-            }
-            if let DbObjectId::Constraint { schema, table, .. } = object_id.as_ref() {
-                let table_id = DbObjectId::Table {
-                    schema: schema.clone(),
-                    name: table.clone(),
-                };
-                if let Some(indices) = id_to_indices.get(&table_id) {
-                    for &dep_i in indices {
-                        add_edge(&mut deps, dep_i, i);
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Catalog dependencies: old side for drops (edges reversed), new side
-        // for creates/alters.
-        let catalog_deps = if is_drop {
-            old_catalog.forward_deps.get(&step.id())
-        } else {
-            new_catalog.forward_deps.get(&step.id())
-        };
-        if let Some(catalog_deps) = catalog_deps {
-            for dep in catalog_deps {
-                let resolved = resolve_for_ordering(dep);
-                if let Some(indices) = id_to_indices.get(&resolved) {
-                    for &dep_i in indices {
-                        // A relationship step (FK create, OWNED BY) shares its
-                        // object's id but does not PROVIDE the object — binding
-                        // "X depends on seq" to seq's OWNED BY step would make
-                        // the table wait on an ALTER that waits on the table.
-                        if !is_drop && steps[dep_i].is_relationship() {
-                            continue;
-                        }
-                        if is_drop {
-                            add_edge(&mut deps, i, dep_i);
-                        } else {
-                            add_edge(&mut deps, dep_i, i);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step-declared dependencies: FALLBACK ONLY. Unioning them
-        // unconditionally imports edges the catalog deliberately shadows —
-        // e.g. a sequence declares its owning table while the table's
-        // nextval() default depends on the sequence, which is a cycle. The
-        // one genuinely missing edge (OWNED BY → table) is added explicitly
-        // below instead.
-        if catalog_deps.is_none() {
-            for dep in &step.dependencies() {
-                let resolved = resolve_for_ordering(dep);
-                if let Some(indices) = id_to_indices.get(&resolved) {
-                    for &dep_i in indices {
-                        if steps[dep_i].is_relationship() {
-                            continue;
-                        }
-                        add_edge(&mut deps, dep_i, i);
-                    }
-                }
-            }
-        }
-
-        // The owned_by edge: "schema.table.column" → the table's steps.
         if let MigrationStep::Sequence(crate::diff::operations::SequenceOperation::AlterOwnership {
             owned_by,
             ..
@@ -569,131 +531,11 @@ pub fn annotate(
                 };
                 if let Some(indices) = id_to_indices.get(&table_id) {
                     for &dep_i in indices {
-                        add_edge(&mut deps, dep_i, i);
+                        if dep_i != i {
+                            deps[i].insert(dep_i);
+                        }
                     }
                 }
-            }
-        }
-    }
-
-    // Synthetic same-object rules (see module docs).
-    let mut drop_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
-    let mut create_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
-    let mut alter_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
-    for (i, step) in steps.iter().enumerate() {
-        match step.operation_kind() {
-            OperationKind::Drop => drop_indices.entry(step.id()).or_default().push(i),
-            OperationKind::Create => create_indices.entry(step.id()).or_default().push(i),
-            OperationKind::Alter => alter_indices.entry(step.id()).or_default().push(i),
-        }
-    }
-    for (id, drops) in &drop_indices {
-        if let Some(creates) = create_indices.get(id) {
-            for &d in drops {
-                for &c in creates {
-                    add_edge(&mut deps, d, c);
-                }
-            }
-        }
-    }
-    for (id, creates) in &create_indices {
-        if let Some(alters) = alter_indices.get(id) {
-            for &c in creates {
-                for &a in alters {
-                    add_edge(&mut deps, c, a);
-                }
-            }
-        }
-    }
-    for alters in alter_indices.values() {
-        for window in alters.windows(2) {
-            add_edge(&mut deps, window[0], window[1]);
-        }
-    }
-    // Same-namespace-slot DROP before CREATE: PostgreSQL enforces name
-    // uniqueness over a coarser key than identity (a CONSTRAINT and an INDEX
-    // of the same name collide in pg_class) with no pg_depend edge between them.
-    {
-        let mut slot_drops: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
-        let mut slot_creates: BTreeMap<namespace::NamespaceSlot, Vec<usize>> = BTreeMap::new();
-        for (i, step) in steps.iter().enumerate() {
-            match step.operation_kind() {
-                OperationKind::Drop => {
-                    for slot in namespace::namespace_slots(&step.id()) {
-                        slot_drops.entry(slot).or_default().push(i);
-                    }
-                }
-                OperationKind::Create => {
-                    for slot in namespace::namespace_slots(&step.id()) {
-                        slot_creates.entry(slot).or_default().push(i);
-                    }
-                }
-                OperationKind::Alter => {}
-            }
-        }
-        for (slot, drops) in &slot_drops {
-            if let Some(creates) = slot_creates.get(slot) {
-                for &d in drops {
-                    for &c in creates {
-                        add_edge(&mut deps, d, c);
-                    }
-                }
-            }
-        }
-    }
-    // Routine (function/procedure) overloads: same schema+name, differing
-    // arguments. All drops of the overload set must run before any create,
-    // otherwise a signature change can leave two overloads live at once and an
-    // ambiguous call like f(1) fails with "function f(integer) is not unique".
-    // Procedures share pg_proc with functions, so the ambiguity spans both;
-    // group them together by (schema, name). No pg_depend edge records this,
-    // and each overload carries a distinct DbObjectId (arguments differ), so
-    // the same-id drop-before-create rule above does not cover it. Edges only
-    // point drop -> create, so they cannot introduce a cycle.
-    {
-        let mut routine_drops: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
-        let mut routine_creates: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
-        for (i, step) in steps.iter().enumerate() {
-            let key = match &step.id() {
-                DbObjectId::Function { schema, name, .. }
-                | DbObjectId::Procedure { schema, name, .. } => {
-                    Some((schema.clone(), name.clone()))
-                }
-                _ => None,
-            };
-            if let Some(key) = key {
-                match step.operation_kind() {
-                    OperationKind::Drop => routine_drops.entry(key).or_default().push(i),
-                    OperationKind::Create => routine_creates.entry(key).or_default().push(i),
-                    OperationKind::Alter => {}
-                }
-            }
-        }
-        for (key, drops) in &routine_drops {
-            if let Some(creates) = routine_creates.get(key) {
-                for &d in drops {
-                    for &c in creates {
-                        add_edge(&mut deps, d, c);
-                    }
-                }
-            }
-        }
-    }
-    // Extensions and schemas first.
-    let ext_creates: Vec<usize> = steps
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| {
-            matches!(s, MigrationStep::Extension(_)) && s.operation_kind() == OperationKind::Create
-        })
-        .map(|(i, _)| i)
-        .collect();
-    for (i, step) in steps.iter().enumerate() {
-        if !matches!(step, MigrationStep::Extension(_) | MigrationStep::Schema(_))
-            && step.operation_kind() == OperationKind::Create
-        {
-            for &e in &ext_creates {
-                add_edge(&mut deps, e, i);
             }
         }
     }
