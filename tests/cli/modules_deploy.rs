@@ -2,47 +2,12 @@
 //! closure, adoption (replay vs baseline-content), zero-trace skipping, and
 //! the conservative intra-migration coupling guard.
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{
+    THREE_MODULES_YAML, enable_modules, next_version_tick, with_cli_helper,
+    write_three_module_schema,
+};
 use anyhow::Result;
 use predicates::prelude::*;
-
-const THREE_MODULES_YAML: &str = r#"
-modules:
-  core:
-    paths: ["schema/core/**"]
-  billing:
-    paths: ["schema/billing/**"]
-    depends_on: [core]
-  analytics:
-    paths: ["schema/analytics/**"]
-    depends_on: [core]
-"#;
-
-fn enable_modules(helper: &crate::helpers::cli::CliTestHelper, yaml: &str) -> Result<()> {
-    let config_path = helper.project_root.join("pgmt.yaml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(yaml);
-    std::fs::write(config_path, config)?;
-    Ok(())
-}
-
-fn write_three_module_schema(helper: &crate::helpers::cli::CliTestHelper) -> Result<()> {
-    helper.write_schema_file(
-        "core/users.sql",
-        "CREATE TABLE users (id SERIAL PRIMARY KEY);",
-    )?;
-    helper.write_schema_file(
-        "billing/invoices.sql",
-        "-- require: core/users.sql\n\
-         CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
-    )?;
-    helper.write_schema_file(
-        "analytics/events.sql",
-        "-- require: core/users.sql\n\
-         CREATE TABLE events (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
-    )?;
-    Ok(())
-}
 
 /// Subset provision deploys only the named modules (+ deps + base); the
 /// unselected module's objects don't exist and its sections leave NO rows —
@@ -551,7 +516,7 @@ async fn test_adoption_requires_established_modules_caught_up() -> Result<()> {
         // Migration v2 (+ paired baseline): a core change AND billing's first
         // appearance. billing now lives in a baseline, so adopting it needs
         // baseline content. The target is still at v1 — it never applied v2.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        next_version_tick();
         helper.write_schema_file(
             "core/users.sql",
             "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT);",

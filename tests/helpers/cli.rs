@@ -382,6 +382,67 @@ docker:
     }
 }
 
+/// A three-module `modules:` block (core, billing→core, analytics→core) that
+/// several module CLI test files share.
+pub const THREE_MODULES_YAML: &str = r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+  billing:
+    paths: ["schema/billing/**"]
+    depends_on: [core]
+  analytics:
+    paths: ["schema/analytics/**"]
+    depends_on: [core]
+"#;
+
+/// Append a `modules:` block to the project's pgmt.yaml (enabling the feature).
+pub fn enable_modules(helper: &CliTestHelper, yaml: &str) -> Result<()> {
+    let config_path = helper.project_root.join("pgmt.yaml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(yaml);
+    std::fs::write(config_path, config)?;
+    Ok(())
+}
+
+/// Write the schema files matching [`THREE_MODULES_YAML`]: core.users, plus
+/// billing.invoices and analytics.events FK-referencing it.
+pub fn write_three_module_schema(helper: &CliTestHelper) -> Result<()> {
+    helper.write_schema_file(
+        "core/users.sql",
+        "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+    )?;
+    helper.write_schema_file(
+        "billing/invoices.sql",
+        "-- require: core/users.sql\n\
+         CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
+    )?;
+    helper.write_schema_file(
+        "analytics/events.sql",
+        "-- require: core/users.sql\n\
+         CREATE TABLE events (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
+    )?;
+    Ok(())
+}
+
+/// The registration checksum for the named section of a migration/baseline SQL
+/// file (raw header + body, exactly as `apply` stores it).
+pub fn section_checksum(file_sql: &str, name: &str) -> String {
+    let sections =
+        pgmt::migration::parse_migration_sections(std::path::Path::new("m.sql"), file_sql).unwrap();
+    let section = sections
+        .iter()
+        .find(|s| s.name == name)
+        .expect("section present");
+    pgmt::migration_tracking::calculate_checksum(&section.checksum_content())
+}
+
+/// Distinct migration versions are timestamps: force the wall clock forward
+/// (>1s) between generation calls so the next `migrate new` gets a new version.
+pub fn next_version_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+}
+
 /// Run a CLI test with automatic database cleanup
 ///
 /// This is the idiomatic pattern for CLI testing with guaranteed cleanup.

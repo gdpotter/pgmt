@@ -5,29 +5,9 @@
 //! dev when none is set. It is strictly read-only — it never creates or evolves
 //! the tracking tables on the reported database.
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{THREE_MODULES_YAML, enable_modules, with_cli_helper};
 use anyhow::Result;
 use predicates::prelude::*;
-
-const THREE_MODULES_YAML: &str = r#"
-modules:
-  core:
-    paths: ["schema/core/**"]
-  billing:
-    paths: ["schema/billing/**"]
-    depends_on: [core]
-  analytics:
-    paths: ["schema/analytics/**"]
-    depends_on: [core]
-"#;
-
-fn enable_modules(helper: &crate::helpers::cli::CliTestHelper, yaml: &str) -> Result<()> {
-    let config_path = helper.project_root.join("pgmt.yaml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(yaml);
-    std::fs::write(config_path, config)?;
-    Ok(())
-}
 
 /// `migrate status --target-url <db>` reports on that database; without the
 /// flag it falls back to dev. Applying a migration to the target only (dev

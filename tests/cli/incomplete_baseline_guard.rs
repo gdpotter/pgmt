@@ -15,47 +15,11 @@
 //! Where a real crashed provision is awkward, we SEED the post-crash state (a
 //! failed baseline section) directly, per the pattern in `apply_crash_states`.
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{
+    THREE_MODULES_YAML, enable_modules, with_cli_helper, write_three_module_schema,
+};
 use anyhow::Result;
 use predicates::prelude::*;
-
-const THREE_MODULES_YAML: &str = r#"
-modules:
-  core:
-    paths: ["schema/core/**"]
-  billing:
-    paths: ["schema/billing/**"]
-    depends_on: [core]
-  analytics:
-    paths: ["schema/analytics/**"]
-    depends_on: [core]
-"#;
-
-fn enable_modules(helper: &crate::helpers::cli::CliTestHelper, yaml: &str) -> Result<()> {
-    let config_path = helper.project_root.join("pgmt.yaml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(yaml);
-    std::fs::write(config_path, config)?;
-    Ok(())
-}
-
-fn write_three_module_schema(helper: &crate::helpers::cli::CliTestHelper) -> Result<()> {
-    helper.write_schema_file(
-        "core/users.sql",
-        "CREATE TABLE users (id SERIAL PRIMARY KEY);",
-    )?;
-    helper.write_schema_file(
-        "billing/invoices.sql",
-        "-- require: core/users.sql\n\
-         CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
-    )?;
-    helper.write_schema_file(
-        "analytics/events.sql",
-        "-- require: core/users.sql\n\
-         CREATE TABLE events (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id));",
-    )?;
-    Ok(())
-}
 
 /// The baseline version recorded in the tracking table.
 async fn baseline_version(helper: &crate::helpers::cli::CliTestHelper) -> Result<i64> {
@@ -289,64 +253,6 @@ async fn test_incomplete_base_baseline_blocks_all_applies() -> Result<()> {
                 &helper.dev_database_url,
                 "--modules",
                 "core",
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(expected));
-
-        Ok(())
-    })
-    .await
-}
-
-/// The module-scoped refusal is an API: assert its exact wording, including the
-/// affected module name and the precise `pgmt migrate provision --modules ...`
-/// recovery command.
-#[tokio::test]
-async fn test_incomplete_baseline_error_names_module_and_command() -> Result<()> {
-    with_cli_helper(async |helper| {
-        helper.init_project()?;
-        enable_modules(helper, THREE_MODULES_YAML)?;
-        write_three_module_schema(helper)?;
-
-        helper
-            .command()
-            .args(["migrate", "new", "initial", "--create-baseline"])
-            .assert()
-            .success();
-
-        // Full adoption of billing, then seed a crash by flipping its baseline
-        // section to 'failed'.
-        helper
-            .command()
-            .args([
-                "migrate",
-                "provision",
-                "--target-url",
-                &helper.dev_database_url,
-                "--modules",
-                "billing",
-            ])
-            .assert()
-            .success();
-        seed_baseline_section_status(helper, "billing", "failed").await?;
-        let version = baseline_version(helper).await?;
-
-        // The exact refusal string, treated as an API.
-        let expected = format!(
-            "module(s) billing have partially applied baseline content (baseline {version}) — a \
-             `migrate provision --modules billing` did not finish. Complete it with `pgmt migrate \
-             provision --modules billing` before applying its migrations."
-        );
-        helper
-            .command()
-            .args([
-                "migrate",
-                "apply",
-                "--target-url",
-                &helper.dev_database_url,
-                "--modules",
-                "billing",
             ])
             .assert()
             .failure()

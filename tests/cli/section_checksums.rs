@@ -6,21 +6,16 @@
 //! attribution (module literal, mode, pgmt_version, applied_by) recorded at
 //! registration.
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{enable_modules, section_checksum, with_cli_helper};
 use anyhow::Result;
 use predicates::prelude::*;
 
-/// Recompute the stored checksum for a named section of the given file SQL,
-/// exactly as registration does (raw header + body).
-fn section_checksum(file_sql: &str, name: &str) -> String {
-    let sections =
-        pgmt::migration::parse_migration_sections(std::path::Path::new("m.sql"), file_sql).unwrap();
-    let section = sections
-        .iter()
-        .find(|s| s.name == name)
-        .expect("section present");
-    pgmt::migration_tracking::calculate_checksum(&section.checksum_content())
-}
+/// A single-module `modules:` block for the attribution tests below.
+const MODULES_YAML: &str = r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+"#;
 
 /// THE headline test: a 3-section migration whose middle section has bad SQL
 /// fails; fixing that section in the file and re-applying resumes (section 1
@@ -213,44 +208,9 @@ CREATE TABLE a (id SERIAL PRIMARY KEY);
     .await
 }
 
-/// Changing an applied section's transaction mode is refused (the mode lives in
-/// the header, so the section checksum pins it too).
-#[tokio::test]
-async fn test_mode_change_on_completed_section_bails() -> Result<()> {
-    with_cli_helper(async |helper| {
-        helper.init_project()?;
-
-        helper.write_migration_file(
-            "1000_mode.sql",
-            r#"-- pgmt:section name="s1" mode="transactional"
-CREATE TABLE t1 (id SERIAL PRIMARY KEY);
-"#,
-        )?;
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .success();
-
-        helper.write_migration_file(
-            "1000_mode.sql",
-            r#"-- pgmt:section name="s1" mode="autocommit"
-CREATE TABLE t1 (id SERIAL PRIMARY KEY);
-"#,
-        )?;
-
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("section 's1'"))
-            .stderr(predicate::str::contains("Applied sections are immutable"));
-
-        Ok(())
-    })
-    .await
-}
+// (`test_mode_change_on_completed_section_bails` removed: that the header — and
+// thus `mode=` — participates in the section checksum is pinned directly by the
+// checksum_content unit test in src/migration/section_parser.rs.)
 
 /// Legacy section rows (NULL checksum, pre-upgrade) pass section-level
 /// validation; with NO checksummed sections at all the whole-file immutability
@@ -419,20 +379,6 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
         Ok(())
     })
     .await
-}
-
-const MODULES_YAML: &str = r#"
-modules:
-  core:
-    paths: ["schema/core/**"]
-"#;
-
-fn enable_modules(helper: &crate::helpers::cli::CliTestHelper, yaml: &str) -> Result<()> {
-    let config_path = helper.project_root.join("pgmt.yaml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(yaml);
-    std::fs::write(config_path, config)?;
-    Ok(())
 }
 
 /// Section rows are self-describing at registration: the module literal (NULL

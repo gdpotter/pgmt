@@ -542,6 +542,29 @@ ALTER TABLE users ADD COLUMN test TEXT;
         assert!(sections[0].sql.contains("ALTER TABLE users"));
     }
 
+    /// The header participates in `checksum_content`, so header-only attribute
+    /// changes (e.g. `mode=`) are pinned by the section checksum: editing an
+    /// applied section's mode trips the immutability guard.
+    #[test]
+    fn test_header_participates_in_checksum_content() {
+        let body = "CREATE TABLE t1 (id SERIAL PRIMARY KEY);";
+        let transactional = parse_migration_sections(
+            Path::new("m.sql"),
+            &format!("-- pgmt:section name=\"s1\" mode=\"transactional\"\n{body}\n"),
+        )
+        .unwrap();
+        let autocommit = parse_migration_sections(
+            Path::new("m.sql"),
+            &format!("-- pgmt:section name=\"s1\" mode=\"autocommit\"\n{body}\n"),
+        )
+        .unwrap();
+        assert_ne!(
+            transactional[0].checksum_content(),
+            autocommit[0].checksum_content(),
+            "a mode-only header change must change the section checksum"
+        );
+    }
+
     #[test]
     fn test_parse_section_with_retry() {
         let sql = r#"

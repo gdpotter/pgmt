@@ -3,7 +3,7 @@
 //! divergence (re-tags, replayability breaks), and emits re-anchoring
 //! baselines with `remaps`.
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{enable_modules, next_version_tick, with_cli_helper};
 use anyhow::Result;
 use predicates::prelude::*;
 
@@ -15,15 +15,6 @@ modules:
     paths: ["schema/billing/**"]
     depends_on: [core]
 "#;
-
-/// Append a `modules:` block to the helper's default pgmt.yaml.
-fn enable_modules(helper: &crate::helpers::cli::CliTestHelper, yaml: &str) -> Result<()> {
-    let config_path = helper.project_root.join("pgmt.yaml");
-    let mut config = std::fs::read_to_string(&config_path)?;
-    config.push_str(yaml);
-    std::fs::write(config_path, config)?;
-    Ok(())
-}
 
 /// A module project generates module-tagged sections, the migration applies,
 /// and a second `migrate new` sees no changes — proving the sectioned file
@@ -206,8 +197,8 @@ async fn test_cross_module_drop_requires_baseline() -> Result<()> {
             .success();
 
         // Drop accounts; billing keeps invoices but loses the FK.
-        // (Sleep first: versions are second-resolution timestamps.)
-        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+        // (Tick first: versions are second-resolution timestamps.)
+        next_version_tick();
         std::fs::remove_file(helper.project_root.join("schema/core/accounts.sql"))?;
         helper.write_schema_file(
             "billing/invoices.sql",
@@ -382,7 +373,7 @@ async fn test_migrate_update_reanchor_points_at_migrate_new() -> Result<()> {
             .assert()
             .success();
 
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        next_version_tick();
         helper.write_schema_file(
             "core/extra.sql",
             "CREATE TABLE extra (id SERIAL PRIMARY KEY);",

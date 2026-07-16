@@ -9,7 +9,7 @@
 //! this file owns the re-anchor rows (modularization, split, merge, demotion,
 //! irrelevant crossings) across LEGACY / SUBSET / BEHIND targets.
 
-use crate::helpers::cli::{CliTestHelper, with_cli_helper};
+use crate::helpers::cli::{CliTestHelper, next_version_tick, with_cli_helper};
 use anyhow::Result;
 use predicates::prelude::*;
 
@@ -25,12 +25,6 @@ fn base_config(helper: &CliTestHelper) -> Result<String> {
     Ok(std::fs::read_to_string(
         helper.project_root.join("pgmt.yaml"),
     )?)
-}
-
-/// Distinct migration versions are timestamps: force the clock forward
-/// between generation calls.
-fn next_version_tick() {
-    std::thread::sleep(std::time::Duration::from_millis(1100));
 }
 
 /// The single baseline's version (most tests emit exactly one re-anchor).
@@ -495,107 +489,6 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
     .await
 }
 
-/// Merge `a, b → c` on a target subscribed to both: the crossing collapses
-/// the subscription to {c}; the wholly-absorbed sources drop out.
-#[tokio::test]
-async fn test_merge_with_both_sources_collapses() -> Result<()> {
-    with_cli_helper(async |helper| {
-        helper.init_project()?;
-        let base = base_config(helper)?;
-
-        set_modules(
-            helper,
-            &base,
-            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
-        )?;
-        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
-        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
-        helper
-            .command()
-            .args(["migrate", "new", "initial"])
-            .assert()
-            .success();
-        helper
-            .command()
-            .args([
-                "migrate",
-                "provision",
-                "--target-url",
-                &helper.dev_database_url,
-                "--modules",
-                "all",
-            ])
-            .assert()
-            .success();
-
-        // Merge: both files move into module c; a and b disappear.
-        std::fs::remove_file(helper.project_root.join("schema/a/x.sql"))?;
-        std::fs::remove_file(helper.project_root.join("schema/b/y.sql"))?;
-        helper.write_schema_file("c/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
-        helper.write_schema_file("c/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
-        set_modules(
-            helper,
-            &base,
-            "\nmodules:\n  c:\n    paths: [\"schema/c/**\"]\n",
-        )?;
-        next_version_tick();
-        helper
-            .command()
-            .args(["migrate", "new", "merge", "--create-baseline"])
-            .assert()
-            .success();
-        let re_anchor_version = latest_baseline_version(helper)?;
-        let baseline_sql =
-            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
-        // Provenance-cut: c is brand-new, all acquired — one remap section per
-        // source, never a comma-list, never self.
-        assert!(
-            baseline_sql.contains(r#"module="c" remaps="a""#)
-                && baseline_sql.contains(r#"module="c" remaps="b""#),
-            "merge splits into one remap section per source:\n{baseline_sql}"
-        );
-        assert!(
-            !baseline_sql.contains("remaps=\"a,b\""),
-            "the comma-list form is retired:\n{baseline_sql}"
-        );
-
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .success();
-        let pool = helper.connect_to_dev_db().await?;
-        assert_eq!(
-            subscription_modules(&pool).await?,
-            vec!["c".to_string()],
-            "both sources whole -> c subscribed, absorbed a and b removed"
-        );
-        assert_eq!(
-            crossing_watermark(&pool).await?,
-            Some(re_anchor_version as i64)
-        );
-
-        // Source-holding variant of §19e: the target held BOTH sources, so
-        // every acquisition section in migration V recorded `satisfied` —
-        // nothing executed, the crossing relabelled.
-        let statuses: Vec<String> = sqlx::query_scalar(
-            "SELECT status FROM public.pgmt_migrations_sections
-             WHERE NOT is_baseline AND migration_version = $1",
-        )
-        .bind(re_anchor_version as i64)
-        .fetch_all(&pool)
-        .await?;
-        assert!(
-            !statuses.is_empty() && statuses.iter().all(|st| st == "satisfied"),
-            "both sources held -> every acquisition section satisfied: {statuses:?}"
-        );
-
-        pool.close().await;
-        Ok(())
-    })
-    .await
-}
-
 /// Demotion `a → (unmoduled)` runs BOTH ways on plain apply (§12/§16): with
 /// the source subscribed, the unmoduled acquisition section in migration V
 /// records `satisfied` (objects already present) and the crossing removes `a`
@@ -667,15 +560,12 @@ async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
             helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
         // Provenance-cut: the retained base object (meta) stays in a plain
         // `default` section; the demoted module's object goes into its own
-        // unmoduled remap section `remaps="a"` (no self-inclusion, no
-        // comma-list).
+        // unmoduled remap section `remaps="a"` (no self-inclusion; the retired
+        // comma-list form is asserted-against once, file-wide, in the re-tag
+        // test above).
         assert!(
             baseline_sql.contains(r#"remaps="a""#),
             "demotion: an unmoduled remap section records the demoted module as source:\n{baseline_sql}"
-        );
-        assert!(
-            !baseline_sql.contains("remaps=\"(unmoduled),a\""),
-            "the self-included comma-list form is retired:\n{baseline_sql}"
         );
         // The same-version MIGRATION carries the acquisition delta (§12): an
         // unmoduled remap section with x's DDL and the reviewer comment.
@@ -988,7 +878,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             .assert()
             .success();
 
-        // SUBSET target: a only (b never deployed — no y here).
+        // Target 1 — SUBSET: a only (b never deployed — no y here).
         helper
             .command()
             .args([
@@ -1004,6 +894,23 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
         let pool = helper.connect_to_dev_db().await?;
         assert!(table_exists(&pool, "x").await?);
         assert!(!table_exists(&pool, "y").await?);
+
+        // Target 2 — holds BOTH sources (a and b): the crossing has nothing to
+        // create here, so every acquisition section records `satisfied` and the
+        // subscription simply collapses to {c}.
+        let both_url = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &both_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
 
         // Merge a,b → c and DELETE b (and a) from config in the same change.
         std::fs::remove_file(helper.project_root.join("schema/a/x.sql"))?;
@@ -1089,6 +996,37 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
         assert_eq!(subscription_modules(&pool).await?, vec!["c".to_string()]);
         assert_eq!(crossing_events(&pool).await?.len(), 1);
 
+        // Target 2 (held BOTH sources): plain apply collapses the subscription
+        // to {c}; every acquisition section recorded `satisfied` (nothing ran —
+        // the objects were already present under a's and b's names).
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &both_url])
+            .assert()
+            .success();
+        let both_pool = sqlx::PgPool::connect(&both_url).await?;
+        assert_eq!(
+            subscription_modules(&both_pool).await?,
+            vec!["c".to_string()],
+            "both sources whole -> c subscribed, absorbed a and b removed"
+        );
+        assert_eq!(
+            crossing_watermark(&both_pool).await?,
+            Some(re_anchor_version as i64)
+        );
+        let both_statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM public.pgmt_migrations_sections
+             WHERE NOT is_baseline AND migration_version = $1",
+        )
+        .bind(re_anchor_version as i64)
+        .fetch_all(&both_pool)
+        .await?;
+        assert!(
+            !both_statuses.is_empty() && both_statuses.iter().all(|st| st == "satisfied"),
+            "both sources held -> every acquisition section satisfied: {both_statuses:?}"
+        );
+
+        both_pool.close().await;
         pool.close().await;
         Ok(())
     })
@@ -1384,6 +1322,319 @@ async fn test_move_plus_alter_converges_both_ways() -> Result<()> {
             diff.len()
         );
 
+        Ok(())
+    })
+    .await
+}
+
+/// §16 cross-module-drop × SUBSET: on a target that established `core` but not
+/// `billing`, a cross-module drop's enforced re-anchor runs core's drop while
+/// billing's sections are irrelevant — billing was never deployed here, so its
+/// objects don't exist and its sections leave no rows. The intra-migration
+/// coupling guard stays silent because it is target-aware (billing, the
+/// depended-on module, is not established).
+#[tokio::test]
+async fn test_cross_module_drop_subset_unestablished_module_irrelevant() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  billing:\n    paths: [\"schema/billing/**\"]\n    depends_on: [core]\n",
+        )?;
+        helper.write_schema_file(
+            "core/accounts.sql",
+            "CREATE TABLE accounts (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "-- require: core/accounts.sql\n\
+             CREATE TABLE invoices (id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(id));",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // SUBSET target: core only — billing never deployed (no invoices here).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(table_exists(&pool, "accounts").await?);
+        assert!(!table_exists(&pool, "invoices").await?);
+
+        // Cross-module drop: remove accounts (billing's history references it).
+        next_version_tick();
+        std::fs::remove_file(helper.project_root.join("schema/core/accounts.sql"))?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "CREATE TABLE invoices (id SERIAL PRIMARY KEY, account_id INT);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "drop_accounts", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Apply core on the SUBSET target: core's DROP runs; billing's section
+        // is irrelevant (not established) and no coupling error fires.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+        assert!(
+            !table_exists(&pool, "accounts").await?,
+            "core's drop ran on the SUBSET target"
+        );
+        assert!(
+            !table_exists(&pool, "invoices").await?,
+            "billing was never deployed here"
+        );
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["core".to_string()],
+            "billing stays unestablished — its sections were irrelevant"
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// §16 cross-module-drop × BEHIND: a fully-established target that is behind V
+/// applies the drop migration in version order; the enforced re-anchor baseline
+/// at V is a plain checkpoint (no `remaps`) and stays inert — it is never a
+/// crossing and never applied as content.
+#[tokio::test]
+async fn test_cross_module_drop_behind_baseline_is_inert() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  billing:\n    paths: [\"schema/billing/**\"]\n    depends_on: [core]\n",
+        )?;
+        helper.write_schema_file(
+            "core/accounts.sql",
+            "CREATE TABLE accounts (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "-- require: core/accounts.sql\n\
+             CREATE TABLE invoices (id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(id));",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Fully establish core + billing at v1.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(table_exists(&pool, "accounts").await?);
+        assert!(table_exists(&pool, "invoices").await?);
+
+        // Cross-module drop at v2 (+ enforced baseline). The target does NOT
+        // apply it yet — it is BEHIND.
+        next_version_tick();
+        std::fs::remove_file(helper.project_root.join("schema/core/accounts.sql"))?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "CREATE TABLE invoices (id SERIAL PRIMARY KEY, account_id INT);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "drop_accounts", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Apply the pending v2 migration (in version order). The baseline at v2
+        // is inert: it is not a re-anchor, so nothing crosses.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success();
+        assert!(
+            !table_exists(&pool, "accounts").await?,
+            "the v2 migration dropped accounts"
+        );
+        assert!(
+            table_exists(&pool, "invoices").await?,
+            "billing kept invoices (only the FK went away)"
+        );
+        assert_eq!(
+            crossing_events(&pool).await?.len(),
+            0,
+            "a plain checkpoint baseline is inert — no crossing recorded"
+        );
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["billing".to_string(), "core".to_string()],
+            "the subscription is untouched by the inert baseline"
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// §16 split × BEHIND: a target subscribed to `app` but behind the split
+/// re-anchor V finishes app's sections < V first (an intermediate app change),
+/// then crosses at V — version order enforces "finish the source's sections ≤ V
+/// before the crossing" naturally. After apply: the intermediate change landed,
+/// the subscription grew to {app, metrics}, and the watermark is V.
+#[tokio::test]
+async fn test_split_behind_finishes_source_sections_before_crossing() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n",
+        )?;
+        helper.write_schema_file(
+            "app/users.sql",
+            "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "app/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Establish app from the baseline (watermark = the provision baseline).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "app",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(subscription_modules(&pool).await?, vec!["app".to_string()]);
+
+        // An intermediate app-only migration (< V): adds a column to users.
+        next_version_tick();
+        helper.write_schema_file(
+            "app/users.sql",
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, tag TEXT);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "app_change"])
+            .assert()
+            .success();
+
+        // The split at V > the intermediate: events moves into brand-new metrics.
+        next_version_tick();
+        std::fs::remove_file(helper.project_root.join("schema/app/events.sql"))?;
+        helper.write_schema_file(
+            "metrics/events.sql",
+            "CREATE TABLE events (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/app/**\"]\n  metrics:\n    paths: [\"schema/metrics/**\"]\n",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // The target is BEHIND (it applied only the provision baseline). Apply
+        // app: version order runs the intermediate app change first, THEN the
+        // split at V crosses (source app established; metrics brand-new →
+        // auto-subscribe).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "app",
+            ])
+            .assert()
+            .success();
+        let tag_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'tag')",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(
+            tag_exists,
+            "app's intermediate section (< V) ran before the crossing"
+        );
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["app".to_string(), "metrics".to_string()],
+            "the crossing at V auto-subscribed the brand-new metrics"
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64),
+            "the watermark advanced to V once app's sections ≤ V were settled"
+        );
+
+        pool.close().await;
         Ok(())
     })
     .await

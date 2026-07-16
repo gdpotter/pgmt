@@ -6,21 +6,9 @@
 //! and prints the before/after state. (A failed/stale section needs no verb —
 //! the next apply re-runs it.)
 
-use crate::helpers::cli::with_cli_helper;
+use crate::helpers::cli::{section_checksum, with_cli_helper};
 use anyhow::Result;
 use predicates::prelude::*;
-
-/// Recompute the stored checksum for a named section, exactly as registration
-/// does (raw header + body).
-fn section_checksum(file_sql: &str, name: &str) -> String {
-    let sections =
-        pgmt::migration::parse_migration_sections(std::path::Path::new("m.sql"), file_sql).unwrap();
-    let section = sections
-        .iter()
-        .find(|s| s.name == name)
-        .expect("section present");
-    pgmt::migration_tracking::calculate_checksum(&section.checksum_content())
-}
 
 /// A three-section migration whose middle section runs invalid SQL, so a plain
 /// apply fails partway: section one commits, section two rolls back, section

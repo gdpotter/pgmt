@@ -299,49 +299,5 @@ async fn test_migrate_new_after_paired_baseline_detects_no_changes() -> Result<(
     .await
 }
 
-/// Bug-1 guard: a crashed provision leaves a baseline row whose sections
-/// aren't all completed. `migrate apply` must NOT treat that as full coverage
-/// (which would skip migrations onto a half-built schema) — it refuses and
-/// points at `provision` to finish the baseline.
-#[tokio::test]
-async fn test_apply_refuses_incompletely_applied_baseline() -> Result<()> {
-    with_cli_helper(async |helper| {
-        helper.init_project()?;
-
-        helper.write_migration_file("1000_initial.sql", "CREATE TABLE users (id SERIAL);")?;
-        // Two-section baseline whose second section fails, so provision leaves
-        // it half-applied (section 1 completed, section 2 failed).
-        std::fs::write(
-            helper.baselines_dir().join("baseline_1000.sql"),
-            r#"-- pgmt:section name="tables" mode="transactional"
-CREATE TABLE users (id SERIAL);
-
--- pgmt:section name="seed" mode="transactional"
-INSERT INTO users SELECT id FROM external_source;
-"#,
-        )?;
-        helper
-            .command()
-            .args([
-                "migrate",
-                "provision",
-                "--target-url",
-                &helper.dev_database_url,
-            ])
-            .assert()
-            .failure();
-
-        // A plain `apply` against this half-provisioned target must refuse,
-        // not silently skip migration 1000 as "covered by baseline".
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("partially applied"))
-            .stderr(predicate::str::contains("migrate provision"));
-
-        Ok(())
-    })
-    .await
-}
+// (`test_apply_refuses_incompletely_applied_baseline` removed: it was a strict
+// subset of incomplete_baseline_guard.rs::test_incomplete_base_baseline_blocks_all_applies.)
