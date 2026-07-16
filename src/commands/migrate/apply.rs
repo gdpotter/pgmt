@@ -416,7 +416,7 @@ pub(crate) async fn apply_pending_migrations(
         let vocabulary: BTreeSet<String> = pending_crossing
             .as_ref()
             .map(|p| p.rewritten().clone())
-            .unwrap_or_else(|| runtime.established.clone());
+            .unwrap_or_else(|| runtime.established().clone());
 
         // Module selection: ordinary sections run when their module is
         // requested (+ the base, always); the rest skip and leave NO rows
@@ -457,7 +457,7 @@ pub(crate) async fn apply_pending_migrations(
         // crossing relabels them. Partition the selected sections accordingly:
         // `to_run` executes; `to_satisfy` records rows without DDL.
         let satisfied_by_source = |s: &crate::migration::section_parser::MigrationSection| {
-            !s.remaps.is_empty() && crate::modules::remap_source_held(s, &runtime.established)
+            !s.remaps.is_empty() && crate::modules::remap_source_held(s, runtime.established())
         };
         let to_run: Vec<&crate::migration::section_parser::MigrationSection> = selected
             .iter()

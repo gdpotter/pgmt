@@ -115,7 +115,7 @@ async fn provision_inner(
             // established here (or be adopted in the same run).
             for module in &needs_baseline {
                 for dep in &config.modules.modules[module].depends_on {
-                    if !runtime.established.contains(dep) && !needs_baseline.contains(dep) {
+                    if !runtime.established().contains(dep) && !needs_baseline.contains(dep) {
                         anyhow::bail!(
                             "adopting module '{}' requires its dependency '{}' on this target; \
                              adopt them together: pgmt migrate provision --modules {},{}",
@@ -138,18 +138,18 @@ async fn provision_inner(
                 pool,
                 &config.migration.tracking_table,
                 &files,
-                &runtime.established,
+                runtime.established(),
                 baseline.version,
             )
             .await?;
             if !pending.is_empty() {
-                let catch_up = if runtime.established.is_empty() {
+                let catch_up = if runtime.established().is_empty() {
                     "pgmt migrate apply".to_string()
                 } else {
                     format!(
                         "pgmt migrate apply --modules {}",
                         runtime
-                            .established
+                            .established()
                             .iter()
                             .cloned()
                             .collect::<Vec<_>>()
@@ -216,7 +216,7 @@ async fn provision_inner(
                 source,
                 |section| {
                     is_adopted(section)
-                        && !crate::modules::remap_source_held(section, &runtime.established)
+                        && !crate::modules::remap_source_held(section, runtime.established())
                 },
             )
             .await?;
@@ -233,7 +233,7 @@ async fn provision_inner(
                 .enumerate()
                 .map(|(i, s)| (i as i32, s))
                 .filter(|(_, s)| {
-                    is_adopted(s) && crate::modules::remap_source_held(s, &runtime.established)
+                    is_adopted(s) && crate::modules::remap_source_held(s, runtime.established())
                 })
                 .collect();
             crate::migration_tracking::section_tracking::record_sections_satisfied(
