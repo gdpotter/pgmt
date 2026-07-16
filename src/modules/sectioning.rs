@@ -25,10 +25,10 @@ pub struct StepSection {
     pub module: Option<String>,
     /// Prior owner of this section's objects (re-anchors and their paired
     /// acquisition migration sections, §11/§12): a single acquired-from
-    /// module, `(unmoduled)` for the base. Empty for a plain
+    /// module, `(unmoduled)` for the base. `None` for a plain
     /// (retained/brand-new) section and for every ordinary migration section.
-    /// Provenance-cut guarantees at most one entry.
-    pub remaps: Vec<String>,
+    /// Provenance-cut guarantees at most one source (§12).
+    pub remaps: Option<String>,
     /// Reviewer-facing SQL comment rendered above the section header
     /// (acquisition sections only, §11): states the audience — runs only on
     /// targets without the source.
@@ -106,7 +106,7 @@ pub(crate) fn provenance_cut_baseline_sections(
         .map(|run| StepSection {
             name: String::new(),
             module: run.module,
-            remaps: run.remap.into_iter().collect(),
+            remaps: run.remap,
             comment: None,
             steps: run.steps,
         })
@@ -225,7 +225,7 @@ pub fn sectionize_steps(
             _ => sections.push(StepSection {
                 name: String::new(),
                 module: node.module,
-                remaps: Vec::new(),
+                remaps: None,
                 comment: None,
                 steps: vec![node.step],
             }),
@@ -248,8 +248,8 @@ pub fn render_sectioned_migration(sections: &[StepSection]) -> String {
         if let Some(module) = &section.module {
             header.push_str(&format!(" module=\"{}\"", module));
         }
-        if !section.remaps.is_empty() {
-            header.push_str(&format!(" remaps=\"{}\"", section.remaps.join(",")));
+        if let Some(source) = &section.remaps {
+            header.push_str(&format!(" remaps=\"{}\"", source));
         }
         if let Some(comment) = &section.comment {
             header = format!("{}\n{}", comment, header);
@@ -334,7 +334,7 @@ pub fn evaluate_module_generation(
 /// `remaps` recording prior ownership wherever it changed — the re-anchor
 /// record establishment derivation reads. Baselines are pure creates, so only
 /// the desired-state attribution matters for sectioning.
-pub fn write_sectioned_baseline(
+pub(crate) fn write_sectioned_baseline(
     path: &std::path::Path,
     steps: &[crate::diff::operations::MigrationStep],
     new_catalog: &Catalog,
@@ -374,11 +374,11 @@ pub(crate) fn acquisition_sections(provenance_cut_sections: &[StepSection]) -> V
         .iter()
         .filter(|s| {
             s.remaps
-                .first()
+                .as_deref()
                 .is_some_and(|source| source != UNMODULED_DISPLAY)
         })
         .map(|s| {
-            let source = s.remaps.first().expect("filtered on non-empty remaps");
+            let source = s.remaps.as_ref().expect("filtered on non-empty remaps");
             StepSection {
                 name: String::new(), // re-derived when merged into the migration
                 module: s.module.clone(),
@@ -447,7 +447,7 @@ fn acquisition_sections_from_starting_catalog(
 /// Section names are re-derived across the combined list so acquisition
 /// sections continue the §8 numbering.
 #[allow(clippy::too_many_arguments)]
-pub fn render_migration_with_acquisitions(
+pub(crate) fn render_migration_with_acquisitions(
     migration_steps: &[crate::diff::operations::MigrationStep],
     re_anchored: bool,
     old_catalog: &Catalog,
@@ -489,6 +489,65 @@ pub fn render_migration_with_acquisitions(
     Ok(Some(render_sectioned_migration(&sections)))
 }
 
+/// Rewrite a freshly created baseline into provenance-cut per-module sections
+/// when the project is moduled (a no-op otherwise). The shared tail of the
+/// `create_baseline(...)` capture in `migrate new` / `migrate update`: the
+/// baseline renders the desired post-V state; the migration's acquisition
+/// sections render from the STARTING catalog instead (§12), so nothing here
+/// feeds the migration.
+pub fn section_baseline_if_moduled(
+    module_gen: Option<&ModuleGeneration>,
+    baseline_path: &std::path::Path,
+    baseline_steps: &[crate::diff::operations::MigrationStep],
+    new_catalog: &Catalog,
+    file_mapping: &FileToObjectMapping,
+    historical: &HistoricalAttribution,
+) -> Result<()> {
+    if let Some(module_gen) = module_gen {
+        write_sectioned_baseline(
+            baseline_path,
+            baseline_steps,
+            new_catalog,
+            &module_gen.partition,
+            file_mapping,
+            historical,
+        )?;
+    }
+    Ok(())
+}
+
+/// The shared "what SQL does this migration file get" decision for `migrate
+/// new` / `migrate update`. A module project renders ordinary diff sections
+/// plus, at a re-anchor, the acquisition sections (§11/§12); a non-module
+/// project uses the plain diff SQL. `None` means nothing to write (no changes
+/// and — for modules — no module-sourced moves: a pure base-sourced re-tag
+/// stays baseline-only). The two `migrate update` sites that need a String map
+/// `None` to their "-- No changes detected" placeholder.
+#[allow(clippy::too_many_arguments)]
+pub fn render_generated_migration(
+    module_gen: Option<&ModuleGeneration>,
+    migration_steps: &[crate::diff::operations::MigrationStep],
+    has_changes: bool,
+    plain_migration_sql: &str,
+    old_catalog: &Catalog,
+    new_catalog: &Catalog,
+    file_mapping: &FileToObjectMapping,
+    historical: &HistoricalAttribution,
+) -> Result<Option<String>> {
+    match module_gen {
+        Some(module_gen) => render_migration_with_acquisitions(
+            if has_changes { migration_steps } else { &[] },
+            module_gen.diverged,
+            old_catalog,
+            new_catalog,
+            &module_gen.partition,
+            file_mapping,
+            historical,
+        ),
+        None => Ok(has_changes.then(|| plain_migration_sql.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,7 +562,7 @@ mod tests {
         StepSection {
             name: module.unwrap_or("default").to_string(),
             module: module.map(str::to_string),
-            remaps: Vec::new(),
+            remaps: None,
             comment: None,
             steps: objects
                 .iter()
@@ -530,7 +589,7 @@ mod tests {
     }
 
     /// Assert a section's `(name, module, remaps)` shape compactly.
-    fn shape(section: &StepSection) -> (String, Option<String>, Vec<String>) {
+    fn shape(section: &StepSection) -> (String, Option<String>, Option<String>) {
         (
             section.name.clone(),
             section.module.clone(),
@@ -551,7 +610,7 @@ mod tests {
             (
                 "b".to_string(),
                 Some("b".to_string()),
-                vec!["a".to_string()]
+                Some("a".to_string())
             )
         );
     }
@@ -572,14 +631,14 @@ mod tests {
         );
         assert_eq!(
             shape(&out[0]),
-            ("b".to_string(), Some("b".to_string()), Vec::<String>::new())
+            ("b".to_string(), Some("b".to_string()), None)
         );
         assert_eq!(
             shape(&out[1]),
             (
                 "b_2".to_string(),
                 Some("b".to_string()),
-                vec!["a".to_string()]
+                Some("a".to_string())
             )
         );
     }
@@ -593,7 +652,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(
             shape(&out[0]),
-            ("b".to_string(), Some("b".to_string()), Vec::<String>::new())
+            ("b".to_string(), Some("b".to_string()), None)
         );
     }
 
@@ -605,7 +664,7 @@ mod tests {
         let hist = historical(&[("kept", Some("b"))]); // "fresh" has no history
         let out = provenance_cut_baseline_sections(sections, &hist);
         assert_eq!(out.len(), 1);
-        assert!(out[0].remaps.is_empty(), "{:?}", out[0].remaps);
+        assert!(out[0].remaps.is_none(), "{:?}", out[0].remaps);
     }
 
     #[test]
@@ -618,7 +677,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(
             shape(&out[0]),
-            ("default".to_string(), None, vec!["a".to_string()])
+            ("default".to_string(), None, Some("a".to_string()))
         );
     }
 
@@ -635,7 +694,7 @@ mod tests {
             (
                 "app".to_string(),
                 Some("app".to_string()),
-                vec![UNMODULED_DISPLAY.to_string()]
+                Some(UNMODULED_DISPLAY.to_string())
             )
         );
     }
@@ -658,7 +717,7 @@ mod tests {
             (
                 "c".to_string(),
                 Some("c".to_string()),
-                vec!["a".to_string()]
+                Some("a".to_string())
             )
         );
         assert_eq!(
@@ -666,7 +725,7 @@ mod tests {
             (
                 "c_2".to_string(),
                 Some("c".to_string()),
-                vec!["b".to_string()]
+                Some("b".to_string())
             )
         );
     }

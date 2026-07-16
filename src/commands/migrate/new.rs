@@ -7,8 +7,8 @@ use crate::migration::{
     validate_baseline_against_catalog,
 };
 use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, render_migration_with_acquisitions,
-    write_sectioned_baseline,
+    HistoricalAttribution, evaluate_module_generation, render_generated_migration,
+    section_baseline_if_moduled,
 };
 use crate::prompts::prompt_required_string_with_validation;
 use anyhow::Result;
@@ -155,21 +155,15 @@ pub async fn cmd_migrate_new(
         .await?;
 
         // Module projects rewrite the baseline into provenance-cut per-module
-        // sections, with `remaps` recording prior ownership wherever it
-        // changed — the re-anchor record crossings consume. (The baseline
-        // renders the desired post-V state; the migration's acquisition
-        // sections render the moved objects from the STARTING catalog instead
-        // — §12 — so nothing here feeds the migration.)
-        if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
-                &result.path,
-                &result.steps,
-                &new_catalog,
-                &module_gen.partition,
-                &file_mapping,
-                &historical,
-            )?;
-        }
+        // sections, with `remaps` recording prior ownership wherever it changed.
+        section_baseline_if_moduled(
+            module_gen.as_ref(),
+            &result.path,
+            &result.steps,
+            &new_catalog,
+            &file_mapping,
+            &historical,
+        )?;
         println!("Created baseline: {}", result.path.display());
 
         if baseline_config.validate_consistency {
@@ -192,24 +186,16 @@ pub async fn cmd_migrate_new(
     // The migration: ordinary diff sections plus, at a re-anchor, the
     // acquisition sections for module-sourced moves (§11/§12 — base-sourced
     // moves are satisfied everywhere by construction and stay baseline-only).
-    let migration_sql: Option<String> = match &module_gen {
-        Some(module_gen) => render_migration_with_acquisitions(
-            if migration_result.has_changes {
-                &migration_result.steps
-            } else {
-                &[]
-            },
-            module_gen.diverged,
-            &old_catalog,
-            &new_catalog,
-            &module_gen.partition,
-            &file_mapping,
-            &historical,
-        )?,
-        None => migration_result
-            .has_changes
-            .then(|| migration_result.migration_sql.clone()),
-    };
+    let migration_sql: Option<String> = render_generated_migration(
+        module_gen.as_ref(),
+        &migration_result.steps,
+        migration_result.has_changes,
+        &migration_result.migration_sql,
+        &old_catalog,
+        &new_catalog,
+        &file_mapping,
+        &historical,
+    )?;
     match migration_sql {
         Some(sql) => {
             let migration_path = migrations_dir.join(&migration_result.migration_filename);

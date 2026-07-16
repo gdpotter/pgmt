@@ -46,9 +46,10 @@ pub struct ModuleRuntime {
     watermark: Option<u64>,
     /// All committed re-anchors, version-ascending.
     re_anchors: Vec<ReAnchor>,
-    /// Every committed baseline's sections, by version — the adoption-routing
-    /// input (see [`Self::adoption_baseline`]).
-    baselines: BTreeMap<u64, Vec<crate::migration::section_parser::MigrationSection>>,
+    /// The latest committed baseline's `(version, sections)` — the only
+    /// adoption-routing input any consumer reads (see [`Self::adoption_baseline`],
+    /// which returns the max-version baseline). `None` when no baseline exists.
+    latest_baseline: Option<(u64, Vec<crate::migration::section_parser::MigrationSection>)>,
 }
 
 impl ModuleRuntime {
@@ -77,18 +78,25 @@ impl ModuleRuntime {
         };
 
         let re_anchors = discover_re_anchors(baselines_dir)?;
-        let mut baselines = BTreeMap::new();
-        for baseline in crate::migration::discover_baselines(baselines_dir)? {
-            let sql = std::fs::read_to_string(&baseline.path)?;
-            let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
-            baselines.insert(baseline.version, sections);
-        }
+        // Only the latest baseline is ever consumed (adoption routing), so parse
+        // just that one — discover_baselines is version-sorted.
+        let latest_baseline = match crate::migration::discover_baselines(baselines_dir)?
+            .into_iter()
+            .next_back()
+        {
+            Some(baseline) => {
+                let sql = std::fs::read_to_string(&baseline.path)?;
+                let sections = crate::migration::parse_migration_sections(&baseline.path, &sql)?;
+                Some((baseline.version, sections))
+            }
+            None => None,
+        };
 
         Ok(Self {
             established: stored.modules,
             watermark,
             re_anchors,
-            baselines,
+            latest_baseline,
         })
     }
 
@@ -106,9 +114,8 @@ impl ModuleRuntime {
     pub fn adoption_baseline(
         &self,
     ) -> Option<(u64, &[crate::migration::section_parser::MigrationSection])> {
-        self.baselines
-            .iter()
-            .next_back()
+        self.latest_baseline
+            .as_ref()
             .map(|(version, sections)| (*version, sections.as_slice()))
     }
 
@@ -244,8 +251,8 @@ impl ModuleRuntime {
                      run here.\n\
                      Nothing at or after version {version} was applied (the strong \
                      membrane).\n\
-                     This artifact predates migration-borne acquisition (modules.md §12): \
-                     regenerate the re-anchor with a current pgmt \
+                     The re-anchor at {version} predates migration-borne acquisition, or its \
+                     paired migration is missing. Regenerate the re-anchor with a current pgmt \
                      (pgmt migrate new <description> --create-baseline).",
                     sections = unsatisfiable.iter().cloned().collect::<Vec<_>>().join(", "),
                 );

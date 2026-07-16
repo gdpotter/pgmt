@@ -274,7 +274,7 @@ struct MigrateResolveArgs {
     target: config::TargetUrlArgs,
 }
 
-/// The three mutually exclusive resolve verbs; clap requires exactly one.
+/// The mutually exclusive resolve verbs; clap requires exactly one.
 #[derive(clap::Args)]
 #[group(required = true, multiple = false)]
 struct MigrateResolveVerbArgs {
@@ -282,11 +282,6 @@ struct MigrateResolveVerbArgs {
     /// manual hot-fix landed its effects). Format: <version>/<section>
     #[arg(long, value_name = "VERSION/SECTION")]
     mark_completed: Option<String>,
-
-    /// Reset a failed/running section back to pending so the next apply re-runs
-    /// it. Format: <version>/<section>
-    #[arg(long, value_name = "VERSION/SECTION")]
-    reset: Option<String>,
 
     /// Re-stamp stored checksum(s) for completed section(s) after a conscious
     /// edit of an applied migration. Format: <version>[/<section>]
@@ -640,8 +635,6 @@ async fn run_main(cli: Cli) -> Result<()> {
                         // clap guarantees exactly one verb is set.
                         let verb = if let Some(coord) = &args.verb.mark_completed {
                             commands::ResolveVerb::MarkCompleted(coord.clone())
-                        } else if let Some(coord) = &args.verb.reset {
-                            commands::ResolveVerb::Reset(coord.clone())
                         } else if let Some(coord) = &args.verb.restamp {
                             commands::ResolveVerb::Restamp(coord.clone())
                         } else {

@@ -383,7 +383,9 @@ pub async fn validate_and_sync_section_checksums(
                     "section '{name}' of {kind} {version} was modified after it was applied.\n\
                      Expected checksum: {stored_checksum}\n\
                      Actual checksum:   {checksum}\n\n\
-                     Applied sections are immutable. Create a new migration for further changes."
+                     Applied sections are immutable. Create a new migration for further changes. \
+                     If the edit was conscious and its effects already match the database, \
+                     re-stamp the stored checksum: pgmt migrate resolve --restamp {version}/{name}."
                 );
             }
             if stored_order != *order {

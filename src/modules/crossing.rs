@@ -16,7 +16,7 @@ pub fn remap_source_held(
     section: &crate::migration::section_parser::MigrationSection,
     established: &BTreeSet<String>,
 ) -> bool {
-    match section.remaps.first() {
+    match section.remaps.as_deref() {
         None => false,
         Some(source) if source == UNMODULED_DISPLAY => true,
         Some(source) => established.contains(source),
@@ -76,7 +76,7 @@ pub(crate) fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec
         let remap_sections: Vec<RemapSection> = sections
             .iter()
             .filter_map(|s| {
-                s.remaps.first().map(|source| RemapSection {
+                s.remaps.as_deref().map(|source| RemapSection {
                     name: s.name.clone(),
                     module: s.module.clone(),
                     source: to_module(source),
@@ -88,7 +88,7 @@ pub(crate) fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec
         }
         let plain_modules = sections
             .iter()
-            .filter(|s| s.remaps.is_empty())
+            .filter(|s| s.remaps.is_none())
             .filter_map(|s| s.module.clone())
             .collect();
         let surviving_modules = sections.iter().filter_map(|s| s.module.clone()).collect();

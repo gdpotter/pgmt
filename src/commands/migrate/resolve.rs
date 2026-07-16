@@ -10,10 +10,10 @@
 //! - `--mark-completed <version>/<section>`: a DBA manually hot-fixed the
 //!   database and a pending/failed/running section should be recorded as done
 //!   without executing it again.
-//! - `--reset <version>/<section>`: a failed/running section should go back to
-//!   pending so the next apply re-runs it (e.g. a transient failure).
 //! - `--restamp <version>[/<section>]`: a consciously edited COMPLETED section
 //!   needs its stored checksum re-stamped to the current file content.
+//!
+//! (A failed or stale section needs no verb: the next `apply` re-runs it.)
 //!
 //! Every mutation runs under the same advisory lock `apply`/`provision` take,
 //! so resolve can't race a concurrent deploy.
@@ -35,8 +35,6 @@ use std::path::Path;
 pub enum ResolveVerb {
     /// `<version>/<section>` — mark the section completed without running it.
     MarkCompleted(String),
-    /// `<version>/<section>` — reset a failed/running section back to pending.
-    Reset(String),
     /// `<version>[/<section>]` — re-stamp completed section checksum(s).
     Restamp(String),
 }
@@ -77,10 +75,6 @@ async fn resolve_inner(
         ResolveVerb::MarkCompleted(coord) => {
             let (version, section) = parse_coord_required_section(&coord)?;
             mark_completed(config, root_dir, pool, version, &section, is_baseline).await
-        }
-        ResolveVerb::Reset(coord) => {
-            let (version, section) = parse_coord_required_section(&coord)?;
-            reset(config, pool, version, &section, is_baseline).await
         }
         ResolveVerb::Restamp(coord) => {
             let (version, section) = parse_coord_optional_section(&coord)?;
@@ -195,71 +189,6 @@ async fn mark_completed(
 }
 
 // ---------------------------------------------------------------------------
-// --reset
-// ---------------------------------------------------------------------------
-
-async fn reset(
-    config: &Config,
-    pool: &PgPool,
-    version: u64,
-    section: &str,
-    is_baseline: bool,
-) -> Result<()> {
-    let sections_table = format_sections_table_name(&config.migration.tracking_table);
-
-    let status = fetch_section_status(pool, &sections_table, version, section, is_baseline)
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "no section row exists for {} {}/{}",
-                kind(is_baseline),
-                version,
-                section
-            )
-        })?;
-
-    let parsed = status.parse::<SectionStatus>()?;
-    if parsed.is_covered() {
-        bail!(
-            "section {}/{} is {}; if its effects were manually rolled back, create a new \
-             migration instead (`resolve` does not un-complete covered sections)",
-            version,
-            section,
-            status
-        );
-    }
-    if parsed == SectionStatus::Pending {
-        bail!(
-            "section {}/{} is already pending; nothing to reset (the next apply will run it)",
-            version,
-            section
-        );
-    }
-
-    sqlx::query(&format!(
-        "UPDATE {} SET status = 'pending', last_error = NULL \
-         WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
-        sections_table
-    ))
-    .bind(version_to_db(version)?)
-    .bind(is_baseline)
-    .bind(section)
-    .execute(pool)
-    .await?;
-
-    println!(
-        "Reset {} section {}/{}:",
-        kind(is_baseline),
-        version,
-        section
-    );
-    println!("  status: {status} -> pending");
-    println!("  last_error cleared; the next apply will re-run this section");
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // --restamp
 // ---------------------------------------------------------------------------
 
@@ -318,7 +247,7 @@ async fn restamp(
                 bail!(
                     "section {}/{} is {} (not covered); --restamp only re-stamps covered \
                      (completed/satisfied) sections. To re-run an unapplied section, fix it in \
-                     the repo and apply, or use --reset.",
+                     the repo and apply (the next apply re-runs failed/stale sections).",
                     version,
                     name,
                     row.1

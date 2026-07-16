@@ -301,7 +301,7 @@ async fn replay_migrations(
         // nothing) and replay through `apply_baseline_file_sections`.
         let sections: Vec<MigrationSection> = sections
             .into_iter()
-            .filter(|s| s.remaps.is_empty())
+            .filter(|s| s.remaps.is_none())
             .collect();
 
         execute_validation_sections(shadow_pool, &sections, config, attribution.as_deref_mut())

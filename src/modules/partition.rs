@@ -194,8 +194,8 @@ impl HistoricalAttribution {
     }
 }
 
-/// Ways the current partition diverges from the partition history implies.
-/// Any divergence makes module history non-replayable and demands a
+/// Ways the current partition diverges from the partition that history
+/// implies. Any divergence makes module history non-replayable and demands a
 /// re-anchoring baseline (`--create-baseline`).
 #[derive(Debug, Default)]
 pub(crate) struct PartitionDivergence {

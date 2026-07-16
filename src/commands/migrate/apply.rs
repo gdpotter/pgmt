@@ -87,7 +87,7 @@ async fn apply_with_module_guard(
     let incomplete = store.incomplete_baseline_sections().await?;
     if !incomplete.is_empty() {
         // Any incomplete BASE section → the watermark itself is untrustworthy;
-        // refuse all applies with the original, version-scoped guidance.
+        // refuse all applies, naming the version to finish.
         let base_incomplete_version = incomplete
             .iter()
             .filter(|(_, _, module)| module.is_none())
@@ -375,16 +375,14 @@ pub(crate) async fn apply_pending_migrations(
         // a remap section is satisfiable when it WILL run in this apply.
         let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
             .iter()
-            .filter(|s| !s.remaps.is_empty())
-            .map(|s| {
-                let source = s.remaps.first().and_then(|r| {
-                    if r == crate::modules::UNMODULED_DISPLAY {
-                        None
-                    } else {
-                        Some(r.clone())
-                    }
-                });
-                (s.module.clone(), source)
+            .filter_map(|s| {
+                let remap = s.remaps.as_deref()?;
+                let source = if remap == crate::modules::UNMODULED_DISPLAY {
+                    None
+                } else {
+                    Some(remap.to_string())
+                };
+                Some((s.module.clone(), source))
             })
             .collect();
         let mut pending_crossing = runtime
@@ -427,7 +425,7 @@ pub(crate) async fn apply_pending_migrations(
         // independent of the requested set (declining would leave the
         // crossing's module partial).
         let section_selected = |s: &crate::migration::section_parser::MigrationSection| {
-            if s.remaps.is_empty() {
+            if s.remaps.is_none() {
                 selection.selects(s.module.as_deref())
             } else {
                 match s.module.as_deref() {
@@ -457,7 +455,7 @@ pub(crate) async fn apply_pending_migrations(
         // crossing relabels them. Partition the selected sections accordingly:
         // `to_run` executes; `to_satisfy` records rows without DDL.
         let satisfied_by_source = |s: &crate::migration::section_parser::MigrationSection| {
-            !s.remaps.is_empty() && crate::modules::remap_source_held(s, runtime.established())
+            s.remaps.is_some() && crate::modules::remap_source_held(s, runtime.established())
         };
         let to_run: Vec<&crate::migration::section_parser::MigrationSection> = selected
             .iter()
@@ -652,7 +650,7 @@ pub(crate) async fn apply_pending_migrations(
                      recorded satisfied (objects already present; nothing to run)",
                     section.name,
                     migration.version,
-                    section.remaps.first().map(String::as_str).unwrap_or("?"),
+                    section.remaps.as_deref().unwrap_or("?"),
                 );
             }
         }
@@ -660,7 +658,7 @@ pub(crate) async fn apply_pending_migrations(
         let start = Instant::now();
 
         // Create section executor
-        let reporter = SectionReporter::new(to_run.len(), false); // TODO: Add verbose flag to config
+        let reporter = SectionReporter::new(to_run.len(), false);
         let mut executor = SectionExecutor::new(
             pool.clone(),
             config.migration.tracking_table.clone(),

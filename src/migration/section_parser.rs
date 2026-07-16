@@ -37,10 +37,12 @@ pub struct MigrationSection {
     /// what every pre-modules migration parses as.
     pub module: Option<String>,
 
-    /// Prior owners of this section's objects (re-anchoring baselines only):
-    /// module names, or "(unmoduled)" for the base. Establishment derivation
-    /// reads these; ordinary migrations never carry them.
-    pub remaps: Vec<String>,
+    /// Prior owner of this section's objects (re-anchoring baselines and their
+    /// paired acquisition migration sections only): a module name, or
+    /// "(unmoduled)" for the base. `None` for plain and ordinary sections.
+    /// Provenance-cut guarantees at most one source (§12), so this is a single
+    /// value, not a list. Establishment derivation reads it.
+    pub remaps: Option<String>,
 
     /// Line number where this section starts (for error reporting)
     pub start_line: usize,
@@ -193,7 +195,7 @@ pub fn parse_migration_sections(_file_path: &Path, sql: &str) -> Result<Vec<Migr
             sql: sql.to_string(),
             raw_header: String::new(),
             module: None,
-            remaps: Vec::new(),
+            remaps: None,
             start_line: 1,
         });
     }
@@ -239,7 +241,7 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
                         value
                     ));
                 }
-                builder.remaps = Some(sources);
+                builder.remaps = sources.into_iter().next();
             }
             _ => {
                 return Err(anyhow!(
@@ -404,7 +406,7 @@ struct SectionBuilder {
     retry_backoff: Option<BackoffStrategy>,
     on_lock_timeout: Option<LockTimeoutAction>,
     module: Option<String>,
-    remaps: Option<Vec<String>>,
+    remaps: Option<String>,
 }
 
 impl SectionBuilder {
@@ -458,7 +460,7 @@ impl SectionBuilder {
             name,
             description: self.description,
             module: self.module,
-            remaps: self.remaps.unwrap_or_default(),
+            remaps: self.remaps,
             mode,
             timeout,
             lock_timeout: self.lock_timeout,
@@ -776,9 +778,9 @@ CREATE TABLE x (id SERIAL PRIMARY KEY);
         let sections = parse_migration_sections(Path::new("100_move.sql"), sql).unwrap();
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].module.as_deref(), Some("b"));
-        assert_eq!(sections[0].remaps, vec!["a".to_string()]);
+        assert_eq!(sections[0].remaps.as_deref(), Some("a"));
         assert_eq!(sections[1].module, None);
-        assert_eq!(sections[1].remaps, vec!["a".to_string()]);
+        assert_eq!(sections[1].remaps.as_deref(), Some("a"));
     }
 
     /// The comma-list remaps form is retired (§12): a provenance-cut remap

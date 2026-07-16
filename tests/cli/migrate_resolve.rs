@@ -1,10 +1,10 @@
 //! `migrate resolve` — explicit break-glass repair of section tracking state.
 //!
 //! resolve is the escape hatch fix-in-repo can't reach: a manual hot-fix that
-//! should be recorded (`--mark-completed`), a failed/running section to re-arm
-//! (`--reset`), or a consciously edited applied section to re-stamp
-//! (`--restamp`). Each verb touches exactly one coordinate and prints the
-//! before/after state.
+//! should be recorded (`--mark-completed`), or a consciously edited applied
+//! section to re-stamp (`--restamp`). Each verb touches exactly one coordinate
+//! and prints the before/after state. (A failed/stale section needs no verb —
+//! the next apply re-runs it.)
 
 use crate::helpers::cli::with_cli_helper;
 use anyhow::Result;
@@ -116,84 +116,6 @@ async fn test_mark_completed_flow() -> Result<()> {
     .await
 }
 
-const TWO_SECTION_FAILING: &str = r#"-- pgmt:section name="one"
-CREATE TABLE rst_one (id INT);
-
--- pgmt:section name="two"
-CREATE TABLE rst_two (id INT);
-SELECT this_is_not_valid_sql;
-"#;
-const TWO_SECTION_FILENAME: &str = "1000000200_resolve_reset.sql";
-const TWO_SECTION_VERSION: i64 = 1000000200;
-
-/// A failed section is reset back to pending (last_error cleared); after fixing
-/// it in the repo, the next apply re-runs it to completion.
-#[tokio::test]
-async fn test_reset_flow() -> Result<()> {
-    with_cli_helper(async |helper| {
-        helper.init_project()?;
-        helper.write_migration_file(TWO_SECTION_FILENAME, TWO_SECTION_FAILING)?;
-
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .failure();
-
-        let (status, last_error) = helper
-            .section_row_in_dev(TWO_SECTION_VERSION, "two")
-            .await?
-            .expect("section two row exists");
-        assert_eq!(status, "failed");
-        assert!(last_error.is_some(), "failure recorded an error");
-
-        // Reset section two → pending, error cleared.
-        helper
-            .command()
-            .args([
-                "migrate",
-                "resolve",
-                "--reset",
-                &format!("{TWO_SECTION_VERSION}/two"),
-                "--target-url",
-                &helper.dev_database_url,
-            ])
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("failed -> pending"));
-
-        let (status, last_error) = helper
-            .section_row_in_dev(TWO_SECTION_VERSION, "two")
-            .await?
-            .expect("section two row exists");
-        assert_eq!(status, "pending", "reset put section two back to pending");
-        assert!(last_error.is_none(), "reset cleared last_error");
-
-        // Fix the section in the repo and re-apply: it re-runs to completion.
-        let fixed = r#"-- pgmt:section name="one"
-CREATE TABLE rst_one (id INT);
-
--- pgmt:section name="two"
-CREATE TABLE rst_two (id INT);
-"#;
-        helper.write_migration_file(TWO_SECTION_FILENAME, fixed)?;
-
-        helper
-            .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
-            .assert()
-            .success();
-
-        assert!(
-            helper.table_exists_in_dev("public", "rst_two").await?,
-            "reset section re-ran on the next apply"
-        );
-
-        Ok(())
-    })
-    .await
-}
-
 const RESTAMP_ORIGINAL: &str = r#"-- pgmt:section name="one"
 CREATE TABLE rsp_one (id INT);
 
@@ -280,8 +202,8 @@ CREATE TABLE rsp_two (id INT);
     .await
 }
 
-/// Every refusal path: already-completed mark, un-completing reset, nonexistent
-/// coordinate, missing section part, and two verbs at once (clap-level).
+/// Every refusal path: already-completed mark, nonexistent coordinate, missing
+/// section part, and two verbs at once (clap-level).
 #[tokio::test]
 async fn test_resolve_refusals() -> Result<()> {
     with_cli_helper(async |helper| {
@@ -318,21 +240,6 @@ CREATE TABLE ref_beta (id INT);
             .failure()
             .stderr(predicate::str::contains("already completed"));
 
-        // reset on a completed section is refused with create-a-new-migration.
-        helper
-            .command()
-            .args([
-                "migrate",
-                "resolve",
-                "--reset",
-                "1000000400/alpha",
-                "--target-url",
-                &helper.dev_database_url,
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("create a new migration instead"));
-
         // Nonexistent version/section is refused (no row → no creation).
         helper
             .command()
@@ -363,21 +270,6 @@ CREATE TABLE ref_beta (id INT);
             .failure()
             .stderr(predicate::str::contains("section name is required"));
 
-        // Missing section part on reset is refused.
-        helper
-            .command()
-            .args([
-                "migrate",
-                "resolve",
-                "--reset",
-                "1000000400",
-                "--target-url",
-                &helper.dev_database_url,
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("section name is required"));
-
         // Two verbs at once is refused at the clap level.
         helper
             .command()
@@ -386,7 +278,7 @@ CREATE TABLE ref_beta (id INT);
                 "resolve",
                 "--mark-completed",
                 "1000000400/alpha",
-                "--reset",
+                "--restamp",
                 "1000000400/beta",
                 "--target-url",
                 &helper.dev_database_url,

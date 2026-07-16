@@ -8,8 +8,8 @@ use crate::migration::{
     validate_baseline_against_catalog,
 };
 use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, render_migration_with_acquisitions,
-    write_sectioned_baseline,
+    HistoricalAttribution, evaluate_module_generation, render_generated_migration,
+    section_baseline_if_moduled,
 };
 use anyhow::{Result, anyhow};
 use std::path::Path;
@@ -146,16 +146,14 @@ pub async fn cmd_migrate_update_with_options(
             verbose: baseline_config.verbose,
         })
         .await?;
-        if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
-                &result.path,
-                &result.steps,
-                &new_catalog,
-                &module_gen.partition,
-                &file_mapping,
-                &historical,
-            )?;
-        }
+        section_baseline_if_moduled(
+            module_gen.as_ref(),
+            &result.path,
+            &result.steps,
+            &new_catalog,
+            &file_mapping,
+            &historical,
+        )?;
         println!("Updated baseline: {}", result.path.display());
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
@@ -180,23 +178,17 @@ pub async fn cmd_migrate_update_with_options(
 
     // Step 4 (after 5 by design): update the migration file — ordinary diff
     // sections plus, at a re-anchor, the acquisition sections (§11/§12).
-    let migration_sql: String = match &module_gen {
-        Some(module_gen) => render_migration_with_acquisitions(
-            if migration_result.has_changes {
-                &migration_result.steps
-            } else {
-                &[]
-            },
-            module_gen.diverged,
-            &old_catalog,
-            &new_catalog,
-            &module_gen.partition,
-            &file_mapping,
-            &historical,
-        )?
-        .unwrap_or_else(|| "-- No changes detected\n".to_string()),
-        None => migration_result.migration_sql.clone(),
-    };
+    let migration_sql: String = render_generated_migration(
+        module_gen.as_ref(),
+        &migration_result.steps,
+        migration_result.has_changes,
+        &migration_result.migration_sql,
+        &old_catalog,
+        &new_catalog,
+        &file_mapping,
+        &historical,
+    )?
+    .unwrap_or_else(|| "-- No changes detected\n".to_string());
     std::fs::write(&latest_migration.path, &migration_sql)?;
     println!("Updated migration: {}", latest_migration.path.display());
 
@@ -417,16 +409,14 @@ pub async fn cmd_migrate_update_specific(
             verbose: baseline_config.verbose,
         })
         .await?;
-        if let Some(module_gen) = &module_gen {
-            write_sectioned_baseline(
-                &result.path,
-                &result.steps,
-                &new_catalog,
-                &module_gen.partition,
-                &file_mapping,
-                &historical,
-            )?;
-        }
+        section_baseline_if_moduled(
+            module_gen.as_ref(),
+            &result.path,
+            &result.steps,
+            &new_catalog,
+            &file_mapping,
+            &historical,
+        )?;
         if is_latest {
             println!("Updated baseline: {}", result.path.display());
         } else {
@@ -457,24 +447,16 @@ pub async fn cmd_migrate_update_specific(
     // The migration content: ordinary diff sections plus, at a re-anchor, the
     // acquisition sections (§11/§12). `None` = nothing to write (the
     // no-changes handling above already produced the file).
-    let migration_sql: Option<String> = match &module_gen {
-        Some(module_gen) => render_migration_with_acquisitions(
-            if migration_result.has_changes {
-                &migration_result.steps
-            } else {
-                &[]
-            },
-            module_gen.diverged,
-            &old_catalog,
-            &new_catalog,
-            &module_gen.partition,
-            &file_mapping,
-            &historical,
-        )?,
-        None => migration_result
-            .has_changes
-            .then(|| migration_result.migration_sql.clone()),
-    };
+    let migration_sql: Option<String> = render_generated_migration(
+        module_gen.as_ref(),
+        &migration_result.steps,
+        migration_result.has_changes,
+        &migration_result.migration_sql,
+        &old_catalog,
+        &new_catalog,
+        &file_mapping,
+        &historical,
+    )?;
 
     // Write the migration file
     if let Some(migration_sql) = &migration_sql {

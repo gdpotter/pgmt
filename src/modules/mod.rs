@@ -28,8 +28,8 @@ pub use partition::{
 };
 pub use runtime::{ModuleRuntime, established_pending_through, parse_section_files};
 pub use sectioning::{
-    evaluate_module_generation, render_migration_with_acquisitions, render_sectioned_migration,
-    sectionize_steps, write_sectioned_baseline,
+    evaluate_module_generation, render_generated_migration, render_sectioned_migration,
+    section_baseline_if_moduled, sectionize_steps,
 };
 
 // Public API surface reachable through pub-fn signatures and the integration

@@ -311,7 +311,7 @@ pub async fn cmd_migrate_validate(
     let baseline_info = if let Some(latest_baseline) = find_latest_baseline(&baselines_dir)? {
         Some(BaselineInfo {
             version: latest_baseline.version,
-            object_count: 0, // TODO: Could extract this from baseline file analysis
+            object_count: 0,
             description: format!("baseline_V{}", latest_baseline.version),
         })
     } else {
