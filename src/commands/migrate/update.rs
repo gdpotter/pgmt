@@ -132,10 +132,10 @@ pub async fn cmd_migrate_update_with_options(
         return Ok(());
     }
 
-    // Step 5 runs before step 4 for module projects: at a re-anchor, the
-    // migration's acquisition sections (§11/§12) derive from the baseline's
-    // provenance cut, so the baseline must be sectioned first.
-    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
+    // Step 5 runs before step 4 for module projects so the baseline is
+    // sectioned first. The migration's acquisition sections (§12) render the
+    // moved objects from the STARTING catalog, not the baseline, so they do
+    // not consume the baseline's sections — but the ordering is still natural.
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -147,14 +147,14 @@ pub async fn cmd_migrate_update_with_options(
         })
         .await?;
         if let Some(module_gen) = &module_gen {
-            baseline_sections = Some(write_sectioned_baseline(
+            write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?);
+            )?;
         }
         println!("Updated baseline: {}", result.path.display());
 
@@ -187,7 +187,7 @@ pub async fn cmd_migrate_update_with_options(
             } else {
                 &[]
             },
-            baseline_sections.as_deref(),
+            module_gen.diverged,
             &old_catalog,
             &new_catalog,
             &module_gen.partition,
@@ -404,10 +404,9 @@ pub async fn cmd_migrate_update_specific(
         // Pure re-tag: fall through so the re-anchoring baseline regenerates.
     }
 
-    // Handle baseline updates FIRST for module projects: at a re-anchor the
-    // migration's acquisition sections (§11/§12) derive from the baseline's
-    // provenance cut.
-    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
+    // Handle baseline updates FIRST for module projects so the baseline is
+    // sectioned first. The migration's acquisition sections (§12) render the
+    // moved objects from the STARTING catalog rather than the baseline.
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
@@ -419,14 +418,14 @@ pub async fn cmd_migrate_update_specific(
         })
         .await?;
         if let Some(module_gen) = &module_gen {
-            baseline_sections = Some(write_sectioned_baseline(
+            write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?);
+            )?;
         }
         if is_latest {
             println!("Updated baseline: {}", result.path.display());
@@ -465,7 +464,7 @@ pub async fn cmd_migrate_update_specific(
             } else {
                 &[]
             },
-            baseline_sections.as_deref(),
+            module_gen.diverged,
             &old_catalog,
             &new_catalog,
             &module_gen.partition,

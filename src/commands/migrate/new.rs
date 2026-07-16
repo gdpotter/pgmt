@@ -140,7 +140,6 @@ pub async fn cmd_migrate_new(
     // default): when the partition re-anchors, migration V's acquisition
     // sections (§11/§12) derive from the baseline's provenance cut, so the
     // baseline's sections must exist before the migration is rendered.
-    let mut baseline_sections: Option<Vec<crate::modules::StepSection>> = None;
     if should_create_baseline {
         // Generate the baseline from the full desired catalog, not the migration
         // SQL — the migration is a delta against the prior state, so writing it
@@ -157,16 +156,19 @@ pub async fn cmd_migrate_new(
 
         // Module projects rewrite the baseline into provenance-cut per-module
         // sections, with `remaps` recording prior ownership wherever it
-        // changed — the re-anchor record crossings consume.
+        // changed — the re-anchor record crossings consume. (The baseline
+        // renders the desired post-V state; the migration's acquisition
+        // sections render the moved objects from the STARTING catalog instead
+        // — §12 — so nothing here feeds the migration.)
         if let Some(module_gen) = &module_gen {
-            baseline_sections = Some(write_sectioned_baseline(
+            write_sectioned_baseline(
                 &result.path,
                 &result.steps,
                 &new_catalog,
                 &module_gen.partition,
                 &file_mapping,
                 &historical,
-            )?);
+            )?;
         }
         println!("Created baseline: {}", result.path.display());
 
@@ -197,7 +199,7 @@ pub async fn cmd_migrate_new(
             } else {
                 &[]
             },
-            baseline_sections.as_deref(),
+            module_gen.diverged,
             &old_catalog,
             &new_catalog,
             &module_gen.partition,

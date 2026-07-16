@@ -1560,15 +1560,22 @@ pub fn write_sectioned_baseline(
     Ok(sections)
 }
 
-/// The acquisition sections migration V carries when ownership moves at
-/// re-anchor V (§11, §12): clones of the baseline's MODULE-sourced remap
-/// sections — the moved objects' CREATE DDL, destination-tagged (unmoduled
-/// for demotions), with the reviewer-facing audience comment. Base-sourced
-/// moves (`remaps="(unmoduled)"`, e.g. modularizing an existing project) are
-/// excluded: the base is established everywhere, so those sections are
-/// satisfied on every target by construction and stay baseline-only (§19c).
-pub fn acquisition_sections(baseline_sections: &[StepSection]) -> Vec<StepSection> {
-    baseline_sections
+/// Turn a set of provenance-cut remap sections into the acquisition sections
+/// migration V carries when ownership moves at re-anchor V (§11, §12): the
+/// MODULE-sourced remap sections — the moved objects' CREATE DDL,
+/// destination-tagged (unmoduled for demotions), with the reviewer-facing
+/// audience comment. Base-sourced moves (`remaps="(unmoduled)"`, e.g.
+/// modularizing an existing project) are excluded: the base is established
+/// everywhere, so those sections are satisfied on every target by construction
+/// and stay baseline-only (§19c).
+///
+/// The input sections are provenance-cut against the STARTING catalog (see
+/// [`acquisition_sections_from_starting_catalog`]) — never the desired-state
+/// baseline — so the acquisition renders each moved object at its V−1 state
+/// (§12 "Acquisition content & position"). Cloning the desired-state baseline
+/// would bake post-V changes into the delta and double-apply them.
+pub fn acquisition_sections(provenance_cut_sections: &[StepSection]) -> Vec<StepSection> {
+    provenance_cut_sections
         .iter()
         .filter(|s| {
             s.remaps
@@ -1602,23 +1609,59 @@ pub fn acquisition_sections(baseline_sections: &[StepSection]) -> Vec<StepSectio
         .collect()
 }
 
-/// Render migration V's SQL as its ordinary diff sections plus the
-/// acquisition sections derived from the same-version re-anchor baseline
-/// (§11/§12). Returns `None` when there is nothing to write at all — no DDL
-/// and no module-sourced moves (a pure base-sourced re-tag stays
-/// baseline-only). Section names are re-derived across the combined list so
-/// acquisition sections continue the §8 numbering.
+/// The MODULE-sourced acquisition sections for re-anchor V, rendered from the
+/// STARTING catalog (the diff's old side — objects at their V−1 state, §12
+/// "Acquisition content & position").
+///
+/// This reuses the exact machinery baseline generation uses — CREATE steps for
+/// a whole catalog via [`crate::diff::plan`] against `empty`, sectionized and
+/// provenance-cut — but aims it at `old_catalog` instead of the desired
+/// catalog. The provenance cut already isolates the moved objects into
+/// single-source remap sections; [`acquisition_sections`] then keeps the
+/// module-sourced ones and attaches the reviewer comment. A migration with no
+/// module-sourced moves yields an empty vec.
+fn acquisition_sections_from_starting_catalog(
+    old_catalog: &Catalog,
+    partition: &ModulePartition,
+    file_mapping: &FileToObjectMapping,
+    historical: &HistoricalAttribution,
+) -> Result<Vec<StepSection>> {
+    let empty = Catalog::empty();
+    let steps = crate::diff::plan(&empty, old_catalog)?;
+    let sections = sectionize_steps(
+        &steps,
+        &empty,
+        old_catalog,
+        partition,
+        file_mapping,
+        historical,
+    )?;
+    let sections = provenance_cut_baseline_sections(sections, historical);
+    Ok(acquisition_sections(&sections))
+}
+
+/// Render migration V's SQL as its acquisition sections (§12) followed by its
+/// ordinary diff sections. When `re_anchored`, ownership moved at V: the
+/// acquisition sections render the moved objects from the STARTING catalog
+/// (their V−1 state) and are **prepended** — they establish the delta's
+/// precondition before V's ordinary changes apply. Baseline remap sections are
+/// never cloned here (they render the desired post-V state, wrong for a delta).
+///
+/// Returns `None` when there is nothing to write at all — no DDL and no
+/// module-sourced moves (a pure base-sourced re-tag stays baseline-only).
+/// Section names are re-derived across the combined list so acquisition
+/// sections continue the §8 numbering.
 #[allow(clippy::too_many_arguments)]
 pub fn render_migration_with_acquisitions(
     migration_steps: &[crate::diff::operations::MigrationStep],
-    baseline_sections: Option<&[StepSection]>,
+    re_anchored: bool,
     old_catalog: &Catalog,
     new_catalog: &Catalog,
     partition: &ModulePartition,
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
 ) -> Result<Option<String>> {
-    let mut sections = if migration_steps.is_empty() {
+    let ordinary = if migration_steps.is_empty() {
         Vec::new()
     } else {
         sectionize_steps(
@@ -1630,7 +1673,20 @@ pub fn render_migration_with_acquisitions(
             historical,
         )?
     };
-    sections.extend(acquisition_sections(baseline_sections.unwrap_or(&[])));
+    // Acquisition sections establish the delta's precondition (the moved
+    // objects at V−1), so they lead the file — prepended before the ordinary
+    // sections (§12). Only a re-anchor moves ownership.
+    let mut sections = if re_anchored {
+        acquisition_sections_from_starting_catalog(
+            old_catalog,
+            partition,
+            file_mapping,
+            historical,
+        )?
+    } else {
+        Vec::new()
+    };
+    sections.extend(ordinary);
     if sections.is_empty() {
         return Ok(None);
     }

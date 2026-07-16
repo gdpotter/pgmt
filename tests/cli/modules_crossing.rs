@@ -1196,3 +1196,195 @@ async fn test_fresh_provision_from_re_anchor_runs_all_sections() -> Result<()> {
     })
     .await
 }
+
+/// Load a target's MANAGED catalog through pgmt's own machinery (the same
+/// path every diff/render uses): resolve the project config, build the managed
+/// filter, and `load_managed`. This is the oracle for the convergence law.
+async fn managed_catalog(
+    url: &str,
+    project_root: &std::path::Path,
+) -> Result<pgmt::catalog::Catalog> {
+    let (input, _) = pgmt::config::load_config(project_root.join("pgmt.yaml").to_str().unwrap())?;
+    let config = pgmt::config::ConfigBuilder::new()
+        .with_file(input)
+        .resolve()?;
+    let filter = pgmt::config::ObjectFilter::from_config(&config);
+    let pool = sqlx::PgPool::connect(url).await?;
+    let catalog = pgmt::catalog::Catalog::load_managed(&pool, &filter).await?;
+    pool.close().await;
+    Ok(catalog)
+}
+
+async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Move + ALTER in one migration V (modules.md §12 "Acquisition content &
+/// position" + "The convergence law"). One change moves `widget` from module
+/// `b` into module `c` AND adds a column. The acquisition section must render
+/// `widget` from the STARTING catalog (its V−1 state — WITHOUT the new column),
+/// and the ordinary section carries the ALTER. Applied to a source-holding
+/// target (acquisition satisfied, only the ALTER runs) and a source-less target
+/// (acquisition CREATEs the V−1 widget, then the ALTER adds the column), both
+/// converge. Cloning the desired-state baseline instead would bake the column
+/// into the acquisition CREATE and the ALTER would then double-apply it on the
+/// source-less target.
+#[tokio::test]
+async fn test_move_plus_alter_converges_both_ways() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  b:\n    paths: [\"schema/b/**\"]\n  c:\n    paths: [\"schema/c/**\"]\n",
+        )?;
+        helper.write_schema_file("b/widget.sql", "CREATE TABLE widget (id INT PRIMARY KEY);")?;
+        helper.write_schema_file("c/other.sql", "CREATE TABLE other (id INT PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Target 1 (source-holding): b + c. Target 2 (source-less): c only.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "b,c",
+            ])
+            .assert()
+            .success();
+        let target2_url = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &target2_url,
+                "--modules",
+                "c",
+            ])
+            .assert()
+            .success();
+
+        // V: widget moves b → c AND gains a `name` column. `b` empties out and
+        // is removed from config (full move).
+        std::fs::remove_file(helper.project_root.join("schema/b/widget.sql"))?;
+        helper.write_schema_file(
+            "c/widget.sql",
+            "CREATE TABLE widget (id INT PRIMARY KEY, name TEXT);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  c:\n    paths: [\"schema/c/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "move_alter", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // The migration content: acquisition CREATE renders the V−1 widget
+        // (no `name`); the ordinary ALTER section carries `name`.
+        let move_file = helper
+            .list_migration_files()?
+            .into_iter()
+            .find(|f| f.contains("move_alter"))
+            .expect("the move migration exists");
+        let migration_sql = helper.read_migration_file(&move_file)?;
+        let acquisition_chunk = migration_sql
+            .split("-- pgmt:section")
+            .find(|s| s.contains(r#"remaps="b""#))
+            .expect("migration carries a remaps=\"b\" acquisition section");
+        // The quoted column identifier (`"name"`) distinguishes the column
+        // from the section header's `name="c"` attribute.
+        assert!(
+            !acquisition_chunk.contains("\"name\""),
+            "acquisition CREATE must be the STARTING (V−1) widget, without the new column:\n{acquisition_chunk}"
+        );
+        assert!(
+            migration_sql.contains("ADD COLUMN") && migration_sql.contains("\"name\""),
+            "the ordinary section carries the ALTER that adds the column:\n{migration_sql}"
+        );
+
+        // Apply V both ways (c requested so its ordinary ALTER runs).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "c",
+            ])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &target2_url,
+                "--modules",
+                "c",
+            ])
+            .assert()
+            .success();
+
+        // Both targets end with widget(id, name).
+        let pool1 = helper.connect_to_dev_db().await?;
+        let pool2 = sqlx::PgPool::connect(&target2_url).await?;
+        assert!(
+            column_exists(&pool1, "widget", "name").await?,
+            "source-holding target: the ALTER ran"
+        );
+        assert!(
+            column_exists(&pool2, "widget", "name").await?,
+            "source-less target: acquisition CREATE + ALTER ran"
+        );
+        assert_eq!(
+            crossing_watermark(&pool1).await?,
+            Some(re_anchor_version as i64)
+        );
+        assert_eq!(
+            crossing_watermark(&pool2).await?,
+            Some(re_anchor_version as i64)
+        );
+        pool1.close().await;
+        pool2.close().await;
+
+        // The convergence law: diff the two targets' managed catalogs through
+        // pgmt's own engine — empty diff or the acquisition content was impure.
+        let cat1 = managed_catalog(&helper.dev_database_url, &helper.project_root).await?;
+        let cat2 = managed_catalog(&target2_url, &helper.project_root).await?;
+        let diff = pgmt::diff::plan(&cat1, &cat2)?;
+        assert!(
+            diff.is_empty(),
+            "convergence law: applying V both ways must yield identical catalogs, got {} step(s):\n{diff:#?}",
+            diff.len()
+        );
+
+        Ok(())
+    })
+    .await
+}
