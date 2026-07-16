@@ -487,6 +487,62 @@ async fn test_migrate_baseline_checkpoint_keeps_module_sections() -> Result<()> 
     .await
 }
 
+/// Byte-exact pin (modules.md §12): the acquisition header block a re-anchor
+/// migration carries — the two reviewer-comment lines plus the
+/// `-- pgmt:section` header — is a checksummed artifact whose bytes are the
+/// API. This pins the EXACT block from a real `migrate new --create-baseline`
+/// generation (no hand-written fixture). It regresses the rustfmt-indentation
+/// bug: a multi-line Rust literal used to bake ~21 leading spaces into the
+/// continuation comment line.
+#[tokio::test]
+async fn test_acquisition_header_block_is_byte_exact() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(
+            helper,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+
+        // A single table owned by module `a`.
+        helper.write_schema_file("a/thing.sql", "CREATE TABLE thing (id INT PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Move it into brand-new module `b` (a pure re-tag: no DDL change).
+        std::fs::remove_file(helper.project_root.join("schema/a/thing.sql"))?;
+        helper.write_schema_file("b/thing.sql", "CREATE TABLE thing (id INT PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "move_thing", "--create-baseline"])
+            .assert()
+            .success();
+
+        let move_file = helper
+            .list_migration_files()?
+            .into_iter()
+            .find(|f| f.contains("move_thing"))
+            .expect("the move migration exists");
+        let migration_sql = helper.read_migration_file(&move_file)?;
+
+        // The FULL header block, byte-for-byte: two comment lines (no stray
+        // indentation on the continuation) then the section header.
+        let expected_block = "-- objects moved from module 'a'; runs only on targets without\n\
+             -- it — targets holding 'a' already have them (satisfied).\n\
+             -- pgmt:section name=\"b\" module=\"b\" remaps=\"a\"";
+        assert!(
+            migration_sql.contains(expected_block),
+            "acquisition header block must match byte-for-byte.\n\
+             expected block:\n{expected_block}\n\nactual migration:\n{migration_sql}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
 /// Full-replay pin (modules.md §12): shadow replay builds history with every
 /// module present, so migration REMAP sections are always satisfied-skipped in
 /// replay — executing them would double-create. A hand-placed acquisition

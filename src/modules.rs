@@ -1581,9 +1581,21 @@ pub fn acquisition_sections(baseline_sections: &[StepSection]) -> Vec<StepSectio
                 name: String::new(), // re-derived when merged into the migration
                 module: s.module.clone(),
                 remaps: s.remaps.clone(),
-                comment: Some(format!(
-                    "-- objects moved from module '{source}'; runs only on targets without\n                     -- it — targets holding '{source}' already have them (satisfied).",
-                )),
+                // Line-oriented: each output line is its own single-line
+                // literal, joined with '\n'. A multi-line Rust literal here
+                // would bake rustfmt's continuation indentation into the
+                // checksummed migration artifact.
+                comment: Some(
+                    [
+                        format!(
+                            "-- objects moved from module '{source}'; runs only on targets without"
+                        ),
+                        format!(
+                            "-- it — targets holding '{source}' already have them (satisfied)."
+                        ),
+                    ]
+                    .join("\n"),
+                ),
                 steps: s.steps.clone(),
             }
         })
