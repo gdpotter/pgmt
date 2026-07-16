@@ -256,7 +256,6 @@ pub async fn remove_module<'e>(
 }
 
 /// Append one row to the audit event stream.
-#[allow(clippy::too_many_arguments)]
 pub async fn record_event<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     tracking_table: &TrackingTable,

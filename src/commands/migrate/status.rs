@@ -66,7 +66,7 @@ async fn report_status(config: &Config, pool: &sqlx::PgPool) -> Result<()> {
     // rows' module column. Needs the section table; a legacy target without it
     // can't be rolled up by module.
     if config.modules.is_enabled() && sections_exist {
-        print_module_rollup(config, pool, &store).await?;
+        print_module_rollup(config, &store).await?;
     }
 
     Ok(())
@@ -125,20 +125,13 @@ struct ModuleTally {
 /// cross-check, and the read-only fallback on a pre-subscription target
 /// (status never evolves the tracking schema). Per-module counts and resume
 /// hints are tallied from the same section rows' `module` column.
-async fn print_module_rollup(
-    config: &Config,
-    pool: &sqlx::PgPool,
-    store: &TrackingStore,
-) -> Result<()> {
-    use crate::migration_tracking::subscription;
-
+async fn print_module_rollup(config: &Config, store: &TrackingStore) -> Result<()> {
     let literal = store.established_module_literals().await?;
-    let stored =
-        if subscription::subscription_tables_exist(pool, &config.migration.tracking_table).await? {
-            Some(subscription::load_subscription(pool, &config.migration.tracking_table).await?)
-        } else {
-            None
-        };
+    let stored = if store.subscription_tables_exist().await? {
+        Some(store.load_subscription().await?)
+    } else {
+        None
+    };
     let established = match &stored {
         Some(sub) => sub.modules.clone(),
         None => {

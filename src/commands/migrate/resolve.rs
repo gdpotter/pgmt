@@ -21,7 +21,7 @@
 use crate::config::Config;
 use crate::migration::section_parser::MigrationSection;
 use crate::migration::{discover_baselines, discover_migrations, parse_migration_sections};
-use crate::migration_tracking::section_tracking::format_sections_table_name;
+use crate::migration_tracking::section_tracking::{SectionStatus, format_sections_table_name};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     update_stored_file_checksum, version_to_db,
@@ -128,11 +128,16 @@ async fn mark_completed(
             )
         })?;
 
-    if status == "completed" {
+    // Covered means completed OR satisfied (§9/§14). A satisfied row is a
+    // source-covered adoption record — its objects are already present and it
+    // is already accounted for, so overwriting it with `completed` would be a
+    // downgrade of an intentional state. Refuse both.
+    if status.parse::<SectionStatus>()?.is_covered() {
         bail!(
-            "section {}/{} is already completed; nothing to mark",
+            "section {}/{} is already {} (covered); nothing to mark — it is already accounted for",
             version,
-            section
+            section,
+            status
         );
     }
 
@@ -213,15 +218,17 @@ async fn reset(
             )
         })?;
 
-    if status == "completed" {
+    let parsed = status.parse::<SectionStatus>()?;
+    if parsed.is_covered() {
         bail!(
-            "section {}/{} is completed; if its effects were manually rolled back, create a new \
-             migration instead (`resolve` does not un-complete applied sections)",
+            "section {}/{} is {}; if its effects were manually rolled back, create a new \
+             migration instead (`resolve` does not un-complete covered sections)",
             version,
-            section
+            section,
+            status
         );
     }
-    if status == "pending" {
+    if parsed == SectionStatus::Pending {
         bail!(
             "section {}/{} is already pending; nothing to reset (the next apply will run it)",
             version,
@@ -288,8 +295,15 @@ async fn restamp(
     .fetch_all(pool)
     .await?;
 
-    // Which sections to re-stamp: the named one (must exist + be completed), or
-    // every completed section of the version.
+    // Which sections to re-stamp: the named one (must exist + be covered), or
+    // every covered section of the version. A `satisfied` row is covered and
+    // immutable exactly like `completed` (§9/§14), so it is restampable too — a
+    // consciously edited source-covered section re-stamps like any other.
+    let is_covered = |s: &str| {
+        s.parse::<SectionStatus>()
+            .map(|st| st.is_covered())
+            .unwrap_or(false)
+    };
     let targets: Vec<&(String, String, Option<String>)> = match section {
         Some(name) => {
             let row = rows.iter().find(|(n, _, _)| n == name).ok_or_else(|| {
@@ -300,11 +314,11 @@ async fn restamp(
                     name
                 )
             })?;
-            if row.1 != "completed" {
+            if !is_covered(&row.1) {
                 bail!(
-                    "section {}/{} is {} (not completed); --restamp only re-stamps completed \
-                     sections. To re-run an unapplied section, fix it in the repo and apply, or \
-                     use --reset.",
+                    "section {}/{} is {} (not covered); --restamp only re-stamps covered \
+                     (completed/satisfied) sections. To re-run an unapplied section, fix it in \
+                     the repo and apply, or use --reset.",
                     version,
                     name,
                     row.1
@@ -312,12 +326,12 @@ async fn restamp(
             }
             vec![row]
         }
-        None => rows.iter().filter(|(_, s, _)| s == "completed").collect(),
+        None => rows.iter().filter(|(_, s, _)| is_covered(s)).collect(),
     };
 
     if targets.is_empty() {
         println!(
-            "No completed {} sections to re-stamp for version {}.",
+            "No covered {} sections to re-stamp for version {}.",
             kind(is_baseline),
             version
         );
@@ -325,7 +339,7 @@ async fn restamp(
     }
 
     println!(
-        "Re-stamping {} completed {} section(s) for version {}:",
+        "Re-stamping {} covered {} section(s) for version {}:",
         targets.len(),
         kind(is_baseline),
         version

@@ -411,6 +411,46 @@ CREATE TABLE ref_beta (id INT);
                     .or(predicate::str::contains("the following required")),
             );
 
+        // A `satisfied` section is covered exactly like `completed` (§9/§14):
+        // mark-completed refuses to overwrite it, and restamp accepts it.
+        let pool = helper.connect_to_dev_db().await?;
+        sqlx::query(
+            "UPDATE public.pgmt_migrations_sections SET status = 'satisfied' \
+             WHERE migration_version = 1000000400 AND section_name = 'beta'",
+        )
+        .execute(&pool)
+        .await?;
+        pool.close().await;
+
+        // mark-completed on a satisfied section is refused (already covered).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--mark-completed",
+                "1000000400/beta",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("already satisfied"));
+
+        // restamp treats the satisfied section as covered and re-stamps it.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--restamp",
+                "1000000400/beta",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success();
+
         Ok(())
     })
     .await

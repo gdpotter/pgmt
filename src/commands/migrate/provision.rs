@@ -109,7 +109,6 @@ async fn provision_inner(
                 .into_iter()
                 .find(|b| b.version == adoption_version)
                 .expect("the adoption baseline was discovered from this directory");
-            let baseline = &baseline;
 
             // Adoption constraint: a module's baseline sections may
             // reference its dependencies' objects, so those must already be

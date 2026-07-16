@@ -963,16 +963,11 @@ impl ModuleRuntime {
         tracking_table: &crate::config::types::TrackingTable,
         baselines_dir: &std::path::Path,
     ) -> Result<Self> {
-        use crate::migration_tracking::subscription;
-
-        let stored = subscription::load_subscription(pool, tracking_table).await?;
+        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
+        let stored = store.load_subscription().await?;
         let watermark = match stored.watermark {
             Some(w) => Some(w),
-            None => {
-                crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
-                    .applied_baseline_watermark()
-                    .await?
-            }
+            None => store.applied_baseline_watermark().await?,
         };
 
         let re_anchors = discover_re_anchors(baselines_dir)?;
@@ -1171,30 +1166,31 @@ impl ModuleRuntime {
     ) -> Result<()> {
         use crate::migration_tracking::subscription;
 
+        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let PendingCrossing { version, rewritten } = pending;
         let mut tx = pool.begin().await?;
         for module in rewritten.difference(&self.established) {
-            subscription::add_module(
-                &mut *tx,
-                tracking_table,
-                module,
-                &subscription::SubscriptionSource::Crossing(version),
-            )
-            .await?;
+            store
+                .add_module(
+                    &mut *tx,
+                    module,
+                    &subscription::SubscriptionSource::Crossing(version),
+                )
+                .await?;
         }
         for module in self.established.difference(&rewritten) {
-            subscription::remove_module(&mut *tx, tracking_table, module).await?;
+            store.remove_module(&mut *tx, module).await?;
         }
-        subscription::set_watermark(&mut *tx, tracking_table, version).await?;
-        subscription::record_event(
-            &mut *tx,
-            tracking_table,
-            "crossing",
-            Some(version),
-            &self.established,
-            &rewritten,
-        )
-        .await?;
+        store.set_watermark(&mut *tx, version).await?;
+        store
+            .record_event(
+                &mut *tx,
+                "crossing",
+                Some(version),
+                &self.established,
+                &rewritten,
+            )
+            .await?;
         tx.commit()
             .await
             .with_context(|| format!("Failed to record crossing of re-anchor {}", version))?;
@@ -1225,18 +1221,19 @@ impl ModuleRuntime {
     ) -> Result<()> {
         use crate::migration_tracking::subscription;
 
+        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let mut tx = pool.begin().await?;
         for module in modules {
-            subscription::add_module(
-                &mut *tx,
-                tracking_table,
-                module,
-                &subscription::SubscriptionSource::Provision,
-            )
-            .await?;
+            store
+                .add_module(
+                    &mut *tx,
+                    module,
+                    &subscription::SubscriptionSource::Provision,
+                )
+                .await?;
         }
         if let Some(version) = baseline_version {
-            subscription::set_watermark(&mut *tx, tracking_table, version).await?;
+            store.set_watermark(&mut *tx, version).await?;
         }
         tx.commit()
             .await
@@ -1266,15 +1263,12 @@ impl ModuleRuntime {
         if new.is_empty() {
             return Ok(());
         }
+        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let mut tx = pool.begin().await?;
         for module in &new {
-            subscription::add_module(
-                &mut *tx,
-                tracking_table,
-                module,
-                &subscription::SubscriptionSource::Adopt,
-            )
-            .await?;
+            store
+                .add_module(&mut *tx, module, &subscription::SubscriptionSource::Adopt)
+                .await?;
         }
         tx.commit()
             .await

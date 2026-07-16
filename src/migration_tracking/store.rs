@@ -3,14 +3,15 @@
 //! Every SQL statement that reads or writes pgmt's tracking tables — the main
 //! `pgmt_migrations` table, its `_sections` companion, and the subscription
 //! trio (`_modules`, `_watermark`, `_events`) — is a method on [`TrackingStore`].
-//! The store owns a pool handle and the five schema-qualified table identities,
-//! formatted ONCE from the [`TrackingTable`] config at construction. Consumers
-//! never hand-format a tracking-table name or re-encode a status predicate.
+//! The store owns a pool handle and the main + sections identities, formatted
+//! ONCE from the [`TrackingTable`] config at construction; the subscription
+//! methods delegate to [`crate::migration_tracking::subscription`] (which owns
+//! its own three name-formatters). Consumers never hand-format a tracking-table
+//! name or re-encode a status predicate.
 //!
 //! Locking stays with callers: the store performs queries only. Methods that
 //! must participate in a caller's transaction take an `impl PgExecutor` so the
-//! caller can pass either `&self.pool` (via [`TrackingStore::pool`]) or its own
-//! `&mut *tx`; the store still supplies the formatted table name.
+//! caller can pass its own `&mut *tx`; the store still supplies the table name.
 //!
 //! The "covered" status predicate — a section whose objects are present,
 //! whether it executed here (`completed`) or was covered by an established
@@ -22,9 +23,11 @@
 
 use crate::config::types::TrackingTable;
 use crate::migration_tracking::section_tracking::SectionStatus;
+use crate::migration_tracking::subscription::{self, Subscription, SubscriptionSource};
 use crate::migration_tracking::{format_tracking_table_name, version_from_db, version_to_db};
 use anyhow::Result;
 use sqlx::PgPool;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 /// Concrete query surface over the migration-tracking tables. Construct once
@@ -33,6 +36,10 @@ use std::str::FromStr;
 #[derive(Clone)]
 pub struct TrackingStore {
     pool: PgPool,
+    /// The config the store was built from — passed through to the subscription
+    /// query helpers, which format the `_modules`/`_watermark`/`_events` names
+    /// from it.
+    tracking_table: TrackingTable,
     /// `"schema"."name"` — the main tracking table.
     main: String,
     /// `"schema"."name_sections"`.
@@ -51,6 +58,7 @@ impl TrackingStore {
         );
         Ok(Self {
             pool: pool.clone(),
+            tracking_table: tracking_table.clone(),
             main,
             sections,
         })
@@ -271,5 +279,75 @@ impl TrackingStore {
             .into_iter()
             .map(|(v, name, module)| (v as u64, name, module))
             .collect())
+    }
+
+    // --- Stored module subscription (§13) ------------------------------------
+    //
+    // The subscription trio (`_modules`, `_watermark`, `_events`) lives in
+    // `migration_tracking::subscription`; the store is its single query
+    // surface. Read methods run on the pool; writers take an `impl PgExecutor`
+    // so a caller can run them inside its own crossing/provision transaction.
+
+    /// Whether the subscription tables exist, without creating them (the
+    /// read-only `migrate status` path must not evolve the schema).
+    pub async fn subscription_tables_exist(&self) -> Result<bool> {
+        subscription::subscription_tables_exist(&self.pool, &self.tracking_table).await
+    }
+
+    /// Load the stored subscription (module set + explicit watermark). Assumes
+    /// the tables exist; read-only callers guard with
+    /// [`Self::subscription_tables_exist`] first.
+    pub async fn load_subscription(&self) -> Result<Subscription> {
+        subscription::load_subscription(&self.pool, &self.tracking_table).await
+    }
+
+    /// Subscribe `module` (idempotent). Runs on the caller's executor so it can
+    /// share the crossing/provision transaction.
+    pub async fn add_module<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+        module: &str,
+        source: &SubscriptionSource,
+    ) -> Result<()> {
+        subscription::add_module(executor, &self.tracking_table, module, source).await
+    }
+
+    /// Unsubscribe `module` (idempotent). Runs on the caller's executor.
+    pub async fn remove_module<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+        module: &str,
+    ) -> Result<()> {
+        subscription::remove_module(executor, &self.tracking_table, module).await
+    }
+
+    /// Set the crossing watermark to `version` (upsert). Runs on the caller's
+    /// executor.
+    pub async fn set_watermark<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+        version: u64,
+    ) -> Result<()> {
+        subscription::set_watermark(executor, &self.tracking_table, version).await
+    }
+
+    /// Append one row to the audit event stream. Runs on the caller's executor.
+    pub async fn record_event<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+        event: &str,
+        version: Option<u64>,
+        before: &BTreeSet<String>,
+        after: &BTreeSet<String>,
+    ) -> Result<()> {
+        subscription::record_event(
+            executor,
+            &self.tracking_table,
+            event,
+            version,
+            before,
+            after,
+        )
+        .await
     }
 }
