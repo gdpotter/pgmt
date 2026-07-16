@@ -82,11 +82,9 @@ async fn apply_with_module_guard(
     //   selection actually names one of the half-built modules.
     ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
-    let incomplete = crate::migration_tracking::section_tracking::incomplete_baseline_sections(
-        pool,
-        &config.migration.tracking_table,
-    )
-    .await?;
+    let store =
+        crate::migration_tracking::TrackingStore::new(pool, &config.migration.tracking_table)?;
+    let incomplete = store.incomplete_baseline_sections().await?;
     if !incomplete.is_empty() {
         // Any incomplete BASE section → the watermark itself is untrustworthy;
         // refuse all applies with the original, version-scoped guidance.

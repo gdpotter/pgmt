@@ -4,7 +4,7 @@ use crate::migration::baseline::apply_baseline_to_target;
 use crate::migration::{discover_migrations, find_latest_baseline};
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
-    format_tracking_table_name, register_baseline_start, version_to_db,
+    register_baseline_start,
 };
 use crate::modules::{ModuleRuntime, ModuleSelection, parse_section_files};
 use anyhow::{Context, Result};
@@ -58,7 +58,9 @@ async fn provision_inner(
     ensure_tracking_table_exists(pool, &config.migration.tracking_table).await?;
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
 
-    let established = target_is_established(pool, config).await?;
+    let store =
+        crate::migration_tracking::TrackingStore::new(pool, &config.migration.tracking_table)?;
+    let established = store.target_is_established().await?;
     let migrations = discover_migrations(&migrations_dir)?;
     let latest_baseline = find_latest_baseline(&baselines_dir)?;
 
@@ -382,14 +384,9 @@ async fn register_and_apply_baseline(
 
     // The whole-file checksum is a fallback guard only for legacy baseline rows
     // with no per-section checksums.
-    let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
-    let existing_checksum: Option<String> = sqlx::query_scalar(&format!(
-        "SELECT checksum FROM {} WHERE version = $1 AND is_baseline = TRUE",
-        tracking_table_name
-    ))
-    .bind(version_to_db(version)?)
-    .fetch_optional(pool)
-    .await?;
+    let store =
+        crate::migration_tracking::TrackingStore::new(pool, &config.migration.tracking_table)?;
+    let existing_checksum = store.baseline_stored_checksum(version).await?;
     if let Some(stored) = existing_checksum
         && stored != new_checksum
     {
@@ -446,39 +443,4 @@ async fn register_and_apply_baseline(
         select_section,
     )
     .await
-}
-
-/// Whether pgmt already manages this database. The version row alone is not
-/// decisive — it's written at start (first-touch), so a crashed provision
-/// leaves one behind. Established means any of:
-/// - a completed *migration* section (apply ran here),
-/// - a baseline whose registered sections ALL completed (a provision
-///   finished — a half-applied baseline must NOT count, or a failed provision
-///   could never resume through the fresh path).
-///
-/// A legacy main row with no section rows used to be a third condition, but the
-/// section-tracking schema migration now backfills a synthetic 'default'
-/// completed section for every such row (`backfill_synthetic_legacy_sections`),
-/// which satisfies one of the two conditions above (a completed migration
-/// section, or an all-completed baseline). The special case is therefore dead
-/// once the evolve step has run — and `ensure_section_tracking_table` runs
-/// before this check — so it is removed.
-async fn target_is_established(pool: &PgPool, config: &Config) -> Result<bool> {
-    let sections_table = format!(
-        r#""{}"."{}_sections""#,
-        config.migration.tracking_table.schema, config.migration.tracking_table.name
-    );
-    let established: bool = sqlx::query_scalar(&format!(
-        "SELECT EXISTS(SELECT 1 FROM {sections} WHERE status = 'completed' AND NOT is_baseline)
-             OR EXISTS(SELECT 1 FROM {sections} s1
-                 WHERE s1.is_baseline AND s1.status = 'completed'
-                   AND NOT EXISTS(SELECT 1 FROM {sections} s2
-                       WHERE s2.is_baseline
-                         AND s2.migration_version = s1.migration_version
-                         AND s2.status <> 'completed'))",
-        sections = sections_table,
-    ))
-    .fetch_one(pool)
-    .await?;
-    Ok(established)
 }

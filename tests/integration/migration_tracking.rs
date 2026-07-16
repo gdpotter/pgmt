@@ -2,7 +2,7 @@ use crate::helpers::harness::with_test_db;
 use anyhow::Result;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::{
-    calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
+    TrackingStore, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     register_baseline_start, register_migration_start, version_to_db,
 };
 use sqlx::Row;
@@ -445,6 +445,92 @@ async fn test_tracking_table_custom_schema() -> Result<()> {
         .fetch_one(db.pool())
         .await?;
         assert!(count > 0, "Should work with custom schema and table name");
+
+        Ok(())
+    })
+    .await
+}
+
+/// Regression: a target whose baseline coverage is recorded entirely as
+/// `satisfied` rows (a module adopted through a re-anchor per the §14
+/// per-section rule — its remap sections' objects are already present under
+/// the source's name, so nothing ran but the sections are covered) must be
+/// recognized as ESTABLISHED. Counting only `completed` here made
+/// `target_is_established` misread such a target as fresh, sending provision
+/// down the fresh path against a populated database.
+#[tokio::test]
+async fn test_target_is_established_counts_satisfied_baseline_coverage() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "pgmt_migrations".to_string(),
+        };
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        let store = TrackingStore::new(db.pool(), &tracking_table)?;
+
+        // No rows yet → not established.
+        assert!(!store.target_is_established().await?);
+
+        // A baseline at 1400 whose only section is `satisfied` (source-held
+        // remap adoption): objects present, nothing ran. This is a finished,
+        // covered baseline — the target is established.
+        sqlx::query(
+            "INSERT INTO public.pgmt_migrations_sections
+                 (migration_version, is_baseline, section_name, section_order, status, module)
+             VALUES (1400, TRUE, 'billing', 0, 'satisfied', 'billing')",
+        )
+        .execute(db.pool())
+        .await?;
+        assert!(
+            store.target_is_established().await?,
+            "a satisfied-only baseline covers the target and must count as established"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// A half-applied baseline (a non-covered section) must NOT count as
+/// established: a failed provision has to be able to resume through the fresh
+/// path. Guards the negative side of the covered predicate.
+#[tokio::test]
+async fn test_target_is_established_ignores_half_applied_baseline() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "pgmt_migrations".to_string(),
+        };
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+        let store = TrackingStore::new(db.pool(), &tracking_table)?;
+
+        // One covered section but another still failed at the same baseline
+        // version → the baseline did not finish, so not established.
+        for (name, status) in [("base", "completed"), ("billing", "failed")] {
+            sqlx::query(
+                "INSERT INTO public.pgmt_migrations_sections
+                     (migration_version, is_baseline, section_name, section_order, status)
+                 VALUES (1400, TRUE, $1, 0, $2)",
+            )
+            .bind(name)
+            .bind(status)
+            .execute(db.pool())
+            .await?;
+        }
+        assert!(!store.target_is_established().await?);
+
+        // A completed *migration* section, by contrast, always establishes.
+        sqlx::query(
+            "INSERT INTO public.pgmt_migrations_sections
+                 (migration_version, is_baseline, section_name, section_order, status)
+             VALUES (1500, FALSE, 'base', 0, 'completed')",
+        )
+        .execute(db.pool())
+        .await?;
+        assert!(store.target_is_established().await?);
 
         Ok(())
     })

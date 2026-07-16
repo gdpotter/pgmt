@@ -2,11 +2,8 @@ use crate::config::Config;
 use crate::migration::{
     BaselineConfig, discover_migrations, find_latest_baseline, get_migration_starting_state,
 };
-use crate::migration_tracking::format_tracking_table_name;
-use crate::modules::{
-    UNMODULED_DISPLAY, display_module, literal_established_modules, parse_section_files,
-    section_module_from_files,
-};
+use crate::migration_tracking::TrackingStore;
+use crate::modules::{UNMODULED_DISPLAY, display_module};
 use crate::validation::{ValidationConfig, validate_catalogs};
 use crate::validation_output::{BaselineInfo, ValidationOutputOptions, format_validation_output};
 use anyhow::{Result, anyhow};
@@ -27,7 +24,7 @@ use crate::db::connection::connect_to_database;
 /// fallback), so this function just reports on whatever it is handed.
 pub async fn cmd_migrate_status(
     config: &Config,
-    root_dir: &Path,
+    _root_dir: &Path,
     database_label: &str,
     database_url: &str,
 ) -> Result<()> {
@@ -35,66 +32,41 @@ pub async fn cmd_migrate_status(
 
     let pool = connect_to_database(database_url, &format!("{} database", database_label)).await?;
 
-    let result = report_status(config, root_dir, &pool).await;
+    let result = report_status(config, &pool).await;
     pool.close().await;
     result
 }
 
-async fn report_status(config: &Config, root_dir: &Path, pool: &sqlx::PgPool) -> Result<()> {
-    let tracking = &config.migration.tracking_table;
-    let main_table = format_tracking_table_name(tracking)?;
-    let main_qualified = format!(r#""{}"."{}""#, tracking.schema, tracking.name);
-    let sections_qualified = format!(r#""{}"."{}_sections""#, tracking.schema, tracking.name);
+async fn report_status(config: &Config, pool: &sqlx::PgPool) -> Result<()> {
+    let store = TrackingStore::new(pool, &config.migration.tracking_table)?;
 
     // Read-only probe: never CREATE or evolve the tracking tables on the
     // reported database. If pgmt has never run here, there is nothing to show.
-    if !relation_exists(pool, &main_qualified).await? {
+    if !relation_exists(pool, store.main_table()).await? {
         println!("No migrations have been applied");
         return Ok(());
     }
-    let sections_exist = relation_exists(pool, &sections_qualified).await?;
+    let sections_exist = relation_exists(pool, store.sections_table()).await?;
 
     if sections_exist {
         // The version row is written when a migration STARTS (see
         // register_migration_start), so surface rows whose recorded sections
         // aren't all complete — they're in-progress or failed, not applied.
-        let applied_migrations: Vec<(i64, String, String, i64, bool)> = sqlx::query_as(&format!(
-            "SELECT m.version, m.description, m.applied_at::TEXT,
-                    COUNT(s.section_name) FILTER (WHERE s.status NOT IN ('completed', 'satisfied')) AS incomplete,
-                    m.is_baseline
-             FROM {} m
-             LEFT JOIN {} s
-               ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
-             GROUP BY m.version, m.is_baseline, m.description, m.applied_at
-             ORDER BY m.version",
-            main_table, sections_qualified
-        ))
-        .fetch_all(pool)
-        .await?;
-
+        let applied_migrations = store.migration_listing().await?;
         print_migration_listing(&applied_migrations);
     } else {
         // Legacy target: a main tracking table with no per-section table. We do
         // not evolve it here (read-only), so treat every recorded version as
         // fully applied.
-        let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(&format!(
-            "SELECT version, description, applied_at::TEXT, is_baseline FROM {} ORDER BY version",
-            main_table
-        ))
-        .fetch_all(pool)
-        .await?;
-        let listing: Vec<(i64, String, String, i64, bool)> = rows
-            .into_iter()
-            .map(|(v, d, a, b)| (v, d, a, 0, b))
-            .collect();
+        let listing = store.migration_listing_legacy().await?;
         print_migration_listing(&listing);
     }
 
     // Per-module rollup for module projects, derived from the stored section
-    // rows joined with file-derived module attribution. Needs the section
-    // table; a legacy target without it can't be rolled up by module.
+    // rows' module column. Needs the section table; a legacy target without it
+    // can't be rolled up by module.
     if config.modules.is_enabled() && sections_exist {
-        print_module_rollup(config, root_dir, pool, &sections_qualified).await?;
+        print_module_rollup(config, pool, &store).await?;
     }
 
     Ok(())
@@ -148,26 +120,19 @@ struct ModuleTally {
 
 /// Print the "Modules" summary: one compact line per declared module plus the
 /// base. Establishment comes from the STORED subscription (§13) when the
-/// subscription tables exist; [`literal_established_modules`] — what the
-/// section rows imply — is the audit-side cross-check, and the read-only
-/// fallback on a pre-subscription target (status never evolves the tracking
-/// schema). Per-module counts and resume hints are tallied from the same
-/// section rows via the shared [`section_module_from_files`] attribution.
+/// subscription tables exist; the *literal* established set — what covered
+/// section rows imply via their stored `module` column — is the audit-side
+/// cross-check, and the read-only fallback on a pre-subscription target
+/// (status never evolves the tracking schema). Per-module counts and resume
+/// hints are tallied from the same section rows' `module` column.
 async fn print_module_rollup(
     config: &Config,
-    root_dir: &Path,
     pool: &sqlx::PgPool,
-    sections_qualified: &str,
+    store: &TrackingStore,
 ) -> Result<()> {
     use crate::migration_tracking::subscription;
 
-    let migrations_dir = root_dir.join(&config.directories.migrations);
-    let baselines_dir = root_dir.join(&config.directories.baselines);
-    let migrations = discover_migrations(&migrations_dir)?;
-    let files = parse_section_files(&migrations, &baselines_dir)?;
-
-    let literal =
-        literal_established_modules(pool, &config.migration.tracking_table, &files).await?;
+    let literal = store.established_module_literals().await?;
     let stored =
         if subscription::subscription_tables_exist(pool, &config.migration.tracking_table).await? {
             Some(subscription::load_subscription(pool, &config.migration.tracking_table).await?)
@@ -204,19 +169,14 @@ async fn print_module_rollup(
         }
     }
 
-    // Tally every recorded section row by owning module (None = base).
-    let rows: Vec<(i64, bool, String, String)> = sqlx::query_as(&format!(
-        "SELECT migration_version, is_baseline, section_name, status FROM {}",
-        sections_qualified
-    ))
-    .fetch_all(pool)
-    .await?;
+    // Tally every recorded section row by owning module (None = base), read
+    // straight off the stored `module` column (§9: authoritative).
+    let rows = store.section_module_statuses().await?;
 
     let mut tallies: BTreeMap<Option<String>, ModuleTally> = BTreeMap::new();
-    for (version, is_baseline, section_name, status) in rows {
-        let module = section_module_from_files(&files, version as u64, is_baseline, &section_name);
+    for (module, is_baseline, status) in rows {
         let tally = tallies.entry(module).or_default();
-        if status == "completed" || status == "satisfied" {
+        if status.is_covered() {
             tally.completed += 1;
         } else {
             tally.incomplete += 1;

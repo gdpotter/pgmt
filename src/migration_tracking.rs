@@ -1,5 +1,6 @@
 pub mod advisory_lock;
 pub mod section_tracking;
+pub mod store;
 pub mod subscription;
 
 use crate::config::types::TrackingTable;
@@ -8,6 +9,7 @@ use sqlx::PgPool;
 
 pub use advisory_lock::MigrationLock;
 pub use section_tracking::{ensure_section_tracking_table, initialize_sections};
+pub use store::TrackingStore;
 
 /// Safely convert migration version from u64 to i64 for database storage
 /// Migration versions are Unix timestamps, which will exceed i64::MAX around year 2262

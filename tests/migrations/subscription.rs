@@ -5,8 +5,8 @@
 
 use crate::helpers::harness::with_test_db;
 use pgmt::config::types::TrackingTable;
+use pgmt::migration_tracking::TrackingStore;
 use pgmt::migration_tracking::ensure_section_tracking_table;
-use pgmt::migration_tracking::section_tracking::incomplete_baseline_sections;
 use pgmt::migration_tracking::subscription::{
     Subscription, SubscriptionSource, add_module, ensure_subscription_tables, load_subscription,
     record_event, remove_module, set_watermark, subscription_tables_exist,
@@ -80,7 +80,8 @@ async fn test_satisfied_baseline_section_is_covered_crashed_still_blocks() {
             .unwrap();
         }
 
-        let incomplete = incomplete_baseline_sections(db.pool(), &tt).await.unwrap();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
+        let incomplete = store.incomplete_baseline_sections().await.unwrap();
         // Only the crashed analytics section is incomplete — completed and
         // satisfied are both covered.
         assert_eq!(incomplete.len(), 1, "{incomplete:?}");

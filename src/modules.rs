@@ -642,35 +642,6 @@ impl ModuleSelection {
     }
 }
 
-/// The module of a recorded section row, resolved through the version's
-/// checksummed file. Fallback when the file is gone (pruned migrations): the
-/// generated-name convention (`billing`, `billing_2` → `billing`; `default*`
-/// → the base). The design doc's open-items list tracks the principled fix.
-pub fn section_module_from_files(
-    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
-    version: u64,
-    is_baseline: bool,
-    section_name: &str,
-) -> Option<String> {
-    if let Some(sections) = files.get(&(version, is_baseline))
-        && let Some(section) = sections.iter().find(|s| s.name == section_name)
-    {
-        return section.module.clone();
-    }
-    // Name-convention fallback.
-    let base_name = match section_name.rfind('_') {
-        Some(idx) if section_name[idx + 1..].chars().all(|c| c.is_ascii_digit()) => {
-            &section_name[..idx]
-        }
-        _ => section_name,
-    };
-    if base_name == "default" {
-        None
-    } else {
-        Some(base_name.to_string())
-    }
-}
-
 /// Parse every migration and baseline file into its sections, keyed by
 /// `(version, is_baseline)` — the lookup used to resolve recorded section
 /// rows back to their modules.
@@ -690,44 +661,6 @@ pub fn parse_section_files(
         files.insert((baseline.version, true), sections);
     }
     Ok(files)
-}
-
-/// Modules with at least one Completed section on the target — the *literal*
-/// established set, read off the stored section rows.
-///
-/// **Audit-side cross-check only.** Establishment itself is the stored
-/// subscription ([`crate::migration_tracking::subscription`], §13) — the
-/// module literals on section rows are epoch-stamped historical facts, never
-/// rewritten on re-tag, so after a crossing they legitimately diverge from
-/// the subscription. `migrate status`/`validate` use this to flag rows that
-/// name a module the subscription doesn't include (stored truth, derived
-/// audit — the same pattern as file checksums). Never feed this into
-/// enforcement decisions.
-pub async fn literal_established_modules(
-    pool: &sqlx::PgPool,
-    tracking_table: &crate::config::types::TrackingTable,
-    files: &BTreeMap<(u64, bool), Vec<crate::migration::section_parser::MigrationSection>>,
-) -> Result<BTreeSet<String>> {
-    let sections_table = format!(
-        r#""{}"."{}_sections""#,
-        tracking_table.schema, tracking_table.name
-    );
-    let rows: Vec<(i64, bool, String)> = sqlx::query_as(&format!(
-        "SELECT migration_version, is_baseline, section_name FROM {} WHERE status IN ('completed', 'satisfied')",
-        sections_table
-    ))
-    .fetch_all(pool)
-    .await?;
-
-    let mut established = BTreeSet::new();
-    for (version, is_baseline, section_name) in rows {
-        if let Some(module) =
-            section_module_from_files(files, version as u64, is_baseline, &section_name)
-        {
-            established.insert(module);
-        }
-    }
-    Ok(established)
 }
 
 /// One provenance-cut remap section of a re-anchor (§12): its owning module
@@ -1035,7 +968,11 @@ impl ModuleRuntime {
         let stored = subscription::load_subscription(pool, tracking_table).await?;
         let watermark = match stored.watermark {
             Some(w) => Some(w),
-            None => applied_baseline_watermark(pool, tracking_table).await?,
+            None => {
+                crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+                    .applied_baseline_watermark()
+                    .await?
+            }
         };
 
         let re_anchors = discover_re_anchors(baselines_dir)?;
@@ -1171,8 +1108,9 @@ impl ModuleRuntime {
         // Section names of THIS re-anchor the target has a completed|
         // satisfied row for (§14 per-section adoption). Feeds the extended
         // wholeness predicate.
-        let applied_sections =
-            crossed_baseline_sections(pool, tracking_table, re_anchor.version).await?;
+        let applied_sections = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+            .covered_baseline_section_names(re_anchor.version)
+            .await?;
 
         match evaluate_crossing(re_anchor, &self.established, &applied_sections, acquirable) {
             CrossingCheck::Blocked {
@@ -1346,57 +1284,6 @@ impl ModuleRuntime {
     }
 }
 
-/// Section names of the baseline at `version` the target has a covered
-/// (completed|satisfied) row for — the §14 per-section adoption record the
-/// extended wholeness predicate ([`evaluate_crossing`]) consults.
-async fn crossed_baseline_sections(
-    pool: &sqlx::PgPool,
-    tracking_table: &crate::config::types::TrackingTable,
-    version: u64,
-) -> Result<BTreeSet<String>> {
-    let sections = format!(
-        r#""{}"."{}_sections""#,
-        tracking_table.schema, tracking_table.name
-    );
-    let names: Vec<String> = sqlx::query_scalar(&format!(
-        "SELECT section_name FROM {sections}
-         WHERE is_baseline AND migration_version = $1
-           AND status IN ('completed', 'satisfied')",
-        sections = sections,
-    ))
-    .bind(crate::migration_tracking::version_to_db(version)?)
-    .fetch_all(pool)
-    .await?;
-    Ok(names.into_iter().collect())
-}
-
-/// The target's honest applied-baseline watermark: the highest baseline
-/// version all of whose registered sections completed, or `None`. The
-/// crossing-watermark fallback for targets provisioned before the
-/// subscription tables existed.
-async fn applied_baseline_watermark(
-    pool: &sqlx::PgPool,
-    tracking_table: &crate::config::types::TrackingTable,
-) -> Result<Option<u64>> {
-    let main = crate::migration_tracking::format_tracking_table_name(tracking_table)?;
-    let sections = format!(
-        r#""{}"."{}_sections""#,
-        tracking_table.schema, tracking_table.name
-    );
-    let watermark: Option<i64> = sqlx::query_scalar(&format!(
-        "SELECT MAX(m.version) FROM {main} m
-         WHERE m.is_baseline AND NOT EXISTS (
-             SELECT 1 FROM {sections} s
-             WHERE s.is_baseline AND s.migration_version = m.version
-               AND s.status NOT IN ('completed', 'satisfied'))",
-        main = main,
-        sections = sections,
-    ))
-    .fetch_one(pool)
-    .await?;
-    Ok(watermark.map(crate::migration_tracking::version_from_db))
-}
-
 /// Migration versions `≤ through_version` whose base/established-module
 /// sections are NOT yet applied on the target — i.e. versions the established
 /// set still needs before it is caught up to `through_version`. An empty
@@ -1418,36 +1305,13 @@ pub async fn established_pending_through(
     established: &BTreeSet<String>,
     through_version: u64,
 ) -> Result<Vec<u64>> {
-    let main = crate::migration_tracking::format_tracking_table_name(tracking_table)?;
-    let sections = format!(
-        r#""{}"."{}_sections""#,
-        tracking_table.schema, tracking_table.name
-    );
+    let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
 
     // Honest baseline watermark: the highest baseline version all of whose
-    // registered sections completed. Migrations ≤ it are already covered.
-    let watermark: u64 = sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COALESCE(MAX(m.version), 0) FROM {main} m
-         WHERE m.is_baseline AND NOT EXISTS (
-             SELECT 1 FROM {sections} s
-             WHERE s.is_baseline AND s.migration_version = m.version
-               AND s.status NOT IN ('completed', 'satisfied'))",
-        main = main,
-        sections = sections,
-    ))
-    .fetch_one(pool)
-    .await?
-    .max(0) as u64;
+    // registered sections are covered. Migrations ≤ it are already covered.
+    let watermark = store.applied_baseline_watermark().await?.unwrap_or(0);
 
-    let done: BTreeSet<(u64, String)> = sqlx::query_as::<_, (i64, String)>(&format!(
-        "SELECT migration_version, section_name FROM {} WHERE NOT is_baseline AND status = 'completed'",
-        sections
-    ))
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(v, n)| (v as u64, n))
-    .collect();
+    let done = store.completed_migration_sections().await?;
 
     let mut pending = Vec::new();
     for ((version, is_baseline), file_sections) in files {
@@ -1910,32 +1774,6 @@ mod tests {
         // Unattributed object → base.
         assert_eq!(partition.module_for_object(&stray, &mapping)?, None);
         Ok(())
-    }
-
-    /// Pruned migration files: section rows must still resolve to modules
-    /// via the generated-name convention (`billing_2` → `billing`,
-    /// `default*` → the base).
-    #[test]
-    fn test_section_module_name_convention_fallback() {
-        let files = BTreeMap::new(); // no files survive — everything pruned
-        assert_eq!(
-            section_module_from_files(&files, 1, false, "billing"),
-            Some("billing".to_string())
-        );
-        assert_eq!(
-            section_module_from_files(&files, 1, false, "billing_2"),
-            Some("billing".to_string())
-        );
-        assert_eq!(section_module_from_files(&files, 1, false, "default"), None);
-        assert_eq!(
-            section_module_from_files(&files, 1, false, "default_3"),
-            None
-        );
-        // A trailing _word (not digits) is part of the module name.
-        assert_eq!(
-            section_module_from_files(&files, 1, false, "billing_eu"),
-            Some("billing_eu".to_string())
-        );
     }
 
     #[test]
