@@ -27,18 +27,28 @@
 //! A **crossing** is a target consuming one re-anchor exactly once: check
 //! wholeness (would the relabel orphan objects into a module this target
 //! does not subscribe?), rewrite the subscription through the remaps, and
-//! advance the cursor. Consumption is idempotent by construction — a
+//! record the consumption. Consumption is idempotent by construction — a
 //! consumed re-anchor is never evaluated again.
 //!
-//! The **crossing watermark** is that cursor: a consumer offset into the
-//! ordered stream of committed re-anchors — "everything at or below this
-//! version is consumed here". It is stored as its own explicit value, never
-//! derived, because a crossing may legitimately change nothing else (an
-//! irrelevant remap still consumes), and it is what makes pruning consumed
-//! re-anchor files from the repo safe. Distinct from the *applied-baseline
-//! watermark* (the highest baseline whose sections are all covered on the
-//! target — a coverage fact, computed from section rows), which serves as
-//! the crossing watermark's fallback on pre-subscription targets.
+//! **Consumption is recorded in the ledger**, not a side table. When a
+//! crossing consumes the re-anchor at version V it writes that re-anchor's own
+//! baseline main row — a what-happened fact recorded where what-happened facts
+//! live — carrying the file's checksum (which pins the consumed bytes, so an
+//! edited re-anchor is detectable against every target that consumed it) and a
+//! `crossed_at` mark. It also writes zero-trace `satisfied` section rows for
+//! exactly the remap sections it relabeled (those whose source the target
+//! holds); an irrelevant crossing that relabels nothing writes the main row
+//! and no section rows.
+//!
+//! The **consumed-through cursor** is DERIVED from those load-bearing rows: the
+//! highest baseline version on the target, whether a provision applied it or a
+//! crossing consumed it. The crossing loop keys off re-anchors strictly above
+//! it, so a crossing may legitimately change nothing else (an irrelevant remap
+//! still consumes and still advances the cursor by writing its row), and
+//! pruning a consumed re-anchor file from the repo stays safe. Distinct from
+//! the *applied-baseline watermark* (the highest baseline whose sections are
+//! all covered on the target — a coverage fact, also computed from section
+//! rows), which content-coverage checks use instead.
 //!
 //! Layout:
 //! - [`partition`] — config-time file→module partition, attribution, reference
