@@ -9,6 +9,49 @@ use super::crossing::{
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// How a module came to be in the subscription — recorded on the
+/// `{name}_modules` row's `source` column for audit.
+#[derive(Debug, Clone)]
+pub enum SubscriptionSource {
+    /// Written by `provision --modules` on a fresh target.
+    Provision,
+    /// Written by adoption (`apply`/`provision --modules X`).
+    Adopt,
+    /// Written by the crossing loop when a re-anchor at `version` subscribed
+    /// the module.
+    Crossing(u64),
+}
+
+impl SubscriptionSource {
+    pub fn as_db_string(&self) -> String {
+        match self {
+            Self::Provision => "provision".to_string(),
+            Self::Adopt => "adopt".to_string(),
+            Self::Crossing(version) => format!("crossing:{version}"),
+        }
+    }
+}
+
+/// The target's stored module subscription.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Subscription {
+    /// Subscribed modules (the base is always established and never listed).
+    pub modules: BTreeSet<String>,
+    /// The re-anchor crossing watermark. `None` = no crossing consumed yet
+    /// (a legacy / pre-subscription target).
+    pub watermark: Option<u64>,
+}
+
+/// Serialize a module set for display: a comma-joined sorted list, or the
+/// literal `(base only)` when empty.
+fn render_subscription_set(modules: &BTreeSet<String>) -> String {
+    if modules.is_empty() {
+        "(base only)".to_string()
+    } else {
+        modules.iter().cloned().collect::<Vec<_>>().join(",")
+    }
+}
+
 /// Parse every migration and baseline file into its sections, keyed by
 /// `(version, is_baseline)` — the lookup used to resolve recorded section
 /// rows back to their modules.
@@ -275,18 +318,12 @@ impl ModuleRuntime {
         tracking_table: &crate::config::types::TrackingTable,
         pending: PendingCrossing,
     ) -> Result<()> {
-        use crate::migration_tracking::subscription;
-
         let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let PendingCrossing { version, rewritten } = pending;
         let mut tx = pool.begin().await?;
         for module in rewritten.difference(&self.established) {
             store
-                .add_module(
-                    &mut *tx,
-                    module,
-                    &subscription::SubscriptionSource::Crossing(version),
-                )
+                .add_module(&mut *tx, module, &SubscriptionSource::Crossing(version))
                 .await?;
         }
         for module in self.established.difference(&rewritten) {
@@ -301,8 +338,8 @@ impl ModuleRuntime {
             println!(
                 "Crossed re-anchor {}: subscription {} -> {}",
                 version,
-                subscription::render_subscription_set(&self.established),
-                subscription::render_subscription_set(&rewritten),
+                render_subscription_set(&self.established),
+                render_subscription_set(&rewritten),
             );
         }
         self.established = rewritten;
@@ -321,17 +358,11 @@ impl ModuleRuntime {
         modules: &BTreeSet<String>,
         baseline_version: Option<u64>,
     ) -> Result<()> {
-        use crate::migration_tracking::subscription;
-
         let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let mut tx = pool.begin().await?;
         for module in modules {
             store
-                .add_module(
-                    &mut *tx,
-                    module,
-                    &subscription::SubscriptionSource::Provision,
-                )
+                .add_module(&mut *tx, module, &SubscriptionSource::Provision)
                 .await?;
         }
         if let Some(version) = baseline_version {
@@ -356,8 +387,6 @@ impl ModuleRuntime {
         tracking_table: &crate::config::types::TrackingTable,
         modules: &BTreeSet<String>,
     ) -> Result<()> {
-        use crate::migration_tracking::subscription;
-
         let new: Vec<&String> = modules
             .iter()
             .filter(|m| !self.established.contains(*m))
@@ -369,7 +398,7 @@ impl ModuleRuntime {
         let mut tx = pool.begin().await?;
         for module in &new {
             store
-                .add_module(&mut *tx, module, &subscription::SubscriptionSource::Adopt)
+                .add_module(&mut *tx, module, &SubscriptionSource::Adopt)
                 .await?;
         }
         tx.commit()

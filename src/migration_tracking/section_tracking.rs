@@ -113,7 +113,8 @@ pub async fn ensure_section_tracking_table(
     // the tables arrive here so every apply/provision path that ensures the
     // section table also has the subscription tables available. (The read-only
     // `migrate status` path never calls this — it probes instead.)
-    crate::migration_tracking::subscription::ensure_subscription_tables(pool, tracking_table)
+    crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+        .ensure_subscription_tables()
         .await?;
 
     // Create index for querying by status

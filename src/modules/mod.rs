@@ -26,7 +26,10 @@ pub use crossing::remap_source_held;
 pub use partition::{
     HistoricalAttribution, ModulePartition, ModuleSelection, UNMODULED_DISPLAY, display_module,
 };
-pub use runtime::{ModuleRuntime, established_pending_through, parse_section_files};
+pub use runtime::{
+    ModuleRuntime, Subscription, SubscriptionSource, established_pending_through,
+    parse_section_files,
+};
 pub use sectioning::{
     evaluate_module_generation, render_generated_migration, render_sectioned_migration,
     section_baseline_if_moduled, sectionize_steps,

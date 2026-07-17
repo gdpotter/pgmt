@@ -6,10 +6,7 @@ use crate::helpers::harness::with_test_db;
 use pgmt::config::types::TrackingTable;
 use pgmt::migration_tracking::TrackingStore;
 use pgmt::migration_tracking::ensure_section_tracking_table;
-use pgmt::migration_tracking::subscription::{
-    Subscription, SubscriptionSource, add_module, ensure_subscription_tables, load_subscription,
-    remove_module, set_watermark, subscription_tables_exist,
-};
+use pgmt::modules::{Subscription, SubscriptionSource};
 use std::collections::BTreeSet;
 
 fn tracking() -> TrackingTable {
@@ -27,22 +24,24 @@ fn set(names: &[&str]) -> BTreeSet<String> {
 async fn test_evolve_step_creates_subscription_tables_idempotently() {
     with_test_db(async |db| {
         let tt = tracking();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
         // No tables yet: the read-only probe reports absence.
-        assert!(!subscription_tables_exist(db.pool(), &tt).await.unwrap());
+        assert!(!store.subscription_tables_exist().await.unwrap());
 
         // The section-tracking evolve step creates the subscription tables.
         ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
-        assert!(subscription_tables_exist(db.pool(), &tt).await.unwrap());
+        assert!(store.subscription_tables_exist().await.unwrap());
 
         // Idempotent: running the evolve step (and the dedicated helper) again
         // is a no-op that preserves data.
-        add_module(db.pool(), &tt, "app", &SubscriptionSource::Provision)
+        store
+            .add_module(db.pool(), "app", &SubscriptionSource::Provision)
             .await
             .unwrap();
         ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
-        ensure_subscription_tables(db.pool(), &tt).await.unwrap();
+        store.ensure_subscription_tables().await.unwrap();
 
-        let sub = load_subscription(db.pool(), &tt).await.unwrap();
+        let sub = store.load_subscription().await.unwrap();
         assert_eq!(sub.modules, set(&["app"]));
     })
     .await;
@@ -96,8 +95,9 @@ async fn test_satisfied_baseline_section_is_covered_crashed_still_blocks() {
 async fn test_empty_subscription_is_base_only() {
     with_test_db(async |db| {
         let tt = tracking();
-        ensure_subscription_tables(db.pool(), &tt).await.unwrap();
-        let sub = load_subscription(db.pool(), &tt).await.unwrap();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
+        store.ensure_subscription_tables().await.unwrap();
+        let sub = store.load_subscription().await.unwrap();
         assert_eq!(
             sub,
             Subscription {
@@ -114,25 +114,24 @@ async fn test_empty_subscription_is_base_only() {
 async fn test_module_set_round_trips() {
     with_test_db(async |db| {
         let tt = tracking();
-        ensure_subscription_tables(db.pool(), &tt).await.unwrap();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
+        store.ensure_subscription_tables().await.unwrap();
 
-        add_module(db.pool(), &tt, "billing", &SubscriptionSource::Provision)
+        store
+            .add_module(db.pool(), "billing", &SubscriptionSource::Provision)
             .await
             .unwrap();
-        add_module(
-            db.pool(),
-            &tt,
-            "analytics",
-            &SubscriptionSource::Crossing(1200),
-        )
-        .await
-        .unwrap();
+        store
+            .add_module(db.pool(), "analytics", &SubscriptionSource::Crossing(1200))
+            .await
+            .unwrap();
         // Idempotent: re-adding keeps the original source.
-        add_module(db.pool(), &tt, "billing", &SubscriptionSource::Adopt)
+        store
+            .add_module(db.pool(), "billing", &SubscriptionSource::Adopt)
             .await
             .unwrap();
 
-        let sub = load_subscription(db.pool(), &tt).await.unwrap();
+        let sub = store.load_subscription().await.unwrap();
         assert_eq!(sub.modules, set(&["analytics", "billing"]));
 
         // The audit source is preserved from the first insert.
@@ -151,8 +150,8 @@ async fn test_module_set_round_trips() {
         .unwrap();
         assert_eq!(source, "crossing:1200");
 
-        remove_module(db.pool(), &tt, "billing").await.unwrap();
-        let sub = load_subscription(db.pool(), &tt).await.unwrap();
+        store.remove_module(db.pool(), "billing").await.unwrap();
+        let sub = store.load_subscription().await.unwrap();
         assert_eq!(sub.modules, set(&["analytics"]));
     })
     .await;
@@ -164,24 +163,22 @@ async fn test_module_set_round_trips() {
 async fn test_watermark_is_explicit_single_row() {
     with_test_db(async |db| {
         let tt = tracking();
-        ensure_subscription_tables(db.pool(), &tt).await.unwrap();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
+        store.ensure_subscription_tables().await.unwrap();
 
         // No watermark row yet.
-        assert_eq!(
-            load_subscription(db.pool(), &tt).await.unwrap().watermark,
-            None
-        );
+        assert_eq!(store.load_subscription().await.unwrap().watermark, None);
 
-        set_watermark(db.pool(), &tt, 1200).await.unwrap();
+        store.set_watermark(db.pool(), 1200).await.unwrap();
         assert_eq!(
-            load_subscription(db.pool(), &tt).await.unwrap().watermark,
+            store.load_subscription().await.unwrap().watermark,
             Some(1200)
         );
 
         // The upsert advances it in place (single row).
-        set_watermark(db.pool(), &tt, 1500).await.unwrap();
+        store.set_watermark(db.pool(), 1500).await.unwrap();
         assert_eq!(
-            load_subscription(db.pool(), &tt).await.unwrap().watermark,
+            store.load_subscription().await.unwrap().watermark,
             Some(1500)
         );
         let count: i64 =

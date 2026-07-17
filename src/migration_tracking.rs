@@ -1,7 +1,6 @@
 pub mod advisory_lock;
 pub mod section_tracking;
 pub mod store;
-pub mod subscription;
 
 use crate::config::types::TrackingTable;
 use anyhow::{Context, Result};

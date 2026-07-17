@@ -3,11 +3,9 @@
 //! Every SQL statement that reads or writes pgmt's tracking tables — the main
 //! `pgmt_migrations` table, its `_sections` companion, and the subscription
 //! tables (`_modules`, `_watermark`) — is a method on [`TrackingStore`].
-//! The store owns a pool handle and the main + sections identities, formatted
-//! ONCE from the [`TrackingTable`] config at construction; the subscription
-//! methods delegate to [`crate::migration_tracking::subscription`] (which owns
-//! its own name-formatters). Consumers never hand-format a tracking-table
-//! name or re-encode a status predicate.
+//! The store owns a pool handle and every table identity, formatted ONCE from
+//! the [`TrackingTable`] config at construction. Consumers never hand-format
+//! a tracking-table name or re-encode a status predicate.
 //!
 //! Locking stays with callers: the store performs queries only. Methods that
 //! must participate in a caller's transaction take an `impl PgExecutor` so the
@@ -23,9 +21,9 @@
 
 use crate::config::types::TrackingTable;
 use crate::migration_tracking::section_tracking::SectionStatus;
-use crate::migration_tracking::subscription::{self, Subscription, SubscriptionSource};
 use crate::migration_tracking::{format_tracking_table_name, version_from_db, version_to_db};
-use anyhow::Result;
+use crate::modules::{Subscription, SubscriptionSource};
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::str::FromStr;
 
@@ -35,13 +33,14 @@ use std::str::FromStr;
 #[derive(Clone)]
 pub struct TrackingStore {
     pool: PgPool,
-    /// The config the store was built from — passed through to the subscription
-    /// query helpers, which format the `_modules`/`_watermark` names from it.
-    tracking_table: TrackingTable,
     /// `"schema"."name"` — the main tracking table.
     main: String,
     /// `"schema"."name_sections"`.
     sections: String,
+    /// `"schema"."name_modules"` — the stored module subscription.
+    modules: String,
+    /// `"schema"."name_watermark"` — the crossing watermark (single row).
+    watermark: String,
 }
 
 impl TrackingStore {
@@ -50,15 +49,18 @@ impl TrackingStore {
     /// validation `format_tracking_table_name` performs).
     pub fn new(pool: &PgPool, tracking_table: &TrackingTable) -> Result<Self> {
         let main = format_tracking_table_name(tracking_table)?;
-        let sections = format!(
-            r#""{}"."{}_sections""#,
-            tracking_table.schema, tracking_table.name
-        );
+        let suffixed = |suffix: &str| {
+            format!(
+                r#""{}"."{}_{}""#,
+                tracking_table.schema, tracking_table.name, suffix
+            )
+        };
         Ok(Self {
             pool: pool.clone(),
-            tracking_table: tracking_table.clone(),
             main,
-            sections,
+            sections: suffixed("sections"),
+            modules: suffixed("modules"),
+            watermark: suffixed("watermark"),
         })
     }
 
@@ -282,33 +284,110 @@ impl TrackingStore {
 
     // --- Stored module subscription ------------------------------------------
     //
-    // The subscription tables (`_modules`, `_watermark`) live in
-    // `migration_tracking::subscription`; the store is its single query
-    // surface. Read methods run on the pool; writers take an `impl PgExecutor`
-    // so a caller can run them inside its own crossing/provision transaction.
+    // "Which modules does this target have?" is target state — the same
+    // species of fact as "which migrations ran" — so establishment is stored
+    // in two tables beside the tracking table (`_modules`, `_watermark`),
+    // never derived. Read methods run on the pool; writers take an
+    // `impl PgExecutor` so a caller can run them inside its own
+    // crossing/provision transaction.
+
+    /// Create the subscription tables if absent (idempotent). Part of the
+    /// "migrate the migrator" evolve step; safe to call repeatedly. These
+    /// tables are born in their current shape, so there is no column back-fill
+    /// (yet) — future shape changes add guarded `ALTER`s here, exactly like
+    /// the other tracking tables.
+    ///
+    /// `{name}_modules` is the current module set: one row per subscribed
+    /// module. Empty = base only (correct for both a legacy target and a
+    /// fresh-minimal one; no legacy heuristic). The base is never listed — it
+    /// is established on every target.
+    pub async fn ensure_subscription_tables(&self) -> Result<()> {
+        sqlx::query(&format!(
+            r#"CREATE TABLE IF NOT EXISTS {modules} (
+                module TEXT PRIMARY KEY,
+                adopted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                adopted_by TEXT NOT NULL DEFAULT CURRENT_USER,
+                source TEXT NOT NULL
+            )"#,
+            modules = self.modules
+        ))
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("Failed to create subscription table {}", self.modules))?;
+
+        // Single-row crossing watermark: an explicit stored value, never
+        // derived. The CHECK pins it to one row; a missing row means "no
+        // crossing consumed yet" (a pre-subscription / legacy target).
+        sqlx::query(&format!(
+            r#"CREATE TABLE IF NOT EXISTS {watermark} (
+                singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,
+                crossing_watermark BIGINT NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (singleton)
+            )"#,
+            watermark = self.watermark
+        ))
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("Failed to create watermark table {}", self.watermark))?;
+
+        Ok(())
+    }
 
     /// Whether the subscription tables exist, without creating them (the
     /// read-only `migrate status` path must not evolve the schema).
     pub async fn subscription_tables_exist(&self) -> Result<bool> {
-        subscription::subscription_tables_exist(&self.pool, &self.tracking_table).await
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(&self.modules)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(exists)
     }
 
     /// Load the stored subscription (module set + explicit watermark). Assumes
     /// the tables exist; read-only callers guard with
     /// [`Self::subscription_tables_exist`] first.
     pub async fn load_subscription(&self) -> Result<Subscription> {
-        subscription::load_subscription(&self.pool, &self.tracking_table).await
+        let modules: Vec<String> =
+            sqlx::query_scalar(&format!("SELECT module FROM {}", self.modules))
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to read the module subscription")?;
+
+        let watermark: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT crossing_watermark FROM {} LIMIT 1",
+            self.watermark
+        ))
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to read the crossing watermark")?;
+
+        Ok(Subscription {
+            modules: modules.into_iter().collect(),
+            watermark: watermark.map(version_from_db),
+        })
     }
 
-    /// Subscribe `module` (idempotent). Runs on the caller's executor so it can
-    /// share the crossing/provision transaction.
+    /// Subscribe `module` (idempotent — an existing row keeps its original
+    /// `source`/`adopted_at`). Runs on the caller's executor so it can share
+    /// the crossing/provision transaction.
     pub async fn add_module<'e>(
         &self,
         executor: impl sqlx::PgExecutor<'e>,
         module: &str,
         source: &SubscriptionSource,
     ) -> Result<()> {
-        subscription::add_module(executor, &self.tracking_table, module, source).await
+        sqlx::query(&format!(
+            "INSERT INTO {} (module, source) VALUES ($1, $2)
+             ON CONFLICT (module) DO NOTHING",
+            self.modules
+        ))
+        .bind(module)
+        .bind(source.as_db_string())
+        .execute(executor)
+        .await
+        .with_context(|| format!("Failed to subscribe module '{module}'"))?;
+        Ok(())
     }
 
     /// Unsubscribe `module` (idempotent). Runs on the caller's executor.
@@ -317,16 +396,32 @@ impl TrackingStore {
         executor: impl sqlx::PgExecutor<'e>,
         module: &str,
     ) -> Result<()> {
-        subscription::remove_module(executor, &self.tracking_table, module).await
+        sqlx::query(&format!("DELETE FROM {} WHERE module = $1", self.modules))
+            .bind(module)
+            .execute(executor)
+            .await
+            .with_context(|| format!("Failed to unsubscribe module '{module}'"))?;
+        Ok(())
     }
 
-    /// Set the crossing watermark to `version` (upsert). Runs on the caller's
-    /// executor.
+    /// Set the crossing watermark to `version` (upsert the single row). Runs
+    /// on the caller's executor.
     pub async fn set_watermark<'e>(
         &self,
         executor: impl sqlx::PgExecutor<'e>,
         version: u64,
     ) -> Result<()> {
-        subscription::set_watermark(executor, &self.tracking_table, version).await
+        sqlx::query(&format!(
+            "INSERT INTO {} (singleton, crossing_watermark, updated_at)
+             VALUES (TRUE, $1, NOW())
+             ON CONFLICT (singleton)
+             DO UPDATE SET crossing_watermark = EXCLUDED.crossing_watermark, updated_at = NOW()",
+            self.watermark
+        ))
+        .bind(version_to_db(version)?)
+        .execute(executor)
+        .await
+        .context("Failed to set the crossing watermark")?;
+        Ok(())
     }
 }
