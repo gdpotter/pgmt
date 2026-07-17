@@ -421,7 +421,8 @@ impl ModuleRuntime {
 /// an explicit `apply`, never a side effect of adopting a different module.
 ///
 /// Migrations at or below a *fully-completed* baseline the target already
-/// holds are covered and excluded (an honest watermark — a crashed baseline,
+/// holds are covered and excluded (the honest applied-baseline watermark,
+/// distinct from the crossing watermark — a crashed baseline,
 /// with a non-completed section, does not count).
 pub async fn established_pending_through(
     pool: &sqlx::PgPool,
@@ -432,8 +433,9 @@ pub async fn established_pending_through(
 ) -> Result<Vec<u64>> {
     let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
 
-    // Honest baseline watermark: the highest baseline version all of whose
-    // registered sections are covered. Migrations ≤ it are already covered.
+    // Honest applied-baseline watermark: the highest baseline version all of
+    // whose registered sections are covered. Migrations ≤ it are already
+    // covered.
     let watermark = store.applied_baseline_watermark().await?.unwrap_or(0);
 
     let done = store.completed_migration_sections().await?;

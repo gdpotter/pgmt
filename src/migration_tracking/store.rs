@@ -1,8 +1,18 @@
 //! The migration-tracking query surface.
 //!
-//! Every SQL statement that reads or writes pgmt's tracking tables — the main
-//! `pgmt_migrations` table, its `_sections` companion, and the subscription
-//! tables (`_modules`, `_watermark`) — is a method on [`TrackingStore`].
+//! Every SQL statement that reads or writes pgmt's tracking tables is a
+//! method on [`TrackingStore`]. The tables:
+//!
+//! - the main table (`pgmt_migrations` by default) — version anchors: one row
+//!   per applied migration/baseline with its whole-file checksum.
+//! - `{name}_sections` — the authoritative record of what actually ran: one
+//!   row per section with its per-section lifecycle status.
+//! - `{name}_modules` — the module subscription: which modules this target
+//!   has established.
+//! - `{name}_watermark` — the re-anchor consumption cursor (the *crossing*
+//!   watermark; not the applied-baseline coverage watermark, which is
+//!   computed from section rows).
+//!
 //! The store owns a pool handle and every table identity, formatted ONCE from
 //! the [`TrackingTable`] config at construction. Consumers never hand-format
 //! a tracking-table name or re-encode a status predicate.

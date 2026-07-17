@@ -281,7 +281,12 @@ pub(crate) fn detect_partition_divergence(
 /// modules are always explicit (flag > `PGMT_MODULES` env), never inferred.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModuleSelection {
-    /// Non-module project: every section runs, exactly as before modules.
+    /// No `modules:` config: every section runs, tags included. Section
+    /// `module=` tags are properties of immutable, checksummed history;
+    /// config is a property of now — so without config the tags must be
+    /// inert, or committed history would become non-executable (a project
+    /// that demoted all modules to the base and deleted its `modules:`
+    /// config still has tagged sections that behind targets must run).
     Everything,
     /// Module project: the named modules (dependency closure included) plus
     /// the always-deployed base. An empty set = base sections only.
