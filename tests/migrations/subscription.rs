@@ -157,12 +157,11 @@ async fn test_module_set_round_trips() {
     .await;
 }
 
-/// A crossing-only baseline row — `crossed_at` set, zero section rows (a
-/// zero-trace re-tag that relabeled nothing this target holds) — is NOT
-/// applied content: it must not make the target look established, and its
-/// absence of section rows is not a crashed provision, so the
-/// incomplete-baseline guard must not trip on it. Zero registered sections ≠
-/// crashed provision.
+/// A crossing-only baseline row — zero section rows (a zero-trace re-tag that
+/// relabeled nothing this target holds) — is NOT applied content: it must not
+/// make the target look established, and its absence of section rows is not a
+/// crashed provision, so the incomplete-baseline guard must not trip on it.
+/// Zero registered sections ≠ crashed provision.
 #[tokio::test]
 async fn test_crossing_only_row_is_not_established_and_does_not_trip_guard() {
     with_test_db(async |db| {
@@ -174,15 +173,16 @@ async fn test_crossing_only_row_is_not_established_and_does_not_trip_guard() {
         let store = TrackingStore::new(db.pool(), &tt).unwrap();
 
         // A crossing consumed re-anchor 1200 but relabeled nothing: the main
-        // row is written (crossed_at set) with zero section rows.
+        // row is written with zero section rows.
         let mut conn = db.pool().acquire().await.unwrap();
         store
             .record_crossing_consumption(&mut *conn, 1200, "checksum-1200")
             .await
             .unwrap();
 
-        // The evolve step's synthetic-legacy backfill must NOT forge a
-        // `default` completed section row for this crossing-only row.
+        // A subsequent evolve must NOT forge a `default` completed section row
+        // for this zero-section row: the backfill is a one-time action of the
+        // evolve that introduces section tracking, and the table already exists.
         ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
         let section_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM public.pgmt_migrations_sections WHERE migration_version = 1200",
@@ -230,7 +230,7 @@ async fn test_consumed_cursor_is_derived_from_baseline_rows() {
         assert_eq!(store.consumed_through_cursor().await.unwrap(), None);
 
         // A crossing consumes re-anchor 1200: it upserts the baseline main row
-        // (checksum + crossed_at). The cursor picks it up.
+        // with its checksum. The cursor picks it up.
         let mut conn = db.pool().acquire().await.unwrap();
         store
             .record_crossing_consumption(&mut *conn, 1200, "checksum-1200")
@@ -238,9 +238,9 @@ async fn test_consumed_cursor_is_derived_from_baseline_rows() {
             .unwrap();
         assert_eq!(store.consumed_through_cursor().await.unwrap(), Some(1200));
 
-        // A provision-applied baseline row at 1500 (no crossed_at) is a
-        // load-bearing cursor row exactly the same way — the cursor is MAX,
-        // regardless of how the row arrived.
+        // A provision-applied baseline row at 1500 is a load-bearing cursor row
+        // exactly the same way — the cursor is MAX, regardless of how the row
+        // arrived.
         sqlx::query(
             "INSERT INTO public.pgmt_migrations (version, description, checksum, is_baseline) \
              VALUES (1500, 'baseline', 'checksum-1500', TRUE)",
@@ -250,9 +250,8 @@ async fn test_consumed_cursor_is_derived_from_baseline_rows() {
         .unwrap();
         assert_eq!(store.consumed_through_cursor().await.unwrap(), Some(1500));
 
-        // Re-consuming 1200 with the SAME checksum is idempotent (stamps
-        // crossed_at, keeps the row); a DIFFERENT checksum is an edited
-        // re-anchor and is rejected.
+        // Re-consuming 1200 with the SAME checksum is idempotent (keeps the
+        // row); a DIFFERENT checksum is an edited re-anchor and is rejected.
         store
             .record_crossing_consumption(&mut *conn, 1200, "checksum-1200")
             .await
@@ -263,6 +262,106 @@ async fn test_consumed_cursor_is_derived_from_baseline_rows() {
             .unwrap_err()
             .to_string();
         assert!(err.contains("edited after it was consumed"), "{err}");
+    })
+    .await;
+}
+
+/// The synthetic-legacy backfill is a ONE-TIME action of the evolve that
+/// introduces section tracking — never a standing per-row rule. A baseline row
+/// with zero section rows created AFTER the section table already exists is a
+/// legitimate ledger state (a version-level event that processed no local work)
+/// and must survive every subsequent evolve untouched: no `default` completed
+/// section is ever forged onto it.
+#[tokio::test]
+async fn test_zero_section_row_after_introduction_is_never_backfilled() {
+    with_test_db(async |db| {
+        let tt = tracking();
+        pgmt::migration_tracking::ensure_tracking_table_exists(db.pool(), &tt)
+            .await
+            .unwrap();
+        // Introduce section tracking first (this evolve is allowed to backfill,
+        // but the main table is empty so there is nothing to backfill).
+        ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+        let store = TrackingStore::new(db.pool(), &tt).unwrap();
+
+        // Now — with the section table already in existence — write a
+        // zero-section baseline row (an irrelevant crossing consumption).
+        let mut conn = db.pool().acquire().await.unwrap();
+        store
+            .record_crossing_consumption(&mut *conn, 2000, "checksum-2000")
+            .await
+            .unwrap();
+
+        // Any number of later evolve passes must leave it at zero sections.
+        for _ in 0..3 {
+            ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+        }
+        let section_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.pgmt_migrations_sections WHERE migration_version = 2000",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            section_count, 0,
+            "a post-introduction zero-section row is never backfilled"
+        );
+    })
+    .await;
+}
+
+/// The legacy upgrade path: a target with a populated main table but NO section
+/// table (pre-per-section-tracking history). The evolve that introduces the
+/// section table backfills exactly one `default` completed section per existing
+/// main row — once — so applied-ness becomes a derived function of section
+/// rows. Re-running the evolve does not duplicate them.
+#[tokio::test]
+async fn test_legacy_upgrade_backfills_synthetic_sections_once() {
+    with_test_db(async |db| {
+        let tt = tracking();
+        // A pre-per-section-tracking target: the main table exists and carries
+        // history, but the section table does not yet exist.
+        pgmt::migration_tracking::ensure_tracking_table_exists(db.pool(), &tt)
+            .await
+            .unwrap();
+        for (version, is_baseline) in [(1000i64, false), (1100, false), (1200, true)] {
+            sqlx::query(
+                "INSERT INTO public.pgmt_migrations (version, description, checksum, is_baseline) \
+                 VALUES ($1, 'legacy', 'legacy-checksum', $2)",
+            )
+            .bind(version)
+            .bind(is_baseline)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        // The introducing evolve backfills one synthetic default section per row.
+        ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT migration_version, section_name, status \
+             FROM public.pgmt_migrations_sections ORDER BY migration_version",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (1000, "default".to_string(), "completed".to_string()),
+                (1100, "default".to_string(), "completed".to_string()),
+                (1200, "default".to_string(), "completed".to_string()),
+            ],
+            "every legacy main row gets one synthetic default completed section"
+        );
+
+        // Idempotent: a second evolve does not duplicate the synthetic rows.
+        ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.pgmt_migrations_sections")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 3, "backfill is one-time, not repeated per evolve");
     })
     .await;
 }

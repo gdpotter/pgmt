@@ -65,17 +65,18 @@ async fn consumed_cursor(pool: &sqlx::PgPool) -> Result<Option<i64>> {
     )
 }
 
-/// Whether the baseline row at `version` carries a `crossed_at` mark — the
-/// ledger record that a crossing consumed it (vs. a provision-applied row).
-async fn baseline_crossed_at_set(pool: &sqlx::PgPool, version: u64) -> Result<bool> {
+/// Whether a baseline main row exists at `version` — the ledger record that a
+/// crossing consumed the re-anchor. Its section rows (if any) carry the trace of
+/// what the crossing relabeled; zero section rows means it processed no local
+/// work. There is no marker column — the row itself is the record.
+async fn baseline_row_exists(pool: &sqlx::PgPool, version: u64) -> Result<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT crossed_at IS NOT NULL FROM public.pgmt_migrations \
-         WHERE is_baseline AND version = $1",
+        "SELECT EXISTS(SELECT 1 FROM public.pgmt_migrations \
+         WHERE is_baseline AND version = $1)",
     )
     .bind(version as i64)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or(false))
+    .fetch_one(pool)
+    .await?)
 }
 
 /// The `(section_name, status)` rows recorded against the baseline at
@@ -190,10 +191,10 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
             "the consumed re-anchor's baseline row seeds the cursor"
         );
         // The consumption is recorded in the ledger: the re-anchor's baseline
-        // main row is marked crossed, and its source-held remap sections
-        // (source = the base) record `satisfied` — the crossing relabeled
-        // them into app/analytics, nothing ran.
-        assert!(baseline_crossed_at_set(&pool, re_anchor_version).await?);
+        // main row exists, and its source-held remap sections (source = the
+        // base) record `satisfied` — the crossing relabeled them into
+        // app/analytics, nothing ran.
+        assert!(baseline_row_exists(&pool, re_anchor_version).await?);
         assert_eq!(
             baseline_section_rows(&pool, re_anchor_version).await?,
             vec![
@@ -869,10 +870,10 @@ async fn test_irrelevant_re_anchor_advances_cursor() -> Result<()> {
             Some(re_anchor_version as i64),
             "…but the crossing is still consumed: its baseline row seeds the cursor"
         );
-        // Zero-trace: the consumption row is written (crossed_at set) but the
-        // crossing relabeled nothing this target holds, so it records NO
-        // section rows — no unrequested module names land in this database.
-        assert!(baseline_crossed_at_set(&pool, re_anchor_version).await?);
+        // Zero-trace: the consumption row is written but the crossing relabeled
+        // nothing this target holds, so it records NO section rows — no
+        // unrequested module names land in this database.
+        assert!(baseline_row_exists(&pool, re_anchor_version).await?);
         assert_eq!(
             baseline_section_rows(&pool, re_anchor_version).await?,
             Vec::<(String, String)>::new(),
@@ -886,9 +887,9 @@ async fn test_irrelevant_re_anchor_advances_cursor() -> Result<()> {
 }
 
 /// Set up a core-only target that has consumed an irrelevant re-anchor
-/// (analytics → reports at V): its baseline row at V carries `crossed_at` and
-/// zero section rows. Returns the re-anchor version and the analytics table
-/// name, leaving the caller to drive the follow-up (adopt or edit-then-adopt).
+/// (analytics → reports at V): its baseline row at V has zero section rows.
+/// Returns the re-anchor version, leaving the caller to drive the follow-up
+/// (adopt or edit-then-adopt).
 async fn cross_irrelevant_then_setup_adopt(helper: &CliTestHelper) -> Result<u64> {
     helper.init_project()?;
     let base = base_config(helper)?;
@@ -934,7 +935,7 @@ async fn cross_irrelevant_then_setup_adopt(helper: &CliTestHelper) -> Result<u64
         .success();
     let re_anchor_version = latest_baseline_version(helper)?;
 
-    // Bare apply: consume the irrelevant crossing (crossed_at, zero sections).
+    // Bare apply: consume the irrelevant crossing (zero-section baseline row).
     helper
         .command()
         .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
@@ -943,18 +944,18 @@ async fn cross_irrelevant_then_setup_adopt(helper: &CliTestHelper) -> Result<u64
     Ok(re_anchor_version)
 }
 
-/// Crossing THEN adoption through the same baseline upserts a single row where
-/// `crossed_at` and applied section rows coexist. The core-only target first
-/// crosses re-anchor V irrelevantly (crossed_at, zero sections); adopting
-/// `reports` from V later fills in its section row on the SAME main row —
-/// crossed_at survives (register-baseline is `ON CONFLICT DO NOTHING`), one
+/// Crossing THEN adoption through the same baseline upserts a single row: the
+/// consumption's baseline row and the later adopted section rows coexist. The
+/// core-only target first crosses re-anchor V irrelevantly (one baseline row,
+/// zero sections); adopting `reports` from V later fills in its section row on
+/// the SAME main row (register-baseline is `ON CONFLICT DO NOTHING`), one
 /// baseline row, its `reports` section now recorded.
 #[tokio::test]
 async fn test_crossing_then_adoption_coexist_on_one_row() -> Result<()> {
     with_cli_helper(async |helper| {
         let v = cross_irrelevant_then_setup_adopt(helper).await?;
         let pool = helper.connect_to_dev_db().await?;
-        assert!(baseline_crossed_at_set(&pool, v).await?);
+        assert!(baseline_row_exists(&pool, v).await?);
         assert!(baseline_section_rows(&pool, v).await?.is_empty());
 
         // Adopt reports from the crossed baseline. Its `reports` section
@@ -977,10 +978,11 @@ async fn test_crossing_then_adoption_coexist_on_one_row() -> Result<()> {
             subscription_modules(&pool).await?,
             vec!["core".to_string(), "reports".to_string()],
         );
-        // crossed_at survives the adoption's ON CONFLICT DO NOTHING upsert.
+        // The single baseline main row persists through the adoption's ON
+        // CONFLICT DO NOTHING upsert.
         assert!(
-            baseline_crossed_at_set(&pool, v).await?,
-            "crossed_at coexists with the adopted section rows"
+            baseline_row_exists(&pool, v).await?,
+            "the consumption's baseline row coexists with the adopted section rows"
         );
         let sections = baseline_section_rows(&pool, v).await?;
         assert!(

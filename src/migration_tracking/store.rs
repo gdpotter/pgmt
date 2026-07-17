@@ -5,9 +5,10 @@
 //!
 //! - the main table (`pgmt_migrations` by default) — version anchors: one row
 //!   per applied migration/baseline with its whole-file checksum. A baseline
-//!   row's `crossed_at` marks that a crossing consumed it (a re-anchor's
-//!   remaps were applied to the subscription); NULL on provision-applied-only
-//!   rows.
+//!   row with zero section rows is a version-level event that processed no
+//!   local work — either a crossing that consumed a re-anchor whose remaps
+//!   relabeled nothing this target holds, or a plain checkpoint that applied
+//!   no content here.
 //! - `{name}_sections` — the authoritative record of what actually ran: one
 //!   row per section with its per-section lifecycle status.
 //! - `{name}_modules` — the module subscription: which modules this target
@@ -148,8 +149,8 @@ impl TrackingStore {
     ///
     /// This is content coverage, so it is strictly section-based: a baseline
     /// counts only if it has at least one section row and all of them are
-    /// covered. A crossing-only row (a consumed re-anchor with `crossed_at`
-    /// set and ZERO section rows) applied no content and must NOT count here —
+    /// covered. A zero-section baseline row (a consumed re-anchor that relabeled
+    /// nothing this target holds) applied no content and must NOT count here —
     /// otherwise its zero non-covered sections would vacuously satisfy the
     /// "all covered" test and inflate the coverage floor. The consumed-through
     /// cursor is the separate concept that treats that row as load-bearing
@@ -235,38 +236,21 @@ impl TrackingStore {
     /// table: `(version, description, applied_at, incomplete_count,
     /// is_baseline, consumed_re_anchor)`, version-ordered. `incomplete_count`
     /// is the number of the version's section rows that are not covered
-    /// (in-progress or failed). `consumed_re_anchor` is true for a baseline
-    /// row a crossing consumed that applied no content here (crossed with zero
-    /// section rows) — status renders it as consumed, not applied, so a
+    /// (in-progress or failed). `consumed_re_anchor` is true for a baseline row
+    /// with zero section rows — a version-level event that applied no content
+    /// here (a crossing consumed a re-anchor whose remaps relabeled nothing this
+    /// target holds). Status renders it as consumed, not applied, so a
     /// zero-trace re-tag crossing doesn't masquerade as provisioned content.
     pub async fn migration_listing(&self) -> Result<Vec<(i64, String, String, i64, bool, bool)>> {
-        // Status is read-only and never evolves the schema, so an old main
-        // table may predate `crossed_at`. Probe for it and fall back to a
-        // literal FALSE (no crossings can have run without the column).
-        let has_crossed_at: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_attribute
-             WHERE attrelid = $1::regclass AND attname = 'crossed_at' AND NOT attisdropped)",
-        )
-        .bind(&self.main)
-        .fetch_one(&self.pool)
-        .await?;
-        let (consumed_expr, crossed_group) = if has_crossed_at {
-            (
-                "(m.crossed_at IS NOT NULL AND COUNT(s.section_name) = 0)",
-                ", m.crossed_at",
-            )
-        } else {
-            ("FALSE", "")
-        };
         let rows = sqlx::query_as(&format!(
             "SELECT m.version, m.description, m.applied_at::TEXT,
                     COUNT(s.section_name) FILTER (WHERE NOT ({cov})) AS incomplete,
                     m.is_baseline,
-                    {consumed_expr} AS consumed_re_anchor
+                    (m.is_baseline AND COUNT(s.section_name) = 0) AS consumed_re_anchor
              FROM {main} m
              LEFT JOIN {sections} s
                ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
-             GROUP BY m.version, m.is_baseline, m.description, m.applied_at{crossed_group}
+             GROUP BY m.version, m.is_baseline, m.description, m.applied_at
              ORDER BY m.version",
             main = self.main,
             sections = self.sections,
@@ -391,14 +375,16 @@ impl TrackingStore {
     }
 
     /// Record that this target consumed the re-anchor at `version`: upsert its
-    /// baseline main row with the file `checksum` and a `crossed_at` mark.
-    /// Consumption is a what-happened fact, recorded where they live. On a
-    /// fresh row this inserts checksum + crossed_at; on a row a provision or
-    /// adoption already wrote, it stamps crossed_at. Either way the stored
-    /// checksum MUST equal `checksum` — per-artifact immutability extends to
-    /// crossings, so an edited re-anchor is detectable against every target
-    /// that consumed it. Runs on the caller's executor (the crossing
-    /// transaction); a mismatch bails and the transaction rolls back.
+    /// baseline main row with the file `checksum`. Consumption is a
+    /// what-happened fact, recorded where they live — the baseline row itself is
+    /// the record; no marker column distinguishes it, and its zero (or
+    /// `satisfied`) section rows carry the trace of what the crossing relabeled.
+    /// On a row a provision or adoption already wrote, the upsert is a no-op that
+    /// preserves the existing row. Either way the stored checksum MUST equal
+    /// `checksum` — per-artifact immutability extends to crossings, so an edited
+    /// re-anchor is detectable against every target that consumed it. Runs on
+    /// the caller's executor (the crossing transaction); a mismatch bails and
+    /// the transaction rolls back.
     pub async fn record_crossing_consumption<'e>(
         &self,
         executor: impl sqlx::PgExecutor<'e>,
@@ -406,12 +392,13 @@ impl TrackingStore {
         checksum: &str,
     ) -> Result<()> {
         // The upsert returns the row's resulting checksum: our own on a fresh
-        // insert, the pre-existing one on conflict (we never overwrite it).
+        // insert, the pre-existing one on conflict (the self-assignment leaves
+        // it untouched but still returns the row).
         let stored: String = sqlx::query_scalar(&format!(
-            "INSERT INTO {main} (version, description, checksum, is_baseline, crossed_at)
-             VALUES ($1, 'baseline', $2, TRUE, NOW())
+            "INSERT INTO {main} (version, description, checksum, is_baseline)
+             VALUES ($1, 'baseline', $2, TRUE)
              ON CONFLICT (version, is_baseline)
-             DO UPDATE SET crossed_at = COALESCE({main}.crossed_at, NOW())
+             DO UPDATE SET checksum = {main}.checksum
              RETURNING checksum",
             main = self.main
         ))

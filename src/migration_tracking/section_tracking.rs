@@ -79,6 +79,20 @@ pub async fn ensure_section_tracking_table(
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
+    // Detect whether this evolve INTRODUCES section tracking: probe for the
+    // table before creating it. All production callers hold the migration
+    // advisory lock across this call, so the check-then-create-then-backfill
+    // sequence is atomic against every other writer — no crossing or evolve can
+    // interleave. Only the introducing evolve backfills synthetic legacy rows;
+    // once the table exists, a zero-section main row is a legitimate ledger
+    // state (a version-level event that processed no local work) and must never
+    // be backfilled.
+    let table_existed: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(&sections_table)
+        .fetch_one(pool)
+        .await
+        .context("Failed to probe for the section tracking table")?;
+
     sqlx::query(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS {} (
@@ -107,7 +121,7 @@ pub async fn ensure_section_tracking_table(
     .await
     .context("Failed to create section tracking table")?;
 
-    migrate_section_table_schema(pool, tracking_table, &sections_table).await?;
+    migrate_section_table_schema(pool, tracking_table, &sections_table, !table_existed).await?;
 
     // The stored module subscription is part of the same evolve step:
     // the tables arrive here so every apply/provision path that ensures the
@@ -139,6 +153,7 @@ async fn migrate_section_table_schema(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     sections_table: &str,
+    introduced: bool,
 ) -> Result<()> {
     let existing_columns: Vec<String> = sqlx::query_scalar(
         "SELECT attname::text FROM pg_attribute
@@ -200,29 +215,35 @@ async fn migrate_section_table_schema(
     )
     .await?;
 
-    backfill_synthetic_legacy_sections(pool, tracking_table, sections_table).await?;
+    if introduced {
+        backfill_synthetic_legacy_sections(pool, tracking_table, sections_table).await?;
+    }
 
     Ok(())
 }
 
-/// Give every legacy main-table row that has ZERO section rows one synthetic
-/// `default` completed section row.
+/// Give every main-table row present when section tracking was introduced one
+/// synthetic `default` completed section row.
 ///
-/// Before per-section tracking, "a main row with no section rows" *meant*
-/// "fully applied by an older pgmt" — an ABSENCE carrying meaning. That is
-/// fragile: module de-provisioning deletes section rows, which would make a
-/// module-only migration read as legacy-fully-applied. Materializing the
-/// implicit `default` section removes the heuristic: applied-ness is always a
-/// derived function of present section rows.
+/// A ONE-TIME upgrade action, run only by the evolve that *creates* the section
+/// table — never a standing per-row rule. Before per-section tracking, "a main
+/// row with no section rows" *meant* "fully applied by an older pgmt" — an
+/// ABSENCE carrying meaning. Materializing the implicit `default` section at the
+/// moment section tracking arrives removes that heuristic: from then on,
+/// applied-ness is a derived function of present section rows. At that instant
+/// every zero-section main row is legacy by definition, so all of them are
+/// materialized.
 ///
-/// A crossing-consumed baseline row (`crossed_at IS NOT NULL`) is exempt: it
-/// legitimately carries zero section rows when the crossing relabeled nothing
-/// the target holds (zero-trace). Backfilling a `default` completed row there
-/// would forge content this target never applied. Only genuine legacy rows
-/// (`crossed_at IS NULL`) with no sections are materialized.
+/// After introduction this never runs again, and it must not: every writer now
+/// registers its main row and section rows in ONE transaction, so a main row
+/// with zero section rows is a LEGITIMATE state — a version-level event that
+/// processed no local work (e.g. a crossing that consumed a re-anchor whose
+/// remaps relabeled nothing this target holds). Backfilling a `default`
+/// completed row onto such a row would forge content the target never applied.
 ///
-/// Idempotent via the `NOT EXISTS` guard; skipped when the main table is
-/// absent (the section table can be created before it).
+/// Skipped when the main table is absent (the section table can be created
+/// before it); the `NOT EXISTS` guard keeps the insert harmless if invoked
+/// against a partially-populated table.
 async fn backfill_synthetic_legacy_sections(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -244,8 +265,7 @@ async fn backfill_synthetic_legacy_sections(
               status, completed_at, attempts)
          SELECT m.version, m.is_baseline, 'default', 0, 'completed', m.applied_at, 0
          FROM {main} m
-         WHERE m.crossed_at IS NULL
-           AND NOT EXISTS (
+         WHERE NOT EXISTS (
              SELECT 1 FROM {sections} s
              WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline)",
         sections = sections_table,

@@ -312,7 +312,7 @@ impl ModuleRuntime {
     /// migration V), so wholeness has finalized.
     ///
     /// The consumption is a what-happened fact recorded like any other: the
-    /// re-anchor's own baseline main row (checksum + `crossed_at`), which
+    /// re-anchor's own baseline main row (with its checksum), which
     /// seeds the derived cursor so the re-anchor is never re-evaluated, plus
     /// zero-trace `satisfied` section rows for exactly the remap sections the
     /// crossing relabeled — those whose source the target holds. Irrelevant

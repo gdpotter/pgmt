@@ -258,11 +258,12 @@ async fn test_legacy_null_checksum_passes() -> Result<()> {
     .await
 }
 
-/// The schema evolve step adds the new columns to an old-shape sections table
-/// and materializes a synthetic 'default' completed section for every legacy
-/// main row with no section rows — eliminating the "zero section rows = fully
-/// applied" heuristic. The legacy migration must not re-run, and the evolve is
-/// idempotent.
+/// The genuine legacy upgrade: a target with a populated main table but NO
+/// section table (pre-per-section-tracking history). The introducing evolve
+/// creates the section table with all current columns and materializes a
+/// synthetic 'default' completed section for every existing main row —
+/// eliminating the "zero section rows = fully applied" heuristic. The legacy
+/// migration must not re-run, and the evolve is idempotent.
 #[tokio::test]
 async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
     with_cli_helper(async |helper| {
@@ -271,9 +272,9 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
         let migration_sql = "CREATE TABLE legacy_marker (id SERIAL PRIMARY KEY);";
         helper.write_migration_file("1000_legacy.sql", migration_sql)?;
 
-        // Build the pre-change tracking shape by hand: current main table, plus
-        // an OLD-shape sections table WITHOUT the new columns, and a main row
-        // with no section rows.
+        // Build the pre-per-section-tracking shape by hand: the main table with
+        // one applied row, and NO section table at all (the state before
+        // per-section tracking was introduced).
         let pool = helper.connect_to_dev_db().await?;
         let checksum = pgmt::migration_tracking::calculate_checksum(migration_sql);
         sqlx::query(
@@ -290,24 +291,6 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
         .execute(&pool)
         .await?;
         sqlx::query(
-            "CREATE TABLE public.pgmt_migrations_sections (
-                migration_version BIGINT NOT NULL,
-                is_baseline BOOLEAN NOT NULL,
-                section_name TEXT NOT NULL,
-                section_order INT NOT NULL,
-                status TEXT NOT NULL,
-                started_at TIMESTAMP WITH TIME ZONE,
-                completed_at TIMESTAMP WITH TIME ZONE,
-                attempts INT DEFAULT 0,
-                last_error TEXT,
-                rows_affected BIGINT,
-                duration_ms BIGINT,
-                PRIMARY KEY (migration_version, is_baseline, section_name)
-            )",
-        )
-        .execute(&pool)
-        .await?;
-        sqlx::query(
             "INSERT INTO public.pgmt_migrations (version, description, checksum, is_baseline)
              VALUES (1000, 'legacy', $1, FALSE)",
         )
@@ -316,7 +299,7 @@ async fn test_evolve_adds_columns_and_synthetic_rows() -> Result<()> {
         .await?;
         pool.close().await;
 
-        // Apply triggers the evolve + backfill.
+        // Apply triggers the introducing evolve + backfill.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])

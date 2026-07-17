@@ -34,11 +34,11 @@
 //! crossing consumes the re-anchor at version V it writes that re-anchor's own
 //! baseline main row — a what-happened fact recorded where what-happened facts
 //! live — carrying the file's checksum (which pins the consumed bytes, so an
-//! edited re-anchor is detectable against every target that consumed it) and a
-//! `crossed_at` mark. It also writes zero-trace `satisfied` section rows for
-//! exactly the remap sections it relabeled (those whose source the target
-//! holds); an irrelevant crossing that relabels nothing writes the main row
-//! and no section rows.
+//! edited re-anchor is detectable against every target that consumed it). It
+//! also writes zero-trace `satisfied` section rows for exactly the remap
+//! sections it relabeled (those whose source the target holds); an irrelevant
+//! crossing that relabels nothing writes the main row and no section rows — a
+//! legitimate version-level event that processed no local work.
 //!
 //! The **consumed-through cursor** is DERIVED from those load-bearing rows: the
 //! highest baseline version on the target, whether a provision applied it or a
