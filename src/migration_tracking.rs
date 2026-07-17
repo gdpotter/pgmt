@@ -101,6 +101,7 @@ pub async fn ensure_tracking_table_exists(
             checksum TEXT NOT NULL,
             applied_by TEXT DEFAULT CURRENT_USER,
             is_baseline BOOLEAN NOT NULL,
+            crossed_at TIMESTAMP WITH TIME ZONE,
             PRIMARY KEY (version, is_baseline)
         )
         "#,
@@ -220,6 +221,22 @@ async fn migrate_tracking_table_schema(
         .execute(pool)
         .await
         .with_context(|| format!("Failed to add applied_by to {}", tracking_table_name))?;
+    }
+
+    // `crossed_at` marks a baseline row a crossing consumed. NULL on a
+    // provision-applied-only row, set when a re-anchor's remaps are consumed.
+    // Nullable, no DEFAULT: a fresh insert leaves it NULL unless the writer is
+    // a crossing. It also distinguishes a legitimately section-less baseline
+    // row (a zero-trace crossing) from a crashed provision, so it must exist
+    // before the section-table backfill runs.
+    if !has("crossed_at") {
+        sqlx::query(&format!(
+            "ALTER TABLE {} ADD COLUMN crossed_at TIMESTAMP WITH TIME ZONE",
+            tracking_table_name
+        ))
+        .execute(pool)
+        .await
+        .with_context(|| format!("Failed to add crossed_at to {}", tracking_table_name))?;
     }
 
     // `is_baseline`: add nullable, backfill existing rows to FALSE (every existing

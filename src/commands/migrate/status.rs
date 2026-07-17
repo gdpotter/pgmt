@@ -82,14 +82,20 @@ async fn relation_exists(pool: &sqlx::PgPool, qualified: &str) -> Result<bool> {
     Ok(exists)
 }
 
-fn print_migration_listing(applied_migrations: &[(i64, String, String, i64, bool)]) {
+fn print_migration_listing(applied_migrations: &[(i64, String, String, i64, bool, bool)]) {
     if applied_migrations.is_empty() {
         println!("No migrations have been applied");
         return;
     }
     println!("Applied migrations:");
-    for (version, description, applied_at, incomplete, is_baseline) in applied_migrations {
-        if *incomplete > 0 {
+    for (version, description, applied_at, incomplete, is_baseline, consumed_re_anchor) in
+        applied_migrations
+    {
+        if *consumed_re_anchor {
+            // A re-anchor this target crossed but applied no content from: the
+            // remaps were consumed (subscription rewritten), nothing ran.
+            println!("  {} - {} (consumed re-anchor)", version, description);
+        } else if *incomplete > 0 {
             // Baselines can't be resumed by `migrate apply` (it never re-runs
             // baselines and skips versions <= a baseline's version); a
             // half-applied baseline resumes with `provision`.

@@ -76,7 +76,7 @@ async fn provision_inner(
 
     // The stored subscription is THE establishment source; the runtime
     // also carries the committed re-anchors so the shared apply loop can run
-    // the crossing loop for anything above the watermark.
+    // the crossing loop for any re-anchor above the derived cursor.
     let mut runtime =
         ModuleRuntime::load(pool, &config.migration.tracking_table, &baselines_dir).await?;
 
@@ -301,17 +301,16 @@ async fn provision_inner(
             )
             .await?;
 
-            // Provision NEVER crosses: record the subscription from
-            // what was provisioned and initialize the crossing watermark to
-            // the baseline's version — every re-anchor ≤ it is moot. Later
-            // re-anchors among the post-baseline migrations are ordinary
+            // Provision NEVER crosses: record the subscription from what was
+            // provisioned. The baseline row just laid down seeds the derived
+            // cursor to baseline.version, so every re-anchor ≤ it is moot;
+            // later re-anchors among the post-baseline migrations are ordinary
             // crossings for the shared apply loop below.
             runtime
                 .record_provisioned(
                     pool,
                     &config.migration.tracking_table,
                     &selection.named().cloned().unwrap_or_default(),
-                    Some(baseline.version),
                 )
                 .await?;
 
@@ -333,15 +332,14 @@ async fn provision_inner(
                 return Ok(());
             }
             println!("No baseline found; applying all migrations.");
-            // Subscribe the requested modules; no baseline exists, so there
-            // is no watermark to initialize (and no re-anchors either —
+            // Subscribe the requested modules; no baseline exists, so the
+            // derived cursor stays None (and there are no re-anchors either —
             // re-anchors are baselines).
             runtime
                 .record_provisioned(
                     pool,
                     &config.migration.tracking_table,
                     &selection.named().cloned().unwrap_or_default(),
-                    None,
                 )
                 .await?;
             apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await?;

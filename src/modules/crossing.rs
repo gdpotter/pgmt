@@ -41,6 +41,10 @@ pub(crate) struct RemapSection {
 #[derive(Debug, Clone)]
 pub(crate) struct ReAnchor {
     pub version: u64,
+    /// The committed baseline file, re-read at commit time to compute the
+    /// consumption checksum and select the source-held remap sections to
+    /// record `satisfied`.
+    pub path: std::path::PathBuf,
     /// Every provenance-cut remap section (one source apiece).
     pub remap_sections: Vec<RemapSection>,
     /// Modules that own at least one **plain** (non-remap) section in this
@@ -94,6 +98,7 @@ pub(crate) fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec
         let surviving_modules = sections.iter().filter_map(|s| s.module.clone()).collect();
         re_anchors.push(ReAnchor {
             version: baseline.version,
+            path: baseline.path.clone(),
             remap_sections,
             plain_modules,
             surviving_modules,
@@ -110,8 +115,8 @@ pub(crate) fn discover_re_anchors(baselines_dir: &std::path::Path) -> Result<Vec
 pub(crate) enum CrossingCheck {
     /// Wholeness holds: this is the subscription after the rewrite. May equal
     /// the input — a re-anchor whose sources are entirely outside the
-    /// subscription is still *crossed* (evaluated and consumed, watermark
-    /// advances), just not a mutation.
+    /// subscription is still *crossed* (evaluated and consumed, its baseline
+    /// row recorded), just not a mutation.
     Whole { rewritten: BTreeSet<String> },
     /// Wholeness fails (the strong membrane). The crossing cannot
     /// complete on this target.
@@ -275,9 +280,10 @@ pub(crate) fn evaluate_crossing(
 }
 
 /// A gate-passed crossing awaiting its commit (two-phase): the gate ran
-/// before version V's sections; the commit (subscription rewrite, watermark,
-/// event) runs after they complete — acquisition deltas live in migration V
-/// itself, so wholeness only finalizes once they've run.
+/// before version V's sections; the commit (subscription rewrite plus the
+/// baseline row that records the consumption) runs after they complete —
+/// acquisition deltas live in migration V itself, so wholeness only finalizes
+/// once they've run.
 #[derive(Debug, Clone)]
 pub struct PendingCrossing {
     pub(crate) version: u64,
@@ -307,6 +313,7 @@ mod tests {
     ) -> ReAnchor {
         ReAnchor {
             version,
+            path: std::path::PathBuf::from(format!("baseline_{version}.sql")),
             remap_sections: remap_sections
                 .iter()
                 .map(|(name, module, source)| RemapSection {

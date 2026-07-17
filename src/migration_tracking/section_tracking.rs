@@ -215,6 +215,12 @@ async fn migrate_section_table_schema(
 /// implicit `default` section removes the heuristic: applied-ness is always a
 /// derived function of present section rows.
 ///
+/// A crossing-consumed baseline row (`crossed_at IS NOT NULL`) is exempt: it
+/// legitimately carries zero section rows when the crossing relabeled nothing
+/// the target holds (zero-trace). Backfilling a `default` completed row there
+/// would forge content this target never applied. Only genuine legacy rows
+/// (`crossed_at IS NULL`) with no sections are materialized.
+///
 /// Idempotent via the `NOT EXISTS` guard; skipped when the main table is
 /// absent (the section table can be created before it).
 async fn backfill_synthetic_legacy_sections(
@@ -238,7 +244,8 @@ async fn backfill_synthetic_legacy_sections(
               status, completed_at, attempts)
          SELECT m.version, m.is_baseline, 'default', 0, 'completed', m.applied_at, 0
          FROM {main} m
-         WHERE NOT EXISTS (
+         WHERE m.crossed_at IS NULL
+           AND NOT EXISTS (
              SELECT 1 FROM {sections} s
              WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline)",
         sections = sections_table,

@@ -690,14 +690,15 @@ pub(crate) async fn apply_pending_migrations(
         reporter.migration_summary(duration, to_run.len());
 
         // Commit phase: version V's sections are done, so the gated
-        // crossing finalizes — subscription rewrite, watermark, event.
+        // crossing finalizes — subscription rewrite plus the ledger
+        // consumption row (baseline row + satisfied section rows).
         commit_pending!();
     }
 
     // Final sweep: every migration is settled, so consume any re-anchors
     // beyond the last migration. This is what makes a pure re-tag (a
     // re-anchor with no accompanying DDL) land on the next bare apply of a
-    // fully-up-to-date target — the loop keys off the watermark, not off
+    // fully-up-to-date target — the loop keys off the derived cursor, not off
     // pending migrations.
     runtime
         .cross_re_anchors_through(pool, &config.migration.tracking_table, None)

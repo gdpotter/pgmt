@@ -53,12 +53,42 @@ async fn subscription_modules(pool: &sqlx::PgPool) -> Result<Vec<String>> {
     )
 }
 
-async fn crossing_watermark(pool: &sqlx::PgPool) -> Result<Option<i64>> {
+/// The consumed-through cursor, derived from the ledger: the highest baseline
+/// version recorded on this target (provision-applied or crossing-consumed).
+/// This is what the crossing loop keys off — a crossing writes the re-anchor's
+/// baseline main row, advancing this; a blocked crossing writes nothing.
+async fn consumed_cursor(pool: &sqlx::PgPool) -> Result<Option<i64>> {
     Ok(
-        sqlx::query_scalar("SELECT crossing_watermark FROM public.pgmt_migrations_watermark")
-            .fetch_optional(pool)
+        sqlx::query_scalar("SELECT MAX(version) FROM public.pgmt_migrations WHERE is_baseline")
+            .fetch_one(pool)
             .await?,
     )
+}
+
+/// Whether the baseline row at `version` carries a `crossed_at` mark — the
+/// ledger record that a crossing consumed it (vs. a provision-applied row).
+async fn baseline_crossed_at_set(pool: &sqlx::PgPool, version: u64) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT crossed_at IS NOT NULL FROM public.pgmt_migrations \
+         WHERE is_baseline AND version = $1",
+    )
+    .bind(version as i64)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(false))
+}
+
+/// The `(section_name, status)` rows recorded against the baseline at
+/// `version` — a crossing writes `satisfied` rows only for the remap sections
+/// it relabeled (source held), and nothing for irrelevant ones (zero-trace).
+async fn baseline_section_rows(pool: &sqlx::PgPool, version: u64) -> Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT section_name, status FROM public.pgmt_migrations_sections \
+         WHERE is_baseline AND migration_version = $1 ORDER BY section_name",
+    )
+    .bind(version as i64)
+    .fetch_all(pool)
+    .await?)
 }
 
 async fn table_exists(pool: &sqlx::PgPool, table: &str) -> Result<bool> {
@@ -103,7 +133,7 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
             Vec::<String>::new(),
             "legacy target: empty subscription = base only"
         );
-        assert_eq!(crossing_watermark(&pool).await?, None);
+        assert_eq!(consumed_cursor(&pool).await?, None);
 
         // Modularize the existing files: a pure re-tag, no DDL.
         set_modules(
@@ -155,9 +185,22 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
             "the crossing rewrote the subscription through the remaps"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64),
-            "the watermark advanced to the consumed re-anchor"
+            "the consumed re-anchor's baseline row seeds the cursor"
+        );
+        // The consumption is recorded in the ledger: the re-anchor's baseline
+        // main row is marked crossed, and its source-held remap sections
+        // (source = the base) record `satisfied` — the crossing relabeled
+        // them into app/analytics, nothing ran.
+        assert!(baseline_crossed_at_set(&pool, re_anchor_version).await?);
+        assert_eq!(
+            baseline_section_rows(&pool, re_anchor_version).await?,
+            vec![
+                ("analytics".to_string(), "satisfied".to_string()),
+                ("app".to_string(), "satisfied".to_string()),
+            ],
+            "the crossing recorded satisfied rows for the relabeled baseline sections"
         );
         // Skipped means skipped: the module columns don't exist yet.
         let email_exists: bool = sqlx::query_scalar(
@@ -180,7 +223,7 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
             vec!["analytics".to_string(), "app".to_string()]
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64)
         );
 
@@ -274,7 +317,7 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
         let pool = helper.connect_to_dev_db().await?;
         assert_eq!(subscription_modules(&pool).await?, vec!["app".to_string()]);
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(provision_baseline as i64),
             "provision never crosses — it initializes the watermark to its baseline's version"
         );
@@ -319,7 +362,7 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
             vec!["app".to_string(), "metrics".to_string()]
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64)
         );
 
@@ -412,7 +455,7 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             "a blocked crossing mutates nothing"
         );
         assert_ne!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64),
             "a blocked crossing does not advance the watermark"
         );
@@ -441,7 +484,7 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             "a survives (still owns x); b adopted then carried through the crossing"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64)
         );
 
@@ -595,7 +638,7 @@ async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
             "demoted module drops out; its objects are base now"
         );
         assert_eq!(
-            crossing_watermark(&pool1).await?,
+            consumed_cursor(&pool1).await?,
             Some(re_anchor_version as i64)
         );
         let note_exists: bool = sqlx::query_scalar(
@@ -645,7 +688,7 @@ async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
         .await?;
         assert!(note_exists, "the later base migration flowed through");
         assert_eq!(
-            crossing_watermark(&pool2).await?,
+            consumed_cursor(&pool2).await?,
             Some(re_anchor_version as i64)
         );
         assert_eq!(
@@ -756,11 +799,12 @@ async fn test_status_on_pre_subscription_target_is_read_only() -> Result<()> {
 }
 
 /// An irrelevant re-anchor (its sources entirely outside the target's
-/// subscription) is still CROSSED on a subset target: the watermark advances
-/// and a crossing event is recorded, but the subscription is untouched —
-/// crossing means evaluated-and-consumed, not mutated.
+/// subscription) is still CROSSED on a subset target: its baseline row is
+/// recorded (advancing the derived cursor) but with zero section rows, and the
+/// subscription is untouched — crossing means evaluated-and-consumed, not
+/// mutated.
 #[tokio::test]
-async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
+async fn test_irrelevant_re_anchor_advances_cursor() -> Result<()> {
     with_cli_helper(async |helper| {
         helper.init_project()?;
         let base = base_config(helper)?;
@@ -821,12 +865,178 @@ async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
             "irrelevant remap: subscription unchanged"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64),
-            "…but the crossing is still consumed: the watermark advances"
+            "…but the crossing is still consumed: its baseline row seeds the cursor"
+        );
+        // Zero-trace: the consumption row is written (crossed_at set) but the
+        // crossing relabeled nothing this target holds, so it records NO
+        // section rows — no unrequested module names land in this database.
+        assert!(baseline_crossed_at_set(&pool, re_anchor_version).await?);
+        assert_eq!(
+            baseline_section_rows(&pool, re_anchor_version).await?,
+            Vec::<(String, String)>::new(),
+            "irrelevant crossing writes the main row and zero section rows"
         );
 
         pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Set up a core-only target that has consumed an irrelevant re-anchor
+/// (analytics → reports at V): its baseline row at V carries `crossed_at` and
+/// zero section rows. Returns the re-anchor version and the analytics table
+/// name, leaving the caller to drive the follow-up (adopt or edit-then-adopt).
+async fn cross_irrelevant_then_setup_adopt(helper: &CliTestHelper) -> Result<u64> {
+    helper.init_project()?;
+    let base = base_config(helper)?;
+    set_modules(
+        helper,
+        &base,
+        "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  analytics:\n    paths: [\"schema/an/**\"]\n",
+    )?;
+    helper.write_schema_file("core/c.sql", "CREATE TABLE c (id SERIAL PRIMARY KEY);")?;
+    helper.write_schema_file("an/e.sql", "CREATE TABLE e (id SERIAL PRIMARY KEY);")?;
+    helper
+        .command()
+        .args(["migrate", "new", "initial"])
+        .assert()
+        .success();
+    helper
+        .command()
+        .args([
+            "migrate",
+            "provision",
+            "--target-url",
+            &helper.dev_database_url,
+            "--modules",
+            "core",
+        ])
+        .assert()
+        .success();
+
+    // Re-tag analytics → reports: a re-anchor whose source (analytics) the
+    // core-only target never had.
+    std::fs::remove_file(helper.project_root.join("schema/an/e.sql"))?;
+    helper.write_schema_file("rp/e.sql", "CREATE TABLE e (id SERIAL PRIMARY KEY);")?;
+    set_modules(
+        helper,
+        &base,
+        "\nmodules:\n  core:\n    paths: [\"schema/core/**\"]\n  reports:\n    paths: [\"schema/rp/**\"]\n",
+    )?;
+    next_version_tick();
+    helper
+        .command()
+        .args(["migrate", "new", "rename_analytics", "--create-baseline"])
+        .assert()
+        .success();
+    let re_anchor_version = latest_baseline_version(helper)?;
+
+    // Bare apply: consume the irrelevant crossing (crossed_at, zero sections).
+    helper
+        .command()
+        .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+        .assert()
+        .success();
+    Ok(re_anchor_version)
+}
+
+/// Crossing THEN adoption through the same baseline upserts a single row where
+/// `crossed_at` and applied section rows coexist. The core-only target first
+/// crosses re-anchor V irrelevantly (crossed_at, zero sections); adopting
+/// `reports` from V later fills in its section row on the SAME main row —
+/// crossed_at survives (register-baseline is `ON CONFLICT DO NOTHING`), one
+/// baseline row, its `reports` section now recorded.
+#[tokio::test]
+async fn test_crossing_then_adoption_coexist_on_one_row() -> Result<()> {
+    with_cli_helper(async |helper| {
+        let v = cross_irrelevant_then_setup_adopt(helper).await?;
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(baseline_crossed_at_set(&pool, v).await?);
+        assert!(baseline_section_rows(&pool, v).await?.is_empty());
+
+        // Adopt reports from the crossed baseline. Its `reports` section
+        // (remaps="analytics", a source this target lacks) runs as ordinary
+        // DDL and records a covered row on the SAME baseline main row.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "reports",
+            ])
+            .assert()
+            .success();
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["core".to_string(), "reports".to_string()],
+        );
+        // crossed_at survives the adoption's ON CONFLICT DO NOTHING upsert.
+        assert!(
+            baseline_crossed_at_set(&pool, v).await?,
+            "crossed_at coexists with the adopted section rows"
+        );
+        let sections = baseline_section_rows(&pool, v).await?;
+        assert!(
+            sections.iter().any(|(name, status)| name == "reports"
+                && (status == "completed" || status == "satisfied")),
+            "the adopted reports section is recorded on the crossed row: {sections:?}"
+        );
+        // Still exactly one baseline main row at V.
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.pgmt_migrations WHERE is_baseline AND version = $1",
+        )
+        .bind(v as i64)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(count, 1, "one row, upserted — not two");
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// A consumed re-anchor is immutable: after a crossing recorded its checksum,
+/// editing the baseline file and then adopting a module through it is
+/// rejected — the recorded bytes are pinned so every target that crossed it
+/// agrees on what moved.
+#[tokio::test]
+async fn test_edited_re_anchor_after_consumption_is_rejected() -> Result<()> {
+    with_cli_helper(async |helper| {
+        let v = cross_irrelevant_then_setup_adopt(helper).await?;
+
+        // Edit the consumed baseline file: append a comment so its checksum
+        // changes without altering the SQL's meaning.
+        let baseline_path = helper
+            .project_root
+            .join(format!("schema_baselines/baseline_{v}.sql"));
+        let mut contents = std::fs::read_to_string(&baseline_path)?;
+        contents.push_str("\n-- edited after consumption\n");
+        std::fs::write(&baseline_path, contents)?;
+
+        // Adopting reports re-reads the baseline and validates it against the
+        // checksum the crossing recorded → refuses.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "reports",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("modified").or(predicate::str::contains("edited")));
+
         Ok(())
     })
     .await
@@ -944,7 +1154,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             "commit: c subscribed, absorbed a and b removed"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64)
         );
 
@@ -974,7 +1184,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             .success();
         assert_eq!(subscription_modules(&pool).await?, vec!["c".to_string()]);
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64)
         );
 
@@ -993,7 +1203,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             "both sources whole -> c subscribed, absorbed a and b removed"
         );
         assert_eq!(
-            crossing_watermark(&both_pool).await?,
+            consumed_cursor(&both_pool).await?,
             Some(re_anchor_version as i64)
         );
         let both_statuses: Vec<String> = sqlx::query_scalar(
@@ -1097,7 +1307,7 @@ async fn test_fresh_provision_from_re_anchor_runs_all_sections() -> Result<()> {
 
         // Provision never crosses: it initializes the watermark directly.
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64),
             "provision initializes the watermark to the baseline's version"
         );
@@ -1277,11 +1487,11 @@ async fn test_move_plus_alter_converges_both_ways() -> Result<()> {
             "source-less target: acquisition CREATE + ALTER ran"
         );
         assert_eq!(
-            crossing_watermark(&pool1).await?,
+            consumed_cursor(&pool1).await?,
             Some(re_anchor_version as i64)
         );
         assert_eq!(
-            crossing_watermark(&pool2).await?,
+            consumed_cursor(&pool2).await?,
             Some(re_anchor_version as i64)
         );
         pool1.close().await;
@@ -1481,7 +1691,7 @@ async fn test_cross_module_drop_behind_baseline_is_inert() -> Result<()> {
             "billing kept invoices (only the FK went away)"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             None,
             "a plain checkpoint baseline is inert — it is never a crossing"
         );
@@ -1605,7 +1815,7 @@ async fn test_split_behind_finishes_source_sections_before_crossing() -> Result<
             "the crossing at V auto-subscribed the brand-new metrics"
         );
         assert_eq!(
-            crossing_watermark(&pool).await?,
+            consumed_cursor(&pool).await?,
             Some(re_anchor_version as i64),
             "the watermark advanced to V once app's sections ≤ V were settled"
         );

@@ -1,17 +1,22 @@
 //! The migration-tracking query surface.
 //!
 //! Every SQL statement that reads or writes pgmt's tracking tables is a
-//! method on [`TrackingStore`]. The tables:
+//! method on [`TrackingStore`]. Three tables:
 //!
 //! - the main table (`pgmt_migrations` by default) — version anchors: one row
-//!   per applied migration/baseline with its whole-file checksum.
+//!   per applied migration/baseline with its whole-file checksum. A baseline
+//!   row's `crossed_at` marks that a crossing consumed it (a re-anchor's
+//!   remaps were applied to the subscription); NULL on provision-applied-only
+//!   rows.
 //! - `{name}_sections` — the authoritative record of what actually ran: one
 //!   row per section with its per-section lifecycle status.
 //! - `{name}_modules` — the module subscription: which modules this target
 //!   has established.
-//! - `{name}_watermark` — the re-anchor consumption cursor (the *crossing*
-//!   watermark; not the applied-baseline coverage watermark, which is
-//!   computed from section rows).
+//!
+//! The re-anchor consumption cursor is NOT a stored value: it is derived as
+//! the highest baseline version in the main table (provision-applied and
+//! crossing-consumed rows alike). Distinct from the applied-baseline coverage
+//! watermark, which is computed from section rows.
 //!
 //! The store owns a pool handle and every table identity, formatted ONCE from
 //! the [`TrackingTable`] config at construction. Consumers never hand-format
@@ -30,6 +35,7 @@
 //! populated database.
 
 use crate::config::types::TrackingTable;
+use crate::migration::section_parser::MigrationSection;
 use crate::migration_tracking::section_tracking::SectionStatus;
 use crate::migration_tracking::{format_tracking_table_name, version_from_db, version_to_db};
 use crate::modules::{Subscription, SubscriptionSource};
@@ -49,8 +55,6 @@ pub struct TrackingStore {
     sections: String,
     /// `"schema"."name_modules"` — the stored module subscription.
     modules: String,
-    /// `"schema"."name_watermark"` — the crossing watermark (single row).
-    watermark: String,
 }
 
 impl TrackingStore {
@@ -70,7 +74,6 @@ impl TrackingStore {
             main,
             sections: suffixed("sections"),
             modules: suffixed("modules"),
-            watermark: suffixed("watermark"),
         })
     }
 
@@ -143,13 +146,25 @@ impl TrackingStore {
     /// version all of whose registered sections are covered, or `None`. A
     /// crashed baseline (a non-covered section) does not count.
     ///
-    /// The crossing-watermark fallback for targets provisioned before the
-    /// subscription tables existed, and the coverage floor adoption uses to
-    /// decide whether the established modules are caught up.
+    /// This is content coverage, so it is strictly section-based: a baseline
+    /// counts only if it has at least one section row and all of them are
+    /// covered. A crossing-only row (a consumed re-anchor with `crossed_at`
+    /// set and ZERO section rows) applied no content and must NOT count here —
+    /// otherwise its zero non-covered sections would vacuously satisfy the
+    /// "all covered" test and inflate the coverage floor. The consumed-through
+    /// cursor is the separate concept that treats that row as load-bearing
+    /// ([`Self::consumed_through_cursor`]).
+    ///
+    /// Used as the coverage floor adoption consults to decide whether the
+    /// established modules are caught up.
     pub async fn applied_baseline_watermark(&self) -> Result<Option<u64>> {
         let watermark: Option<i64> = sqlx::query_scalar(&format!(
             "SELECT MAX(m.version) FROM {main} m
-             WHERE m.is_baseline AND NOT EXISTS (
+             WHERE m.is_baseline
+               AND EXISTS (
+                 SELECT 1 FROM {sections} s
+                 WHERE s.is_baseline AND s.migration_version = m.version)
+               AND NOT EXISTS (
                  SELECT 1 FROM {sections} s
                  WHERE s.is_baseline AND s.migration_version = m.version
                    AND NOT ({cov}))",
@@ -218,17 +233,40 @@ impl TrackingStore {
 
     /// The "applied migrations" listing on a target that HAS the section
     /// table: `(version, description, applied_at, incomplete_count,
-    /// is_baseline)`, version-ordered. `incomplete_count` is the number of the
-    /// version's section rows that are not covered (in-progress or failed).
-    pub async fn migration_listing(&self) -> Result<Vec<(i64, String, String, i64, bool)>> {
+    /// is_baseline, consumed_re_anchor)`, version-ordered. `incomplete_count`
+    /// is the number of the version's section rows that are not covered
+    /// (in-progress or failed). `consumed_re_anchor` is true for a baseline
+    /// row a crossing consumed that applied no content here (crossed with zero
+    /// section rows) — status renders it as consumed, not applied, so a
+    /// zero-trace re-tag crossing doesn't masquerade as provisioned content.
+    pub async fn migration_listing(&self) -> Result<Vec<(i64, String, String, i64, bool, bool)>> {
+        // Status is read-only and never evolves the schema, so an old main
+        // table may predate `crossed_at`. Probe for it and fall back to a
+        // literal FALSE (no crossings can have run without the column).
+        let has_crossed_at: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_attribute
+             WHERE attrelid = $1::regclass AND attname = 'crossed_at' AND NOT attisdropped)",
+        )
+        .bind(&self.main)
+        .fetch_one(&self.pool)
+        .await?;
+        let (consumed_expr, crossed_group) = if has_crossed_at {
+            (
+                "(m.crossed_at IS NOT NULL AND COUNT(s.section_name) = 0)",
+                ", m.crossed_at",
+            )
+        } else {
+            ("FALSE", "")
+        };
         let rows = sqlx::query_as(&format!(
             "SELECT m.version, m.description, m.applied_at::TEXT,
                     COUNT(s.section_name) FILTER (WHERE NOT ({cov})) AS incomplete,
-                    m.is_baseline
+                    m.is_baseline,
+                    {consumed_expr} AS consumed_re_anchor
              FROM {main} m
              LEFT JOIN {sections} s
                ON s.migration_version = m.version AND s.is_baseline = m.is_baseline
-             GROUP BY m.version, m.is_baseline, m.description, m.applied_at
+             GROUP BY m.version, m.is_baseline, m.description, m.applied_at{crossed_group}
              ORDER BY m.version",
             main = self.main,
             sections = self.sections,
@@ -241,8 +279,12 @@ impl TrackingStore {
 
     /// The "applied migrations" listing on a LEGACY target (main table, no
     /// section table): every recorded version is treated as fully applied
-    /// (`incomplete_count` = 0). Read-only status never evolves the schema.
-    pub async fn migration_listing_legacy(&self) -> Result<Vec<(i64, String, String, i64, bool)>> {
+    /// (`incomplete_count` = 0). Read-only status never evolves the schema. No
+    /// section table means no crossing has ever run here, so no row is a
+    /// consumed re-anchor.
+    pub async fn migration_listing_legacy(
+        &self,
+    ) -> Result<Vec<(i64, String, String, i64, bool, bool)>> {
         let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(&format!(
             "SELECT version, description, applied_at::TEXT, is_baseline FROM {} ORDER BY version",
             self.main
@@ -251,7 +293,7 @@ impl TrackingStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(v, d, a, b)| (v, d, a, 0, b))
+            .map(|(v, d, a, b)| (v, d, a, 0, b, false))
             .collect())
     }
 
@@ -296,16 +338,17 @@ impl TrackingStore {
     //
     // "Which modules does this target have?" is target state — the same
     // species of fact as "which migrations ran" — so establishment is stored
-    // in two tables beside the tracking table (`_modules`, `_watermark`),
-    // never derived. Read methods run on the pool; writers take an
-    // `impl PgExecutor` so a caller can run them inside its own
-    // crossing/provision transaction.
+    // in the `_modules` table beside the tracking table, never derived. The
+    // re-anchor consumption cursor is NOT stored: it is derived from the
+    // baseline main rows ([`Self::consumed_through_cursor`]). Read methods run
+    // on the pool; writers take an `impl PgExecutor` so a caller can run them
+    // inside its own crossing/provision transaction.
 
-    /// Create the subscription tables if absent (idempotent). Part of the
-    /// "migrate the migrator" evolve step; safe to call repeatedly. These
-    /// tables are born in their current shape, so there is no column back-fill
-    /// (yet) — future shape changes add guarded `ALTER`s here, exactly like
-    /// the other tracking tables.
+    /// Create the subscription table if absent (idempotent). Part of the
+    /// "migrate the migrator" evolve step; safe to call repeatedly. Born in its
+    /// current shape, so there is no column back-fill (yet) — future shape
+    /// changes add guarded `ALTER`s here, exactly like the other tracking
+    /// tables.
     ///
     /// `{name}_modules` is the current module set: one row per subscribed
     /// module. Empty = base only (correct for both a legacy target and a
@@ -325,22 +368,110 @@ impl TrackingStore {
         .await
         .with_context(|| format!("Failed to create subscription table {}", self.modules))?;
 
-        // Single-row crossing watermark: an explicit stored value, never
-        // derived. The CHECK pins it to one row; a missing row means "no
-        // crossing consumed yet" (a pre-subscription / legacy target).
-        sqlx::query(&format!(
-            r#"CREATE TABLE IF NOT EXISTS {watermark} (
-                singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,
-                crossing_watermark BIGINT NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                CHECK (singleton)
-            )"#,
-            watermark = self.watermark
-        ))
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("Failed to create watermark table {}", self.watermark))?;
+        Ok(())
+    }
 
+    /// The re-anchor consumed-through cursor: the highest baseline version
+    /// recorded on this target, whether a provision applied it or a crossing
+    /// consumed it (both write a baseline main row). Re-anchors at or below
+    /// this are consumed or moot; the crossing loop keys off re-anchors
+    /// strictly above it. `None` = no baseline row (a legacy target that has
+    /// never provisioned or crossed). This is a DERIVED value — the cursor is
+    /// not stored, so provision seeding it is just another baseline row, not a
+    /// special rule.
+    pub async fn consumed_through_cursor(&self) -> Result<Option<u64>> {
+        let cursor: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT MAX(version) FROM {} WHERE is_baseline = TRUE",
+            self.main
+        ))
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to read the consumed-through cursor")?;
+        Ok(cursor.map(version_from_db))
+    }
+
+    /// Record that this target consumed the re-anchor at `version`: upsert its
+    /// baseline main row with the file `checksum` and a `crossed_at` mark.
+    /// Consumption is a what-happened fact, recorded where they live. On a
+    /// fresh row this inserts checksum + crossed_at; on a row a provision or
+    /// adoption already wrote, it stamps crossed_at. Either way the stored
+    /// checksum MUST equal `checksum` — per-artifact immutability extends to
+    /// crossings, so an edited re-anchor is detectable against every target
+    /// that consumed it. Runs on the caller's executor (the crossing
+    /// transaction); a mismatch bails and the transaction rolls back.
+    pub async fn record_crossing_consumption<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+        version: u64,
+        checksum: &str,
+    ) -> Result<()> {
+        // The upsert returns the row's resulting checksum: our own on a fresh
+        // insert, the pre-existing one on conflict (we never overwrite it).
+        let stored: String = sqlx::query_scalar(&format!(
+            "INSERT INTO {main} (version, description, checksum, is_baseline, crossed_at)
+             VALUES ($1, 'baseline', $2, TRUE, NOW())
+             ON CONFLICT (version, is_baseline)
+             DO UPDATE SET crossed_at = COALESCE({main}.crossed_at, NOW())
+             RETURNING checksum",
+            main = self.main
+        ))
+        .bind(version_to_db(version)?)
+        .bind(checksum)
+        .fetch_one(executor)
+        .await
+        .with_context(|| format!("Failed to record consumption of re-anchor {version}"))?;
+
+        if stored != checksum {
+            anyhow::bail!(
+                "re-anchor {version} was edited after it was consumed here.\n\
+                 Recorded checksum: {stored}\n\
+                 Current file:      {checksum}\n\n\
+                 A consumed re-anchor is immutable — its remap instructions are pinned so \
+                 every target that crossed it agrees on what moved. Restore \
+                 baseline_{version}.sql to the consumed content, or reset this target and \
+                 re-provision from the current baseline."
+            );
+        }
+        Ok(())
+    }
+
+    /// Record `sections` of the baseline at `version` as `satisfied` on the
+    /// caller's connection (the crossing transaction): a remap section whose
+    /// source the target already holds, so nothing ran — the objects are
+    /// present under the source's name and the crossing relabeled them.
+    /// Insert-then-mark; an existing row keeps its status (a completed section
+    /// is never demoted). Takes `&mut PgConnection` because each section needs
+    /// two statements sharing the transaction.
+    pub async fn record_sections_satisfied(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        version: u64,
+        is_baseline: bool,
+        sections: &[(i32, MigrationSection)],
+    ) -> Result<()> {
+        for (order, section) in sections {
+            crate::migration_tracking::section_tracking::insert_pending_section(
+                &mut *conn,
+                &self.sections,
+                version,
+                is_baseline,
+                *order,
+                section,
+            )
+            .await?;
+            sqlx::query(&format!(
+                "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
+                 WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
+                   AND status = 'pending'",
+                self.sections
+            ))
+            .bind(SectionStatus::Satisfied.as_str())
+            .bind(version_to_db(version)?)
+            .bind(is_baseline)
+            .bind(&section.name)
+            .execute(&mut *conn)
+            .await?;
+        }
         Ok(())
     }
 
@@ -354,9 +485,10 @@ impl TrackingStore {
         Ok(exists)
     }
 
-    /// Load the stored subscription (module set + explicit watermark). Assumes
-    /// the tables exist; read-only callers guard with
-    /// [`Self::subscription_tables_exist`] first.
+    /// Load the stored subscription (the module set). Assumes the table
+    /// exists; read-only callers guard with [`Self::subscription_tables_exist`]
+    /// first. The consumed-through cursor is not part of this — it is derived
+    /// via [`Self::consumed_through_cursor`].
     pub async fn load_subscription(&self) -> Result<Subscription> {
         let modules: Vec<String> =
             sqlx::query_scalar(&format!("SELECT module FROM {}", self.modules))
@@ -364,17 +496,8 @@ impl TrackingStore {
                 .await
                 .context("Failed to read the module subscription")?;
 
-        let watermark: Option<i64> = sqlx::query_scalar(&format!(
-            "SELECT crossing_watermark FROM {} LIMIT 1",
-            self.watermark
-        ))
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to read the crossing watermark")?;
-
         Ok(Subscription {
             modules: modules.into_iter().collect(),
-            watermark: watermark.map(version_from_db),
         })
     }
 
@@ -411,27 +534,6 @@ impl TrackingStore {
             .execute(executor)
             .await
             .with_context(|| format!("Failed to unsubscribe module '{module}'"))?;
-        Ok(())
-    }
-
-    /// Set the crossing watermark to `version` (upsert the single row). Runs
-    /// on the caller's executor.
-    pub async fn set_watermark<'e>(
-        &self,
-        executor: impl sqlx::PgExecutor<'e>,
-        version: u64,
-    ) -> Result<()> {
-        sqlx::query(&format!(
-            "INSERT INTO {} (singleton, crossing_watermark, updated_at)
-             VALUES (TRUE, $1, NOW())
-             ON CONFLICT (singleton)
-             DO UPDATE SET crossing_watermark = EXCLUDED.crossing_watermark, updated_at = NOW()",
-            self.watermark
-        ))
-        .bind(version_to_db(version)?)
-        .execute(executor)
-        .await
-        .context("Failed to set the crossing watermark")?;
         Ok(())
     }
 }

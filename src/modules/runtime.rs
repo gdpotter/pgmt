@@ -37,9 +37,6 @@ impl SubscriptionSource {
 pub struct Subscription {
     /// Subscribed modules (the base is always established and never listed).
     pub modules: BTreeSet<String>,
-    /// The re-anchor crossing watermark. `None` = no crossing consumed yet
-    /// (a legacy / pre-subscription target).
-    pub watermark: Option<u64>,
 }
 
 /// Serialize a module set for display: a comma-joined sorted list, or the
@@ -85,8 +82,6 @@ pub struct ModuleRuntime {
     /// Private so the doc invariant "mutated only through methods" is
     /// enforced; read via [`Self::established`].
     established: BTreeSet<String>,
-    /// The crossing watermark: re-anchors `≤` it are consumed or moot.
-    watermark: Option<u64>,
     /// All committed re-anchors, version-ascending.
     re_anchors: Vec<ReAnchor>,
     /// The latest committed baseline's `(version, sections)` — the only
@@ -102,12 +97,12 @@ impl ModuleRuntime {
         &self.established
     }
 
-    /// Load the stored subscription and the committed re-anchors. For a
-    /// target whose rows predate the subscription tables' watermark (a
-    /// pre-subscription provision), fall back to the target's honest applied-
-    /// baseline watermark: provisioning from baseline W lands directly in W's
-    /// world, so every re-anchor ≤ W is moot — the fallback
-    /// reconstructs exactly that.
+    /// Load the stored subscription and the committed re-anchors. The
+    /// consumed-through cursor is not loaded here — it is derived from the
+    /// baseline main rows whenever the crossing loop needs it, so a
+    /// pre-subscription target (rows but no `_modules` table yet) needs no
+    /// special reconstruction: its provision baseline row seeds the cursor
+    /// natively.
     pub async fn load(
         pool: &sqlx::PgPool,
         tracking_table: &crate::config::types::TrackingTable,
@@ -115,10 +110,6 @@ impl ModuleRuntime {
     ) -> Result<Self> {
         let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let stored = store.load_subscription().await?;
-        let watermark = match stored.watermark {
-            Some(w) => Some(w),
-            None => store.applied_baseline_watermark().await?,
-        };
 
         let re_anchors = discover_re_anchors(baselines_dir)?;
         // Only the latest baseline is ever consumed (adoption routing), so parse
@@ -137,7 +128,6 @@ impl ModuleRuntime {
 
         Ok(Self {
             established: stored.modules,
-            watermark,
             re_anchors,
             latest_baseline,
         })
@@ -183,7 +173,7 @@ impl ModuleRuntime {
     }
 
     /// **The crossing loop.** Consume, in version order, every
-    /// committed re-anchor above the watermark and at or below `ceiling`
+    /// committed re-anchor above the derived cursor and at or below `ceiling`
     /// (`None` = all of them — the end-of-apply sweep that makes a pure
     /// re-tag land on a fully-up-to-date target).
     ///
@@ -200,9 +190,16 @@ impl ModuleRuntime {
         tracking_table: &crate::config::types::TrackingTable,
         ceiling: Option<u64>,
     ) -> Result<()> {
+        // The cursor is derived, not cached: the highest baseline version on
+        // the target. Read once at entry — re-anchors are processed in
+        // ascending version order and each commit writes a baseline row above
+        // any already handled, so a single read covers the whole loop.
+        let cursor = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+            .consumed_through_cursor()
+            .await?;
         for i in 0..self.re_anchors.len() {
             let re_anchor = self.re_anchors[i].clone();
-            if self.watermark.is_some_and(|w| re_anchor.version <= w) {
+            if cursor.is_some_and(|w| re_anchor.version <= w) {
                 continue; // already consumed, or moot (≤ the provision baseline)
             }
             if ceiling.is_some_and(|c| re_anchor.version > c) {
@@ -219,7 +216,7 @@ impl ModuleRuntime {
     }
 
     /// **Gate phase** of the two-phase crossing: evaluate the re-anchor
-    /// at exactly `version` (if one exists above the watermark) against the
+    /// at exactly `version` (if one exists above the derived cursor) against the
     /// subscription, WITHOUT writing anything. The caller runs version V's
     /// sections next and then calls [`Self::commit_crossing`] with the
     /// returned pending crossing. On wholeness failure this bails — the
@@ -231,10 +228,13 @@ impl ModuleRuntime {
         version: u64,
         acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<Option<PendingCrossing>> {
+        let cursor = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+            .consumed_through_cursor()
+            .await?;
         let Some(re_anchor) = self
             .re_anchors
             .iter()
-            .find(|ra| ra.version == version && self.watermark.is_none_or(|w| ra.version > w))
+            .find(|ra| ra.version == version && cursor.is_none_or(|w| ra.version > w))
         else {
             return Ok(None);
         };
@@ -305,13 +305,20 @@ impl ModuleRuntime {
         }
     }
 
-    /// **Commit phase** of the two-phase crossing: rewrite the
-    /// subscription through the gated re-anchor's remaps and advance the
-    /// watermark — one transaction (the caller holds
-    /// the advisory lock). Runs after the version's own sections completed
-    /// (acquisition deltas live in migration V), so wholeness has
-    /// finalized. Crossing ≠ mutation: an untouched subscription still
-    /// records its crossing and advances the watermark.
+    /// **Commit phase** of the two-phase crossing: rewrite the subscription
+    /// through the gated re-anchor's remaps and record the consumption in the
+    /// ledger — one transaction (the caller holds the advisory lock). Runs
+    /// after the version's own sections completed (acquisition deltas live in
+    /// migration V), so wholeness has finalized.
+    ///
+    /// The consumption is a what-happened fact recorded like any other: the
+    /// re-anchor's own baseline main row (checksum + `crossed_at`), which
+    /// seeds the derived cursor so the re-anchor is never re-evaluated, plus
+    /// zero-trace `satisfied` section rows for exactly the remap sections the
+    /// crossing relabeled — those whose source the target holds. Irrelevant
+    /// sections (source not held) record nothing. Crossing ≠ mutation: an
+    /// untouched subscription still records its consumption row (the main row
+    /// names no modules, so it is always safe to write).
     pub async fn commit_crossing(
         &mut self,
         pool: &sqlx::PgPool,
@@ -320,6 +327,31 @@ impl ModuleRuntime {
     ) -> Result<()> {
         let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let PendingCrossing { version, rewritten } = pending;
+
+        // Re-read the consumed re-anchor's file: its whole-file checksum pins
+        // the consumed bytes, and the source-held remap sections (evaluated
+        // against the PRE-crossing subscription) are the ones being relabeled.
+        let re_anchor = self
+            .re_anchors
+            .iter()
+            .find(|ra| ra.version == version)
+            .expect("a pending crossing always names a discovered re-anchor")
+            .clone();
+        let sql = std::fs::read_to_string(&re_anchor.path).with_context(|| {
+            format!(
+                "Failed to read re-anchor baseline: {}",
+                re_anchor.path.display()
+            )
+        })?;
+        let checksum = crate::migration_tracking::calculate_checksum(&sql);
+        let relabeled: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
+            crate::migration::parse_migration_sections(&re_anchor.path, &sql)?
+                .into_iter()
+                .enumerate()
+                .filter(|(_, s)| crate::modules::remap_source_held(s, &self.established))
+                .map(|(i, s)| (i as i32, s))
+                .collect();
+
         let mut tx = pool.begin().await?;
         for module in rewritten.difference(&self.established) {
             store
@@ -329,7 +361,12 @@ impl ModuleRuntime {
         for module in self.established.difference(&rewritten) {
             store.remove_module(&mut *tx, module).await?;
         }
-        store.set_watermark(&mut *tx, version).await?;
+        store
+            .record_crossing_consumption(&mut *tx, version, &checksum)
+            .await?;
+        store
+            .record_sections_satisfied(&mut tx, version, true, &relabeled)
+            .await?;
         tx.commit()
             .await
             .with_context(|| format!("Failed to record crossing of re-anchor {}", version))?;
@@ -343,20 +380,21 @@ impl ModuleRuntime {
             );
         }
         self.established = rewritten;
-        self.watermark = Some(version);
         Ok(())
     }
 
-    /// Record a fresh provision's outcome: subscribe the provisioned modules
-    /// and initialize the crossing watermark to the baseline's version —
-    /// provision never crosses; every re-anchor ≤ W is moot. One
-    /// transaction, under the caller's advisory lock.
+    /// Record a fresh provision's outcome: subscribe the provisioned modules.
+    /// One transaction, under the caller's advisory lock.
+    ///
+    /// Provision never crosses. It seeds no cursor of its own: the baseline
+    /// row provision already laid down (or none, on a baseline-free replay)
+    /// IS the cursor seed — the derived cursor is the highest baseline
+    /// version, so every re-anchor ≤ it is moot without any special step.
     pub async fn record_provisioned(
         &mut self,
         pool: &sqlx::PgPool,
         tracking_table: &crate::config::types::TrackingTable,
         modules: &BTreeSet<String>,
-        baseline_version: Option<u64>,
     ) -> Result<()> {
         let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
         let mut tx = pool.begin().await?;
@@ -365,17 +403,11 @@ impl ModuleRuntime {
                 .add_module(&mut *tx, module, &SubscriptionSource::Provision)
                 .await?;
         }
-        if let Some(version) = baseline_version {
-            store.set_watermark(&mut *tx, version).await?;
-        }
         tx.commit()
             .await
             .context("Failed to record the provisioned module subscription")?;
 
         self.established.extend(modules.iter().cloned());
-        if let Some(version) = baseline_version {
-            self.watermark = Some(version);
-        }
         Ok(())
     }
 
