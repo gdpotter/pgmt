@@ -2,19 +2,15 @@
 //!
 //! "Which modules does this target have?" is target state — the same species
 //! of fact as "which migrations ran". Establishment is therefore **stored**,
-//! not derived, in three tables beside the tracking table:
+//! not derived, in two tables beside the tracking table:
 //!
 //! - `{name}_modules` — the current module set: one row per subscribed module
 //!   (`module PK, adopted_at, adopted_by, source`). Empty = **base only**
 //!   (correct for both a legacy target and a fresh-minimal one; no legacy
 //!   heuristic). The base is never listed — it is established on every target.
 //! - `{name}_watermark` — a single-row table holding the **re-anchor crossing
-//!   watermark** as its own explicit value. NEVER derived as `max()` over the
-//!   event stream (that would make audit load-bearing). A missing row means
-//!   "no crossing consumed yet" — a pre-subscription / legacy target.
-//! - `{name}_events` — an append-only audit stream. Crossings are recorded as
-//!   `(event='crossing', version, subscription_before, subscription_after,
-//!   occurred_at, performed_by)`; future de-provision events reuse the shape.
+//!   watermark** as its own explicit stored value (never derived). A missing
+//!   row means "no crossing consumed yet" — a pre-subscription / legacy target.
 //!
 //! Every writer runs under the migration advisory lock (see
 //! [`crate::migration_tracking::MigrationLock`]); the tables are created by the
@@ -77,15 +73,8 @@ fn watermark_table(tracking_table: &TrackingTable) -> String {
     )
 }
 
-fn events_table(tracking_table: &TrackingTable) -> String {
-    format!(
-        r#""{}"."{}_events""#,
-        tracking_table.schema, tracking_table.name
-    )
-}
-
-/// Serialize a module set as the audit `subscription_before/after` value: a
-/// comma-joined sorted list, or the literal `(base only)` when empty.
+/// Serialize a module set for display: a comma-joined sorted list, or the
+/// literal `(base only)` when empty.
 pub fn render_subscription_set(modules: &BTreeSet<String>) -> String {
     if modules.is_empty() {
         "(base only)".to_string()
@@ -105,7 +94,6 @@ pub async fn ensure_subscription_tables(
 ) -> Result<()> {
     let modules = modules_table(tracking_table);
     let watermark = watermark_table(tracking_table);
-    let events = events_table(tracking_table);
 
     sqlx::query(&format!(
         r#"CREATE TABLE IF NOT EXISTS {modules} (
@@ -120,8 +108,8 @@ pub async fn ensure_subscription_tables(
     .await
     .with_context(|| format!("Failed to create subscription table {modules}"))?;
 
-    // Single-row watermark: an explicit stored value, never derived from the
-    // event stream. The CHECK pins it to one row.
+    // Single-row watermark: an explicit stored value, never derived. The CHECK
+    // pins it to one row.
     sqlx::query(&format!(
         r#"CREATE TABLE IF NOT EXISTS {watermark} (
             singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,
@@ -134,22 +122,6 @@ pub async fn ensure_subscription_tables(
     .execute(pool)
     .await
     .with_context(|| format!("Failed to create watermark table {watermark}"))?;
-
-    sqlx::query(&format!(
-        r#"CREATE TABLE IF NOT EXISTS {events} (
-            id BIGSERIAL PRIMARY KEY,
-            event TEXT NOT NULL,
-            version BIGINT,
-            subscription_before TEXT,
-            subscription_after TEXT,
-            occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            performed_by TEXT NOT NULL DEFAULT CURRENT_USER
-        )"#,
-        events = events
-    ))
-    .execute(pool)
-    .await
-    .with_context(|| format!("Failed to create events table {events}"))?;
 
     Ok(())
 }
@@ -252,29 +224,5 @@ pub async fn remove_module<'e>(
     .execute(executor)
     .await
     .with_context(|| format!("Failed to unsubscribe module '{module}'"))?;
-    Ok(())
-}
-
-/// Append one row to the audit event stream.
-pub async fn record_event<'e>(
-    executor: impl sqlx::PgExecutor<'e>,
-    tracking_table: &TrackingTable,
-    event: &str,
-    version: Option<u64>,
-    before: &BTreeSet<String>,
-    after: &BTreeSet<String>,
-) -> Result<()> {
-    sqlx::query(&format!(
-        "INSERT INTO {} (event, version, subscription_before, subscription_after)
-         VALUES ($1, $2, $3, $4)",
-        events_table(tracking_table)
-    ))
-    .bind(event)
-    .bind(version.map(version_to_db).transpose()?)
-    .bind(render_subscription_set(before))
-    .bind(render_subscription_set(after))
-    .execute(executor)
-    .await
-    .context("Failed to append a subscription event")?;
     Ok(())
 }

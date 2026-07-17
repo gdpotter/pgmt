@@ -2,11 +2,11 @@
 //!
 //! Every SQL statement that reads or writes pgmt's tracking tables — the main
 //! `pgmt_migrations` table, its `_sections` companion, and the subscription
-//! trio (`_modules`, `_watermark`, `_events`) — is a method on [`TrackingStore`].
+//! tables (`_modules`, `_watermark`) — is a method on [`TrackingStore`].
 //! The store owns a pool handle and the main + sections identities, formatted
 //! ONCE from the [`TrackingTable`] config at construction; the subscription
 //! methods delegate to [`crate::migration_tracking::subscription`] (which owns
-//! its own three name-formatters). Consumers never hand-format a tracking-table
+//! its own name-formatters). Consumers never hand-format a tracking-table
 //! name or re-encode a status predicate.
 //!
 //! Locking stays with callers: the store performs queries only. Methods that
@@ -27,7 +27,6 @@ use crate::migration_tracking::subscription::{self, Subscription, SubscriptionSo
 use crate::migration_tracking::{format_tracking_table_name, version_from_db, version_to_db};
 use anyhow::Result;
 use sqlx::PgPool;
-use std::collections::BTreeSet;
 use std::str::FromStr;
 
 /// Concrete query surface over the migration-tracking tables. Construct once
@@ -37,8 +36,7 @@ use std::str::FromStr;
 pub struct TrackingStore {
     pool: PgPool,
     /// The config the store was built from — passed through to the subscription
-    /// query helpers, which format the `_modules`/`_watermark`/`_events` names
-    /// from it.
+    /// query helpers, which format the `_modules`/`_watermark` names from it.
     tracking_table: TrackingTable,
     /// `"schema"."name"` — the main tracking table.
     main: String,
@@ -284,7 +282,7 @@ impl TrackingStore {
 
     // --- Stored module subscription ------------------------------------------
     //
-    // The subscription trio (`_modules`, `_watermark`, `_events`) lives in
+    // The subscription tables (`_modules`, `_watermark`) live in
     // `migration_tracking::subscription`; the store is its single query
     // surface. Read methods run on the pool; writers take an `impl PgExecutor`
     // so a caller can run them inside its own crossing/provision transaction.
@@ -330,25 +328,5 @@ impl TrackingStore {
         version: u64,
     ) -> Result<()> {
         subscription::set_watermark(executor, &self.tracking_table, version).await
-    }
-
-    /// Append one row to the audit event stream. Runs on the caller's executor.
-    pub async fn record_event<'e>(
-        &self,
-        executor: impl sqlx::PgExecutor<'e>,
-        event: &str,
-        version: Option<u64>,
-        before: &BTreeSet<String>,
-        after: &BTreeSet<String>,
-    ) -> Result<()> {
-        subscription::record_event(
-            executor,
-            &self.tracking_table,
-            event,
-            version,
-            before,
-            after,
-        )
-        .await
     }
 }

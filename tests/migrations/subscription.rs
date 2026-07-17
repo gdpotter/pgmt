@@ -1,7 +1,6 @@
 //! Storage-layer tests for the stored module subscription:
-//! the evolve step is idempotent, the three tables round-trip, and the
-//! watermark is an explicit stored value (never derived from the event
-//! stream).
+//! the evolve step is idempotent, the two tables round-trip, and the
+//! watermark is an explicit stored value (never derived).
 
 use crate::helpers::harness::with_test_db;
 use pgmt::config::types::TrackingTable;
@@ -9,7 +8,7 @@ use pgmt::migration_tracking::TrackingStore;
 use pgmt::migration_tracking::ensure_section_tracking_table;
 use pgmt::migration_tracking::subscription::{
     Subscription, SubscriptionSource, add_module, ensure_subscription_tables, load_subscription,
-    record_event, remove_module, set_watermark, subscription_tables_exist,
+    remove_module, set_watermark, subscription_tables_exist,
 };
 use std::collections::BTreeSet;
 
@@ -159,8 +158,10 @@ async fn test_module_set_round_trips() {
     .await;
 }
 
+/// The crossing watermark is a single explicit stored row: absent until first
+/// set, then advanced in place by the upsert.
 #[tokio::test]
-async fn test_watermark_is_explicit_not_derived() {
+async fn test_watermark_is_explicit_single_row() {
     with_test_db(async |db| {
         let tt = tracking();
         ensure_subscription_tables(db.pool(), &tt).await.unwrap();
@@ -177,24 +178,6 @@ async fn test_watermark_is_explicit_not_derived() {
             Some(1200)
         );
 
-        // Recording an event at a LATER version does NOT move the watermark:
-        // the watermark is its own explicit value, never max() over the stream.
-        record_event(
-            db.pool(),
-            &tt,
-            "crossing",
-            Some(1500),
-            &set(&["app"]),
-            &set(&["app", "analytics"]),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            load_subscription(db.pool(), &tt).await.unwrap().watermark,
-            Some(1200),
-            "watermark must not be derived from the event stream"
-        );
-
         // The upsert advances it in place (single row).
         set_watermark(db.pool(), &tt, 1500).await.unwrap();
         assert_eq!(
@@ -207,63 +190,6 @@ async fn test_watermark_is_explicit_not_derived() {
                 .await
                 .unwrap();
         assert_eq!(count, 1, "watermark table stays single-row");
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn test_events_are_append_only_audit() {
-    with_test_db(async |db| {
-        let tt = tracking();
-        ensure_subscription_tables(db.pool(), &tt).await.unwrap();
-
-        record_event(
-            db.pool(),
-            &tt,
-            "crossing",
-            Some(1200),
-            &BTreeSet::new(),
-            &set(&["app", "analytics"]),
-        )
-        .await
-        .unwrap();
-        record_event(
-            db.pool(),
-            &tt,
-            "crossing",
-            Some(1600),
-            &set(&["app", "analytics"]),
-            &set(&["app"]),
-        )
-        .await
-        .unwrap();
-
-        let rows: Vec<(String, Option<i64>, String, String)> = sqlx::query_as(
-            r#"SELECT event, version, subscription_before, subscription_after
-               FROM "public"."pgmt_migrations_events" ORDER BY id"#,
-        )
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(
-            rows[0],
-            (
-                "crossing".to_string(),
-                Some(1200),
-                "(base only)".to_string(),
-                "analytics,app".to_string()
-            )
-        );
-        assert_eq!(
-            rows[1],
-            (
-                "crossing".to_string(),
-                Some(1600),
-                "analytics,app".to_string(),
-                "app".to_string()
-            )
-        );
     })
     .await;
 }

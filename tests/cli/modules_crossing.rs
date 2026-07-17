@@ -61,16 +61,6 @@ async fn crossing_watermark(pool: &sqlx::PgPool) -> Result<Option<i64>> {
     )
 }
 
-/// `(version, subscription_before, subscription_after)` of recorded crossings.
-async fn crossing_events(pool: &sqlx::PgPool) -> Result<Vec<(i64, String, String)>> {
-    Ok(sqlx::query_as(
-        "SELECT version, subscription_before, subscription_after
-         FROM public.pgmt_migrations_events WHERE event = 'crossing' ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await?)
-}
-
 async fn table_exists(pool: &sqlx::PgPool, table: &str) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables
@@ -169,17 +159,6 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
             Some(re_anchor_version as i64),
             "the watermark advanced to the consumed re-anchor"
         );
-        let events = crossing_events(&pool).await?;
-        assert_eq!(events.len(), 1, "exactly one crossing recorded: {events:?}");
-        assert_eq!(
-            events[0],
-            (
-                re_anchor_version as i64,
-                "(base only)".to_string(),
-                "analytics,app".to_string()
-            )
-        );
-
         // Skipped means skipped: the module columns don't exist yet.
         let email_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns
@@ -189,13 +168,21 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
         .await?;
         assert!(!email_exists, "bare apply never grows the target's surface");
 
-        // Consumed once: a second bare apply records no new crossing.
+        // Consumed once: a second bare apply leaves the subscription and
+        // watermark untouched.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
             .success();
-        assert_eq!(crossing_events(&pool).await?.len(), 1);
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["analytics".to_string(), "app".to_string()]
+        );
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
 
         // The operator updates the deploy command once: --modules all runs
         // the skipped sections.
@@ -245,7 +232,7 @@ async fn test_legacy_modularization_crossing_end_to_end() -> Result<()> {
 /// self-inclusion — metrics held nothing before), so the crossing
 /// auto-subscribes it: the target already holds every object metrics owns;
 /// declining would orphan them. Also pins provision-from-baseline W
-/// initializing the watermark to W with NO crossing events.
+/// initializing the watermark directly to W (provision never crosses).
 #[tokio::test]
 async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
     with_cli_helper(async |helper| {
@@ -289,12 +276,7 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
         assert_eq!(
             crossing_watermark(&pool).await?,
             Some(provision_baseline as i64),
-            "provision initializes the watermark to its baseline's version"
-        );
-        assert_eq!(
-            crossing_events(&pool).await?.len(),
-            0,
-            "provision never crosses"
+            "provision never crosses — it initializes the watermark to its baseline's version"
         );
 
         // Move events into a brand-new module.
@@ -429,7 +411,11 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             vec!["a".to_string()],
             "a blocked crossing mutates nothing"
         );
-        assert_eq!(crossing_events(&pool).await?.len(), 0);
+        assert_ne!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64),
+            "a blocked crossing does not advance the watermark"
+        );
 
         // Adopt b through the unconsumed re-anchor: baseline content is needed
         // (b's plain section), so `apply` would refuse — provision is the path.
@@ -458,7 +444,6 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
             crossing_watermark(&pool).await?,
             Some(re_anchor_version as i64)
         );
-        assert_eq!(crossing_events(&pool).await?.len(), 1);
 
         // b's remap sections (source `a` held) recorded `satisfied` — nothing
         // ran for them; its plain sections ran and recorded `completed`. Every
@@ -840,12 +825,6 @@ async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
             Some(re_anchor_version as i64),
             "…but the crossing is still consumed: the watermark advances"
         );
-        let events = crossing_events(&pool).await?;
-        assert_eq!(events.len(), 1);
-        assert_eq!(
-            events[0].1, events[0].2,
-            "crossing recorded with before == after"
-        );
 
         pool.close().await;
         Ok(())
@@ -968,7 +947,6 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             crossing_watermark(&pool).await?,
             Some(re_anchor_version as i64)
         );
-        assert_eq!(crossing_events(&pool).await?.len(), 1);
 
         // Uniform rule on the rows: the a-sourced section satisfied (objects
         // were already here), the b-sourced one completed (it ran).
@@ -988,14 +966,17 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             "b-sourced acquisition executed: {statuses:?}"
         );
 
-        // Consumed once: another bare apply records nothing new.
+        // Consumed once: another bare apply changes nothing.
         helper
             .command()
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
             .success();
         assert_eq!(subscription_modules(&pool).await?, vec!["c".to_string()]);
-        assert_eq!(crossing_events(&pool).await?.len(), 1);
+        assert_eq!(
+            crossing_watermark(&pool).await?,
+            Some(re_anchor_version as i64)
+        );
 
         // Target 2 (held BOTH sources): plain apply collapses the subscription
         // to {c}; every acquisition section recorded `satisfied` (nothing ran —
@@ -1037,8 +1018,8 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
 /// Fresh provision from a re-anchor applies BOTH its plain and its remap
 /// sections (the source is not established on a fresh target, so remap-section
 /// objects are created, not relabelled) and pins every section row completed.
-/// Provision never crosses: the watermark initializes to the baseline's
-/// version with no crossing events.
+/// Provision never crosses: the watermark initializes directly to the
+/// baseline's version.
 #[tokio::test]
 async fn test_fresh_provision_from_re_anchor_runs_all_sections() -> Result<()> {
     with_cli_helper(async |helper| {
@@ -1114,16 +1095,11 @@ async fn test_fresh_provision_from_re_anchor_runs_all_sections() -> Result<()> {
             "fresh provision runs every section (no satisfied): {statuses:?}"
         );
 
-        // Provision never crosses: watermark = baseline version, no events.
+        // Provision never crosses: it initializes the watermark directly.
         assert_eq!(
             crossing_watermark(&pool).await?,
             Some(re_anchor_version as i64),
             "provision initializes the watermark to the baseline's version"
-        );
-        assert_eq!(
-            crossing_events(&pool).await?.len(),
-            0,
-            "provision never crosses"
         );
         assert_eq!(
             subscription_modules(&pool).await?,
@@ -1505,9 +1481,9 @@ async fn test_cross_module_drop_behind_baseline_is_inert() -> Result<()> {
             "billing kept invoices (only the FK went away)"
         );
         assert_eq!(
-            crossing_events(&pool).await?.len(),
-            0,
-            "a plain checkpoint baseline is inert — no crossing recorded"
+            crossing_watermark(&pool).await?,
+            None,
+            "a plain checkpoint baseline is inert — it is never a crossing"
         );
         assert_eq!(
             subscription_modules(&pool).await?,

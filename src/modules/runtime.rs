@@ -263,8 +263,8 @@ impl ModuleRuntime {
     }
 
     /// **Commit phase** of the two-phase crossing: rewrite the
-    /// subscription through the gated re-anchor's remaps, record the crossing
-    /// event and advance the watermark — one transaction (the caller holds
+    /// subscription through the gated re-anchor's remaps and advance the
+    /// watermark — one transaction (the caller holds
     /// the advisory lock). Runs after the version's own sections completed
     /// (acquisition deltas live in migration V), so wholeness has
     /// finalized. Crossing ≠ mutation: an untouched subscription still
@@ -293,15 +293,6 @@ impl ModuleRuntime {
             store.remove_module(&mut *tx, module).await?;
         }
         store.set_watermark(&mut *tx, version).await?;
-        store
-            .record_event(
-                &mut *tx,
-                "crossing",
-                Some(version),
-                &self.established,
-                &rewritten,
-            )
-            .await?;
         tx.commit()
             .await
             .with_context(|| format!("Failed to record crossing of re-anchor {}", version))?;
