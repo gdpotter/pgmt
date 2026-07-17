@@ -282,11 +282,13 @@ pub(crate) fn detect_partition_divergence(
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModuleSelection {
     /// No `modules:` config: every section runs, tags included. Section
-    /// `module=` tags are properties of immutable, checksummed history;
-    /// config is a property of now — so without config the tags must be
-    /// inert, or committed history would become non-executable (a project
-    /// that demoted all modules to the base and deleted its `modules:`
-    /// config still has tagged sections that behind targets must run).
+    /// `module=` tags live in immutable, checksummed history; config
+    /// describes now — so while tagged files remain in the repo, absent
+    /// config must treat the tags as inert or that history becomes
+    /// non-executable for behind targets (a project that demoted all
+    /// modules to the base and deleted its `modules:` config). The tagged
+    /// files themselves retire the ordinary way: once field targets are
+    /// past the demotion, re-baseline and prune them.
     Everything,
     /// Module project: the named modules (dependency closure included) plus
     /// the always-deployed base. An empty set = base sections only.
