@@ -7,8 +7,8 @@ use sqlx::Row;
 
 /// Test the complete baseline + migration flow to ensure future migrations
 /// only contain new changes after a baseline is recorded. The recording is done
-/// by `migrate provision` (init no longer writes a baseline row); this exercises
-/// the underlying mechanism.
+/// by `migrate provision` (not `init`, which writes no baseline row); this
+/// exercises the underlying mechanism.
 #[tokio::test]
 async fn test_baseline_prevents_recreation_in_future_migrations() -> Result<()> {
     with_test_db(async |db| {

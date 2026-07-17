@@ -24,19 +24,19 @@ pub struct StepSection {
     /// Owning module (`None` = the base).
     pub module: Option<String>,
     /// Prior owner of this section's objects (re-anchors and their paired
-    /// acquisition migration sections, §11/§12): a single acquired-from
+    /// acquisition migration sections): a single acquired-from
     /// module, `(unmoduled)` for the base. `None` for a plain
     /// (retained/brand-new) section and for every ordinary migration section.
-    /// Provenance-cut guarantees at most one source (§12).
+    /// Provenance-cut guarantees at most one source.
     pub remaps: Option<String>,
     /// Reviewer-facing SQL comment rendered above the section header
-    /// (acquisition sections only, §11): states the audience — runs only on
+    /// (acquisition sections only): states the audience — runs only on
     /// targets without the source.
     pub comment: Option<String>,
     pub steps: Vec<crate::diff::operations::MigrationStep>,
 }
 
-/// Provenance-cut a re-anchor's baseline sections (§12): re-section the
+/// Provenance-cut a re-anchor's baseline sections: re-section the
 /// module-cut steps so that **no section mixes retained and acquired objects**.
 ///
 /// A **plain** section (no `remaps`) holds the objects a module already owned
@@ -45,20 +45,21 @@ pub struct StepSection {
 /// prior owner: `remaps="a"`, or `remaps="(unmoduled)"` when the source is the
 /// base. Objects acquired from two prior owners → two remap sections. A module
 /// never lists itself; provenance lives in the section *structure*, not in a
-/// comma-list attribute value (that form is retired — §12).
+/// comma-list attribute value.
 ///
 /// The cut runs over the topological order the module-cut already produced and
 /// starts a new section whenever the (module, provenance) pair changes, so each
 /// emitted section is a contiguous same-provenance run and dependency order is
-/// preserved (§8). Section names are re-derived per §8: a module's first
+/// preserved. Section names are re-derived: a module's first
 /// section is the module name, later ones get `_2`, `_3`, … (`default*` for the
 /// base).
 ///
 /// Why: a remap section's objects are, by definition, already present on any
 /// target that holds its source, so the checksummed artifact itself tells
-/// provision/adoption what to run per target (§14 per-section rule) and lets a
-/// blocked crossing be completed through the re-anchor (§13 extended predicate)
-/// — with no access to pre-pivot files, and without ever naming a dead module.
+/// provision/adoption what to run per target (per-section rule) and lets a
+/// blocked crossing be completed through the re-anchor (the extended wholeness
+/// predicate) — with no access to pre-pivot files, and without ever naming a
+/// dead module.
 pub(crate) fn provenance_cut_baseline_sections(
     sections: Vec<StepSection>,
     historical: &HistoricalAttribution,
@@ -100,7 +101,7 @@ pub(crate) fn provenance_cut_baseline_sections(
         }
     }
 
-    // Re-derive §8 names across the full re-cut section list.
+    // Re-derive section names across the full re-cut section list.
     let mut out: Vec<StepSection> = runs
         .into_iter()
         .map(|run| StepSection {
@@ -115,7 +116,7 @@ pub(crate) fn provenance_cut_baseline_sections(
     out
 }
 
-/// Assign §8 names in place: a module's first section is the module name
+/// Assign section names in place: a module's first section is the module name
 /// (`default` for the base), later ones get `_2`, `_3`, … in file order.
 pub(crate) fn assign_section_names(sections: &mut [StepSection]) {
     let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -356,18 +357,18 @@ pub(crate) fn write_sectioned_baseline(
 }
 
 /// Turn a set of provenance-cut remap sections into the acquisition sections
-/// migration V carries when ownership moves at re-anchor V (§11, §12): the
+/// migration V carries when ownership moves at re-anchor V: the
 /// MODULE-sourced remap sections — the moved objects' CREATE DDL,
 /// destination-tagged (unmoduled for demotions), with the reviewer-facing
 /// audience comment. Base-sourced moves (`remaps="(unmoduled)"`, e.g.
 /// modularizing an existing project) are excluded: the base is established
 /// everywhere, so those sections are satisfied on every target by construction
-/// and stay baseline-only (§19c).
+/// and stay baseline-only.
 ///
 /// The input sections are provenance-cut against the STARTING catalog (see
 /// [`acquisition_sections_from_starting_catalog`]) — never the desired-state
-/// baseline — so the acquisition renders each moved object at its V−1 state
-/// (§12 "Acquisition content & position"). Cloning the desired-state baseline
+/// baseline — so the acquisition renders each moved object at its V−1 state.
+/// Cloning the desired-state baseline
 /// would bake post-V changes into the delta and double-apply them.
 pub(crate) fn acquisition_sections(provenance_cut_sections: &[StepSection]) -> Vec<StepSection> {
     provenance_cut_sections
@@ -405,8 +406,7 @@ pub(crate) fn acquisition_sections(provenance_cut_sections: &[StepSection]) -> V
 }
 
 /// The MODULE-sourced acquisition sections for re-anchor V, rendered from the
-/// STARTING catalog (the diff's old side — objects at their V−1 state, §12
-/// "Acquisition content & position").
+/// STARTING catalog (the diff's old side — objects at their V−1 state).
 ///
 /// This reuses the exact machinery baseline generation uses — CREATE steps for
 /// a whole catalog via [`crate::diff::plan`] against `empty`, sectionized and
@@ -435,7 +435,7 @@ fn acquisition_sections_from_starting_catalog(
     Ok(acquisition_sections(&sections))
 }
 
-/// Render migration V's SQL as its acquisition sections (§12) followed by its
+/// Render migration V's SQL as its acquisition sections followed by its
 /// ordinary diff sections. When `re_anchored`, ownership moved at V: the
 /// acquisition sections render the moved objects from the STARTING catalog
 /// (their V−1 state) and are **prepended** — they establish the delta's
@@ -445,7 +445,7 @@ fn acquisition_sections_from_starting_catalog(
 /// Returns `None` when there is nothing to write at all — no DDL and no
 /// module-sourced moves (a pure base-sourced re-tag stays baseline-only).
 /// Section names are re-derived across the combined list so acquisition
-/// sections continue the §8 numbering.
+/// sections continue the section numbering.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_migration_with_acquisitions(
     migration_steps: &[crate::diff::operations::MigrationStep],
@@ -470,7 +470,7 @@ pub(crate) fn render_migration_with_acquisitions(
     };
     // Acquisition sections establish the delta's precondition (the moved
     // objects at V−1), so they lead the file — prepended before the ordinary
-    // sections (§12). Only a re-anchor moves ownership.
+    // sections. Only a re-anchor moves ownership.
     let mut sections = if re_anchored {
         acquisition_sections_from_starting_catalog(
             old_catalog,
@@ -493,7 +493,7 @@ pub(crate) fn render_migration_with_acquisitions(
 /// when the project is moduled (a no-op otherwise). The shared tail of the
 /// `create_baseline(...)` capture in `migrate new` / `migrate update`: the
 /// baseline renders the desired post-V state; the migration's acquisition
-/// sections render from the STARTING catalog instead (§12), so nothing here
+/// sections render from the STARTING catalog instead, so nothing here
 /// feeds the migration.
 pub fn section_baseline_if_moduled(
     module_gen: Option<&ModuleGeneration>,
@@ -518,7 +518,7 @@ pub fn section_baseline_if_moduled(
 
 /// The shared "what SQL does this migration file get" decision for `migrate
 /// new` / `migrate update`. A module project renders ordinary diff sections
-/// plus, at a re-anchor, the acquisition sections (§11/§12); a non-module
+/// plus, at a re-anchor, the acquisition sections; a non-module
 /// project uses the plain diff SQL. `None` means nothing to write (no changes
 /// and — for modules — no module-sourced moves: a pure base-sourced re-tag
 /// stays baseline-only). The two `migrate update` sites that need a String map

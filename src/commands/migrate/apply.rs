@@ -150,7 +150,7 @@ async fn apply_with_module_guard(
         );
     }
 
-    // The stored subscription is THE establishment source (§13): guards, skip
+    // The stored subscription is THE establishment source: guards, skip
     // notices and the crossing loop all read it through the runtime.
     let mut runtime = ModuleRuntime::load(
         pool,
@@ -160,7 +160,7 @@ async fn apply_with_module_guard(
     .await?;
 
     if let Some(named) = selection.named() {
-        // The adoption guard (§14): `apply` only ever replays sections; a
+        // The adoption guard: `apply` only ever replays sections; a
         // module whose pre-baseline state lives in a committed baseline must
         // be adopted via `provision --modules`.
         let needs_baseline = runtime.needing_baseline_content(named.iter());
@@ -173,7 +173,7 @@ async fn apply_with_module_guard(
                 needs_baseline.join(",")
             );
         }
-        // Explicitly requesting a module IS its adoption (§13/§14): subscribe
+        // Explicitly requesting a module IS its adoption: subscribe
         // any newly requested modules before replaying their sections.
         runtime
             .record_adopted(pool, &config.migration.tracking_table, named)
@@ -198,7 +198,7 @@ async fn apply_with_module_guard(
 /// this shared loop does not — a redundant ensure on every call bought nothing.
 ///
 /// The `runtime` carries the target's stored subscription and the committed
-/// re-anchors; this loop interleaves the **crossing loop** (§13) with section
+/// re-anchors; this loop interleaves the **crossing loop** with section
 /// execution: each re-anchor V is crossed after every version < V settles and
 /// before version V's own sections run, and a final sweep after the last
 /// migration consumes trailing re-anchors (a pure re-tag lands on a
@@ -242,12 +242,12 @@ pub(crate) async fn apply_pending_migrations(
 
     // Apply unapplied migrations
     for migration in migrations {
-        // Crossing loop, phase order (§13): consume every re-anchor STRICTLY
+        // Crossing loop, phase order: consume every re-anchor STRICTLY
         // below this version single-shot (their versions are settled). A
         // re-anchor AT this version is two-phase — gate-checked now (before
         // V's sections; the gate's post-crossing vocabulary steers V's own
         // selection and warnings), committed after V's sections complete
-        // (acquisition deltas live in migration V itself, §12). A wholeness
+        // (acquisition deltas live in migration V itself). A wholeness
         // failure bails at either point, refusing this and every later
         // version — the strong membrane.
         runtime
@@ -368,9 +368,9 @@ pub(crate) async fn apply_pending_migrations(
             }
         }
 
-        // Two-phase gate (§13): a re-anchor AT this version is gate-checked
+        // Two-phase gate: a re-anchor AT this version is gate-checked
         // now — before V's sections — and committed only after they complete
-        // (acquisition deltas live in migration V itself, §12). The gate sees
+        // (acquisition deltas live in migration V itself). The gate sees
         // which (module, source) acquisition sections this migration carries:
         // a remap section is satisfiable when it WILL run in this apply.
         let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
@@ -406,7 +406,7 @@ pub(crate) async fn apply_pending_migrations(
         }
 
         // Version V's own selection and warnings see the POST-crossing
-        // vocabulary the gate computed (§13) — a split at V tags V's sections
+        // vocabulary the gate computed — a split at V tags V's sections
         // with the new names. Source-held checks below deliberately keep the
         // PRE-crossing subscription: remap sources are pre-V vocabulary, and
         // the commit (which drops absorbed sources) only lands after V's
@@ -419,7 +419,7 @@ pub(crate) async fn apply_pending_migrations(
         // Module selection: ordinary sections run when their module is
         // requested (+ the base, always); the rest skip and leave NO rows
         // (derived skipped-ness, no trace of unrequested work). REMAP
-        // (acquisition) sections are crossing work (§12/§13): they run
+        // (acquisition) sections are crossing work: they run
         // wherever their owning module is in the post-crossing vocabulary —
         // the base always, auto-subscribing brand-new modules included —
         // independent of the requested set (declining would leave the
@@ -448,7 +448,7 @@ pub(crate) async fn apply_pending_migrations(
             Default::default()
         };
 
-        // Uniform execution rule for remap sections (modules.md §12): in ANY
+        // Uniform execution rule for remap sections: in ANY
         // artifact a remap section executes only where its source is absent,
         // and records `satisfied` where the source is established — the
         // acquired objects already exist here under the source's name, and the
@@ -631,7 +631,7 @@ pub(crate) async fn apply_pending_migrations(
             .await?;
         }
 
-        // Record the source-satisfied remap sections (§9): nothing runs for
+        // Record the source-satisfied remap sections: nothing runs for
         // them — their objects are already present under the source's name —
         // but the rows account for them, so crossings and the guards see the
         // section as covered.
@@ -689,7 +689,7 @@ pub(crate) async fn apply_pending_migrations(
         let reporter = SectionReporter::new(to_run.len(), false);
         reporter.migration_summary(duration, to_run.len());
 
-        // Commit phase (§13): version V's sections are done, so the gated
+        // Commit phase: version V's sections are done, so the gated
         // crossing finalizes — subscription rewrite, watermark, event.
         commit_pending!();
     }

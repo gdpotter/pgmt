@@ -74,7 +74,7 @@ async fn provision_inner(
         );
     }
 
-    // The stored subscription is THE establishment source (§13); the runtime
+    // The stored subscription is THE establishment source; the runtime
     // also carries the committed re-anchors so the shared apply loop can run
     // the crossing loop for anything above the watermark.
     let mut runtime =
@@ -95,8 +95,8 @@ async fn provision_inner(
         };
 
         if !needs_baseline.is_empty() {
-            // Adopt from the latest committed baseline (§14). Provenance-cut
-            // sections (§12) make an unconsumed re-anchor safe to adopt from:
+            // Adopt from the latest committed baseline. Provenance-cut
+            // sections make an unconsumed re-anchor safe to adopt from:
             // its remap sections whose source the target holds are recorded
             // `satisfied` (objects already present under the source's name),
             // and only the plain sections + remap sections whose source the
@@ -196,7 +196,7 @@ async fn provision_inner(
 
             // Only the adopted modules' sections: the target's base (and any
             // previously established modules) already exist here — re-running
-            // their baseline sections would collide. Per-section rule (§14):
+            // their baseline sections would collide. Per-section rule:
             // a remap section whose source the target already holds is recorded
             // `satisfied` (its objects are present under the source's name);
             // everything else (plain sections, remap sections whose source the
@@ -221,7 +221,7 @@ async fn provision_inner(
             )
             .await?;
 
-            // Record the source-covered remap sections as `satisfied` (§9):
+            // Record the source-covered remap sections as `satisfied`:
             // nothing ran for them, but they are accounted for so the crossing
             // and the incomplete-baseline guard see them as covered.
             let satisfied: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
@@ -254,7 +254,7 @@ async fn provision_inner(
             println!("Database is already provisioned; applying any pending migrations.");
         }
 
-        // Explicitly requesting a module IS its adoption (§13/§14): subscribe
+        // Explicitly requesting a module IS its adoption: subscribe
         // any newly requested modules — both the baseline-adopted ones above
         // and pure-replay ones the apply loop below will catch up.
         if let Some(named) = selection.named() {
@@ -301,7 +301,7 @@ async fn provision_inner(
             )
             .await?;
 
-            // Provision NEVER crosses (§13): record the subscription from
+            // Provision NEVER crosses: record the subscription from
             // what was provisioned and initialize the crossing watermark to
             // the baseline's version — every re-anchor ≤ it is moot. Later
             // re-anchors among the post-baseline migrations are ordinary

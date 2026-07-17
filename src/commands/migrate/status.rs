@@ -119,7 +119,7 @@ struct ModuleTally {
 }
 
 /// Print the "Modules" summary: one compact line per declared module plus the
-/// base. Establishment comes from the STORED subscription (§13) when the
+/// base. Establishment comes from the STORED subscription when the
 /// subscription tables exist; the *literal* established set — what covered
 /// section rows imply via their stored `module` column — is the audit-side
 /// cross-check, and the read-only fallback on a pre-subscription target
@@ -163,7 +163,7 @@ async fn print_module_rollup(config: &Config, store: &TrackingStore) -> Result<(
     }
 
     // Tally every recorded section row by owning module (None = base), read
-    // straight off the stored `module` column (§9: authoritative).
+    // straight off the stored `module` column (authoritative).
     let rows = store.section_module_statuses().await?;
 
     let mut tallies: BTreeMap<Option<String>, ModuleTally> = BTreeMap::new();

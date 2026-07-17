@@ -1,4 +1,4 @@
-//! The stored module **subscription** (modules.md §9, §13, §18.3).
+//! The stored module **subscription**.
 //!
 //! "Which modules does this target have?" is target state — the same species
 //! of fact as "which migrations ran". Establishment is therefore **stored**,

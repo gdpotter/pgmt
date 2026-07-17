@@ -122,7 +122,7 @@ async fn mark_completed(
             )
         })?;
 
-    // Covered means completed OR satisfied (§9/§14). A satisfied row is a
+    // Covered means completed OR satisfied. A satisfied row is a
     // source-covered adoption record — its objects are already present and it
     // is already accounted for, so overwriting it with `completed` would be a
     // downgrade of an intentional state. Refuse both.
@@ -226,7 +226,7 @@ async fn restamp(
 
     // Which sections to re-stamp: the named one (must exist + be covered), or
     // every covered section of the version. A `satisfied` row is covered and
-    // immutable exactly like `completed` (§9/§14), so it is restampable too — a
+    // immutable exactly like `completed`, so it is restampable too — a
     // consciously edited source-covered section re-stamps like any other.
     let is_covered = |s: &str| {
         s.parse::<SectionStatus>()

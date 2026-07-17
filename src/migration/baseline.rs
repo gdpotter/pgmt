@@ -291,7 +291,7 @@ async fn replay_migrations(
         let sections = parse_migration_sections(&migration.path, &migration_sql)?;
         validate_sections(&sections)?;
 
-        // Full-replay pin (modules.md §12): shadow replay builds history with
+        // Full-replay pin: shadow replay builds history with
         // every module present, so a migration REMAP section's source always
         // exists during replay — the acquired objects are already there
         // (created by the source's history or the covering baseline), and

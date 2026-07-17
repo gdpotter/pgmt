@@ -208,10 +208,6 @@ CREATE TABLE a (id SERIAL PRIMARY KEY);
     .await
 }
 
-// (`test_mode_change_on_completed_section_bails` removed: that the header — and
-// thus `mode=` — participates in the section checksum is pinned directly by the
-// checksum_content unit test in src/migration/section_parser.rs.)
-
 /// Legacy section rows (NULL checksum, pre-upgrade) pass section-level
 /// validation; with NO checksummed sections at all the whole-file immutability
 /// bail still fires. Both halves are asserted.

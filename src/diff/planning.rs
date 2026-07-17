@@ -703,9 +703,9 @@ mod tests {
         assert!(affinity_order(planned).is_err());
     }
 
-    /// The `owned_by` edge the phase split used to paper over: in the single
-    /// annotated graph, ALTER SEQUENCE ... OWNED BY must depend on its owning
-    /// table's create step even though no catalog edge records it.
+    /// The `owned_by` edge: in the single annotated graph, ALTER SEQUENCE ...
+    /// OWNED BY must depend on its owning table's create step even though no
+    /// catalog edge records it.
     #[test]
     fn test_annotate_adds_owned_by_edge() {
         let table_step = MigrationStep::Table(crate::diff::operations::TableOperation::Create {

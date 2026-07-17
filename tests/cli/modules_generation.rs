@@ -478,7 +478,7 @@ async fn test_migrate_baseline_checkpoint_keeps_module_sections() -> Result<()> 
     .await
 }
 
-/// Byte-exact pin (modules.md §12): the acquisition header block a re-anchor
+/// Byte-exact pin: the acquisition header block a re-anchor
 /// migration carries — the two reviewer-comment lines plus the
 /// `-- pgmt:section` header — is a checksummed artifact whose bytes are the
 /// API. This pins the EXACT block from a real `migrate new --create-baseline`
@@ -534,7 +534,7 @@ async fn test_acquisition_header_block_is_byte_exact() -> Result<()> {
     .await
 }
 
-/// Full-replay pin (modules.md §12): shadow replay builds history with every
+/// Full-replay pin: shadow replay builds history with every
 /// module present, so migration REMAP sections are always satisfied-skipped in
 /// replay — executing them would double-create. A hand-placed acquisition
 /// migration above the latest baseline (the one shape replay would otherwise

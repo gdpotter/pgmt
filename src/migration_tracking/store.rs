@@ -15,7 +15,7 @@
 //!
 //! The "covered" status predicate — a section whose objects are present,
 //! whether it executed here (`completed`) or was covered by an established
-//! source (`satisfied`, modules.md §9/§14) — is defined in exactly one place
+//! source (`satisfied`) — is defined in exactly one place
 //! ([`TrackingStore::covered_predicate`]) and reused by every method. Encoding
 //! it per-call is what let `target_is_established` miss `satisfied`-only
 //! baseline coverage and drive provision down the fresh path against a
@@ -91,8 +91,9 @@ impl TrackingStore {
     ///   provision could never resume through the fresh path).
     ///
     /// "Covered" is `completed` OR `satisfied`: a baseline adopted through a
-    /// re-anchor records its source-held remap sections `satisfied` (§14), and
-    /// those still establish the target. Counting only `completed` here was the
+    /// re-anchor records its source-held remap sections `satisfied` — the
+    /// objects already exist under the source's name — and those still
+    /// establish the target. Counting only `completed` here was the
     /// bug that sent provision down the fresh path against a populated database.
     pub async fn target_is_established(&self) -> Result<bool> {
         let covered = |alias: &str| Self::covered_predicate(alias);
@@ -152,11 +153,11 @@ impl TrackingStore {
     }
 
     /// Distinct module literals on covered section rows — the *literal*
-    /// established set, read straight off the stored `module` column (§9: the
+    /// established set, read straight off the stored `module` column (the
     /// column is authoritative; no file lookup, no name-convention fallback).
     /// `None`-module (base) rows are excluded.
     ///
-    /// **Audit-side cross-check only** (see modules.rs): the module literals are
+    /// **Audit-side cross-check only**: the module literals are
     /// epoch-stamped historical facts, never rewritten on re-tag, so after a
     /// crossing they legitimately diverge from the subscription. Never feed
     /// this into enforcement decisions.
@@ -172,7 +173,7 @@ impl TrackingStore {
     }
 
     /// Section names of the baseline at `version` the target has a covered
-    /// (completed|satisfied) row for — the §14 per-section adoption record the
+    /// (completed|satisfied) row for — the per-section adoption record the
     /// extended wholeness predicate consults.
     pub async fn covered_baseline_section_names(
         &self,
@@ -246,7 +247,7 @@ impl TrackingStore {
 
     /// Every recorded section row as `(owning module literal, is_baseline,
     /// status)` — the input to the per-module status rollup. Reads the stored
-    /// `module` column (§9: authoritative), so `None` is a base section.
+    /// `module` column (authoritative), so `None` is a base section.
     pub async fn section_module_statuses(
         &self,
     ) -> Result<Vec<(Option<String>, bool, SectionStatus)>> {
@@ -281,7 +282,7 @@ impl TrackingStore {
             .collect())
     }
 
-    // --- Stored module subscription (§13) ------------------------------------
+    // --- Stored module subscription ------------------------------------------
     //
     // The subscription trio (`_modules`, `_watermark`, `_events`) lives in
     // `migration_tracking::subscription`; the store is its single query

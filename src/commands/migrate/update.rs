@@ -133,7 +133,7 @@ pub async fn cmd_migrate_update_with_options(
     }
 
     // Step 5 runs before step 4 for module projects so the baseline is
-    // sectioned first. The migration's acquisition sections (§12) render the
+    // sectioned first. The migration's acquisition sections render the
     // moved objects from the STARTING catalog, not the baseline, so they do
     // not consume the baseline's sections — but the ordering is still natural.
     if should_update_baseline {
@@ -177,7 +177,7 @@ pub async fn cmd_migrate_update_with_options(
     }
 
     // Step 4 (after 5 by design): update the migration file — ordinary diff
-    // sections plus, at a re-anchor, the acquisition sections (§11/§12).
+    // sections plus, at a re-anchor, the acquisition sections.
     let migration_sql: String = render_generated_migration(
         module_gen.as_ref(),
         &migration_result.steps,
@@ -397,7 +397,7 @@ pub async fn cmd_migrate_update_specific(
     }
 
     // Handle baseline updates FIRST for module projects so the baseline is
-    // sectioned first. The migration's acquisition sections (§12) render the
+    // sectioned first. The migration's acquisition sections render the
     // moved objects from the STARTING catalog rather than the baseline.
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
@@ -445,7 +445,7 @@ pub async fn cmd_migrate_update_specific(
     }
 
     // The migration content: ordinary diff sections plus, at a re-anchor, the
-    // acquisition sections (§11/§12). `None` = nothing to write (the
+    // acquisition sections. `None` = nothing to write (the
     // no-changes handling above already produced the file).
     let migration_sql: Option<String> = render_generated_migration(
         module_gen.as_ref(),

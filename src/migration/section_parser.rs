@@ -40,7 +40,7 @@ pub struct MigrationSection {
     /// Prior owner of this section's objects (re-anchoring baselines and their
     /// paired acquisition migration sections only): a module name, or
     /// "(unmoduled)" for the base. `None` for plain and ordinary sections.
-    /// Provenance-cut guarantees at most one source (§12), so this is a single
+    /// Provenance-cut guarantees at most one source, so this is a single
     /// value, not a list. Establishment derivation reads it.
     pub remaps: Option<String>,
 
@@ -222,10 +222,8 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
             "lock_timeout" => builder.lock_timeout = Some(parse_duration(&value)?),
             "module" => builder.module = Some(value),
             "remaps" => {
-                // Provenance-cut sections (modules.md §12): a remap section is
-                // acquired from exactly ONE prior owner, so `remaps` carries a
-                // single source. The comma-list form is retired — a baseline
-                // stamped under the old multi-source rule must be regenerated.
+                // Provenance-cut sections: a remap section is acquired from
+                // exactly ONE prior owner, so `remaps` carries a single source.
                 let sources: Vec<String> = value
                     .split(',')
                     .map(|s| s.trim().to_string())
@@ -234,7 +232,7 @@ fn parse_section_attribute(line: &str, builder: &mut SectionBuilder) -> Result<(
                 if sources.len() > 1 {
                     return Err(anyhow!(
                         "section 'remaps' at line {} lists {} sources ('{}'); a provenance-cut \
-                         remap section is acquired from exactly one prior owner (modules.md §12). \
+                         remap section is acquired from exactly one prior owner. \
                          Regenerate this baseline with a current pgmt.",
                         builder.start_line,
                         sources.len(),
@@ -785,9 +783,9 @@ CREATE TABLE test (id INT);
         assert_eq!(sections[0].description, Some("This has spaces".to_string()));
     }
 
-    /// `remaps` is accepted on MIGRATION sections too (modules.md §11):
-    /// acquisition sections carry the same attribute, same single-source
-    /// grammar as baseline remap sections.
+    /// `remaps` is accepted on MIGRATION sections too: acquisition sections
+    /// carry the same attribute, same single-source grammar as baseline remap
+    /// sections.
     #[test]
     fn test_parse_migration_remap_section() {
         let sql = r#"
@@ -806,8 +804,9 @@ CREATE TABLE x (id SERIAL PRIMARY KEY);
         assert_eq!(sections[1].remaps.as_deref(), Some("a"));
     }
 
-    /// The comma-list remaps form is retired (§12): a provenance-cut remap
-    /// section has exactly one source, in migrations and baselines alike.
+    /// A `remaps` attribute with multiple comma-separated sources is rejected:
+    /// a provenance-cut remap section has exactly one source, in migrations and
+    /// baselines alike.
     #[test]
     fn test_parse_multi_source_remaps_is_error() {
         let sql = r#"

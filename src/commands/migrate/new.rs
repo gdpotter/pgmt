@@ -138,7 +138,7 @@ pub async fn cmd_migrate_new(
     // Baseline first (--create-baseline opts in for this run; absence falls
     // back to config — the flag can only add, never suppress a configured
     // default): when the partition re-anchors, migration V's acquisition
-    // sections (§11/§12) derive from the baseline's provenance cut, so the
+    // sections derive from the baseline's provenance cut, so the
     // baseline's sections must exist before the migration is rendered.
     if should_create_baseline {
         // Generate the baseline from the full desired catalog, not the migration
@@ -184,7 +184,7 @@ pub async fn cmd_migrate_new(
     }
 
     // The migration: ordinary diff sections plus, at a re-anchor, the
-    // acquisition sections for module-sourced moves (§11/§12 — base-sourced
+    // acquisition sections for module-sourced moves (base-sourced
     // moves are satisfied everywhere by construction and stay baseline-only).
     let migration_sql: Option<String> = render_generated_migration(
         module_gen.as_ref(),

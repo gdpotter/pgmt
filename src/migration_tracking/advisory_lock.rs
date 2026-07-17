@@ -29,11 +29,11 @@ use sqlx::{Connection, PgConnection};
 /// * `apply` and `provision` targeting the *same* tracking table derive the
 ///   *same* key and therefore exclude one another.
 ///
-/// We hash with MD5 (already a dependency — migration checksums use it) and take
-/// the first 8 bytes big-endian as the `i64` key. MD5 is used purely as a stable
-/// hash here, not for security. `std`'s `DefaultHasher` is deliberately avoided:
-/// it is explicitly not stable across releases, and the key must stay identical
-/// across pgmt versions or two versions would fail to exclude each other.
+/// We hash with MD5 and take the first 8 bytes big-endian as the `i64` key. MD5
+/// is used purely as a stable hash here, not for security. `std`'s `DefaultHasher`
+/// is deliberately avoided: it is explicitly not stable across releases, and the
+/// key must stay identical across pgmt versions or two versions would fail to
+/// exclude each other.
 pub fn advisory_lock_key(tracking_table: &TrackingTable) -> Result<i64> {
     let name = format_tracking_table_name(tracking_table)?;
     Ok(advisory_lock_key_from_name(&name))

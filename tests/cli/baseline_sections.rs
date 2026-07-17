@@ -198,7 +198,7 @@ INSERT INTO users SELECT id FROM external_source;
     .await
 }
 
-/// FIX 7: a baseline that failed partway must NOT silently resume from edited
+/// A baseline that failed partway must NOT silently resume from edited
 /// content. If the baseline file is rewritten at the SAME version after a
 /// partial provision, the completed sections came from the OLD content and the
 /// executor skips them by name — resuming from the NEW file would leave a
@@ -298,6 +298,3 @@ async fn test_migrate_new_after_paired_baseline_detects_no_changes() -> Result<(
     })
     .await
 }
-
-// (`test_apply_refuses_incompletely_applied_baseline` removed: it was a strict
-// subset of incomplete_baseline_guard.rs::test_incomplete_base_baseline_blocks_all_applies.)

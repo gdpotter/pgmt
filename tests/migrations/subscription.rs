@@ -1,4 +1,4 @@
-//! Storage-layer tests for the stored module subscription (§9, §13, §18.3):
+//! Storage-layer tests for the stored module subscription:
 //! the evolve step is idempotent, the three tables round-trip, and the
 //! watermark is an explicit stored value (never derived from the event
 //! stream).
@@ -49,7 +49,7 @@ async fn test_evolve_step_creates_subscription_tables_idempotently() {
     .await;
 }
 
-/// The incomplete-baseline guard's covered set (§9): a `satisfied` baseline
+/// The incomplete-baseline guard's covered set: a `satisfied` baseline
 /// section is covered exactly like `completed` (its objects are present under
 /// the source's name — a per-section adoption record), so it is NOT reported
 /// as incomplete. A genuinely crashed provision — a `failed` or `pending` row

@@ -1,4 +1,4 @@
-//! End-to-end object→module attribution (Phase 1): apply a real schema
+//! End-to-end object→module attribution: apply a real schema
 //! directory through the SchemaProcessor, then resolve each catalog object's
 //! module via the file that created it.
 
@@ -111,14 +111,14 @@ modules:
 }
 
 /// The same schema WITHOUT the declared dependency: the billing→core FK is
-/// flagged as an undeclared cross-module reference (warning, §5), and a base
-/// file referencing a module's object is a hard error (§6).
+/// flagged as an undeclared cross-module reference (a warning), and a base
+/// file referencing a module's object is a hard error.
 #[tokio::test]
 async fn test_undeclared_and_base_references_are_flagged() -> Result<()> {
     with_test_db(async |db| {
         let project = TempDir::new()?;
         write_schema_files(project.path())?;
-        // Base file referencing billing's table: §6 error.
+        // Base file referencing a module's table: a hard error.
         fs::write(
             project.path().join("schema/report.sql"),
             "-- require: billing/invoices.sql\n\

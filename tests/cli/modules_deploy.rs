@@ -11,7 +11,7 @@ use predicates::prelude::*;
 
 /// Subset provision deploys only the named modules (+ deps + base); the
 /// unselected module's objects don't exist and its sections leave NO rows —
-/// nothing in the target names a module it didn't ask for (§9).
+/// nothing in the target names a module it didn't ask for.
 /// Later, `provision --modules analytics` adopts it from the same baseline.
 #[tokio::test]
 async fn test_subset_provision_and_late_adoption() -> Result<()> {
@@ -370,7 +370,7 @@ async fn test_pgmt_modules_env_fallback() -> Result<()> {
     .await
 }
 
-/// FIX 3: `section_order` is a section's index in the FULL migration file,
+/// `section_order` is a section's index in the FULL migration file,
 /// stable per version even when a version's sections are registered across
 /// SEPARATE apply calls. A bare `apply` registers only the base "default"
 /// section; a later `apply --modules core` registers core's section for the
@@ -479,7 +479,7 @@ async fn test_split_registration_keeps_distinct_section_order() -> Result<()> {
     .await
 }
 
-/// Bug-2 guard: adopting a module from a baseline requires the target's
+/// Adopting a module from a baseline requires the target's
 /// ESTABLISHED modules to be caught up to that baseline version first — else
 /// the baseline row would claim coverage the target doesn't have and later
 /// applies would silently skip the established modules' pending migrations.

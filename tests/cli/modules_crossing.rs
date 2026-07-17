@@ -1,11 +1,11 @@
 //! Acceptance tests for the stored subscription + crossing loop + wholeness
-//! membranes (modules.md §13, §16, §19): re-anchors are consumed exactly once
-//! per target, at the crossing, rewriting the stored subscription; wholeness
-//! failures are strong membranes with adopt-first guidance.
+//! membranes: re-anchors are consumed exactly once per target, at the
+//! crossing, rewriting the stored subscription; wholeness failures are strong
+//! membranes with adopt-first guidance.
 //!
 //! Together with `modules_deploy.rs`/`modules_generation.rs` (ordinary
 //! migrations, new modules, cross-module drops, coupling, adoption paths,
-//! the non-module characterization pin) these cover the §16 dynamics grid;
+//! the non-module characterization pin) these cover the module-dynamics grid;
 //! this file owns the re-anchor rows (modularization, split, merge, demotion,
 //! irrelevant crossings) across LEGACY / SUBSET / BEHIND targets.
 
@@ -81,8 +81,9 @@ async fn table_exists(pool: &sqlx::PgPool, table: &str) -> Result<bool> {
     .await?)
 }
 
-/// §19c end-to-end: a LEGACY target (all-default pre-module history) meets a
-/// modularization re-anchor. The next bare `apply` consumes the crossing —
+/// End-to-end LEGACY modularization: a LEGACY target (all-default pre-module
+/// history) meets a modularization re-anchor. The next bare `apply` consumes
+/// the crossing —
 /// subscription becomes {app, analytics}, the watermark advances — and later
 /// module sections warn as subscribed-but-unrequested until a deploy names
 /// them (`--modules all` then runs them).
@@ -346,10 +347,10 @@ async fn test_move_into_brand_new_module_auto_subscribes() -> Result<()> {
     .await
 }
 
-/// Move into a PRE-EXISTING module via per-section adoption (§14). Provenance-
+/// Move into a PRE-EXISTING module via per-section adoption. Provenance-
 /// cut stamps a plain `b` section (retained `z`) + a remap `b_2 remaps="a"`
 /// (acquired `y`). On a target subscribed to `a` but not `b`, bare apply hits
-/// the needed-modules gate (§13) — the crossing would relabel `y` into the
+/// the needed-modules gate — the crossing would relabel `y` into the
 /// unsubscribed pre-existing `b`, orphaning it — and BLOCKS with adopt-b
 /// guidance. Adopting `b` THROUGH the unconsumed re-anchor
 /// (`provision --modules b`) runs the plain section (creates `z`), records the
@@ -412,7 +413,7 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
         );
 
         // The membrane: bare apply blocks — the crossing would relabel y into
-        // the unsubscribed pre-existing b (needed-modules gate, §13). The
+        // the unsubscribed pre-existing b (needed-modules gate). The
         // guidance names adopting b through the re-anchor, never the source a.
         helper
             .command()
@@ -489,7 +490,7 @@ async fn test_move_into_pre_existing_module_per_section_adoption() -> Result<()>
     .await
 }
 
-/// Demotion `a → (unmoduled)` runs BOTH ways on plain apply (§12/§16): with
+/// Demotion `a → (unmoduled)` runs BOTH ways on plain apply: with
 /// the source subscribed, the unmoduled acquisition section in migration V
 /// records `satisfied` (objects already present) and the crossing removes `a`
 /// (its objects are base now); without it, the acquisition section flows with
@@ -560,14 +561,14 @@ async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
             helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
         // Provenance-cut: the retained base object (meta) stays in a plain
         // `default` section; the demoted module's object goes into its own
-        // unmoduled remap section `remaps="a"` (no self-inclusion; the retired
+        // unmoduled remap section `remaps="a"` (no self-inclusion; the
         // comma-list form is asserted-against once, file-wide, in the re-tag
         // test above).
         assert!(
             baseline_sql.contains(r#"remaps="a""#),
             "demotion: an unmoduled remap section records the demoted module as source:\n{baseline_sql}"
         );
-        // The same-version MIGRATION carries the acquisition delta (§12): an
+        // The same-version MIGRATION carries the acquisition delta: an
         // unmoduled remap section with x's DDL and the reviewer comment.
         let migration_files = helper.list_migration_files()?;
         let demote_file = migration_files
@@ -636,7 +637,7 @@ async fn test_demotion_both_ways_via_plain_apply() -> Result<()> {
 
         // Target 2 (a never subscribed, no x): plain apply RUNS the unmoduled
         // acquisition section — demoted content is base content and flows to
-        // everyone (§16 demotion cell) — then the crossing commits and the
+        // everyone — then the crossing commits and the
         // later base migration runs. No membrane, nothing to adopt.
         helper
             .command()
@@ -852,9 +853,9 @@ async fn test_irrelevant_re_anchor_advances_watermark() -> Result<()> {
     .await
 }
 
-/// §19e / §16 merge cell: full merge `a, b → c` with `b` REMOVED from
+/// Full merge `a, b → c` with `b` REMOVED from
 /// pgmt.yaml in the same change, on a target holding only `a`-side content —
-/// PLAIN APPLY crosses. Migration V carries the acquisition delta (§12): the
+/// PLAIN APPLY crosses. Migration V carries the acquisition delta: the
 /// `remaps="b"` section executes (creates the b-side objects), the
 /// `remaps="a"` section records `satisfied`, and the two-phase commit then
 /// collapses the subscription to `{c}`. No membrane, no provision detour, and
@@ -931,7 +932,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
         let re_anchor_version = latest_baseline_version(helper)?;
 
         // The same-version migration carries one acquisition section per
-        // source, each with the reviewer-facing audience comment (§11).
+        // source, each with the reviewer-facing audience comment.
         let migration_files = helper.list_migration_files()?;
         let merge_file = migration_files
             .iter()
@@ -948,7 +949,7 @@ async fn test_full_merge_with_deleted_source_acquires_on_plain_apply() -> Result
             "reviewer comment states the audience:\n{migration_sql}"
         );
 
-        // PLAIN APPLY crosses (§16 merge cell: "runs"): the remaps="b" section
+        // PLAIN APPLY crosses: the remaps="b" section
         // executes, the remaps="a" section records satisfied, the commit
         // subscribes c and drops the absorbed sources.
         helper
@@ -1164,8 +1165,7 @@ async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> Result
     .await?)
 }
 
-/// Move + ALTER in one migration V (modules.md §12 "Acquisition content &
-/// position" + "The convergence law"). One change moves `widget` from module
+/// Move + ALTER in one migration V. One change moves `widget` from module
 /// `b` into module `c` AND adds a column. The acquisition section must render
 /// `widget` from the STARTING catalog (its V−1 state — WITHOUT the new column),
 /// and the ordinary section carries the ALTER. Applied to a source-holding
@@ -1327,7 +1327,7 @@ async fn test_move_plus_alter_converges_both_ways() -> Result<()> {
     .await
 }
 
-/// §16 cross-module-drop × SUBSET: on a target that established `core` but not
+/// Cross-module-drop × SUBSET: on a target that established `core` but not
 /// `billing`, a cross-module drop's enforced re-anchor runs core's drop while
 /// billing's sections are irrelevant — billing was never deployed here, so its
 /// objects don't exist and its sections leave no rows. The intra-migration
@@ -1422,7 +1422,7 @@ async fn test_cross_module_drop_subset_unestablished_module_irrelevant() -> Resu
     .await
 }
 
-/// §16 cross-module-drop × BEHIND: a fully-established target that is behind V
+/// Cross-module-drop × BEHIND: a fully-established target that is behind V
 /// applies the drop migration in version order; the enforced re-anchor baseline
 /// at V is a plain checkpoint (no `remaps`) and stays inert — it is never a
 /// crossing and never applied as content.
@@ -1521,7 +1521,7 @@ async fn test_cross_module_drop_behind_baseline_is_inert() -> Result<()> {
     .await
 }
 
-/// §16 split × BEHIND: a target subscribed to `app` but behind the split
+/// Split × BEHIND: a target subscribed to `app` but behind the split
 /// re-anchor V finishes app's sections < V first (an intermediate app change),
 /// then crosses at V — version order enforces "finish the source's sections ≤ V
 /// before the crossing" naturally. After apply: the intermediate change landed,

@@ -120,7 +120,7 @@ impl SectionExecutor {
 
         // Check if section is already covered (for resume): completed, or
         // satisfied — a source-covered remap section whose objects are already
-        // present (modules.md §9); re-executing it would double-create.
+        // present; re-executing it would double-create.
         if get_section_status(
             &self.pool,
             &self.tracking_table,

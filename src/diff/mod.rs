@@ -146,7 +146,7 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
     out.extend(grants::diff_grants(&old.grants, &new.grants));
 
     // Comments for every attached object, in one place (the analog of
-    // diff_grants). Per-object diffs no longer emit their own comments.
+    // diff_grants).
     out.extend(comments::diff_comments(old, new));
 
     info!("Diff complete");

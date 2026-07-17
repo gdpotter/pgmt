@@ -452,8 +452,8 @@ async fn test_tracking_table_custom_schema() -> Result<()> {
 }
 
 /// Regression: a target whose baseline coverage is recorded entirely as
-/// `satisfied` rows (a module adopted through a re-anchor per the §14
-/// per-section rule — its remap sections' objects are already present under
+/// `satisfied` rows (a module adopted through a re-anchor under the
+/// per-section adoption rule — its remap sections' objects are already present under
 /// the source's name, so nothing ran but the sections are covered) must be
 /// recognized as ESTABLISHED. Counting only `completed` here made
 /// `target_is_established` misread such a target as fresh, sending provision

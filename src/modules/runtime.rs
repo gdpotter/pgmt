@@ -63,7 +63,7 @@ impl ModuleRuntime {
     /// target whose rows predate the subscription tables' watermark (a
     /// pre-subscription provision), fall back to the target's honest applied-
     /// baseline watermark: provisioning from baseline W lands directly in W's
-    /// world, so every re-anchor ≤ W is moot (§13) — the fallback
+    /// world, so every re-anchor ≤ W is moot — the fallback
     /// reconstructs exactly that.
     pub async fn load(
         pool: &sqlx::PgPool,
@@ -100,17 +100,15 @@ impl ModuleRuntime {
         })
     }
 
-    /// The baseline adoption reads content from (§14's "latest committed
-    /// baseline"): simply the highest-version committed baseline, re-anchor or
-    /// not.
+    /// The baseline adoption reads content from: simply the highest-version
+    /// committed baseline, re-anchor or not.
     ///
-    /// Provenance-cut sections (§12) make **any** committed baseline safe to
+    /// Provenance-cut sections make **any** committed baseline safe to
     /// adopt from, unconsumed re-anchors included: a re-anchor's remap sections
     /// carry objects already present under the source's old name, so per-section
-    /// adoption (§14) records those as `satisfied` and runs only the plain
+    /// adoption records those as `satisfied` and runs only the plain
     /// sections plus remap sections whose source the target lacks — no
-    /// collision, no routing around the re-anchor (this reverts the earlier
-    /// "never route adoption through an unconsumed re-anchor" rule).
+    /// collision, no routing around the re-anchor.
     pub fn adoption_baseline(
         &self,
     ) -> Option<(u64, &[crate::migration::section_parser::MigrationSection])> {
@@ -122,8 +120,8 @@ impl ModuleRuntime {
     /// Of `modules`, those not established here whose pre-baseline state
     /// lives in the adoption baseline ([`Self::adoption_baseline`]) —
     /// adopting them requires `provision --modules` (baseline content), not
-    /// replay. Modules absent from it are younger: their whole (break-free,
-    /// §10) history is in the migrations and plain `apply` adopts them.
+    /// replay. Modules absent from it are younger: their whole (break-free)
+    /// history is in the migrations and plain `apply` adopts them.
     pub fn needing_baseline_content<'a, I: IntoIterator<Item = &'a String>>(
         &self,
         modules: I,
@@ -141,7 +139,7 @@ impl ModuleRuntime {
             .collect()
     }
 
-    /// **The crossing loop (§13).** Consume, in version order, every
+    /// **The crossing loop.** Consume, in version order, every
     /// committed re-anchor above the watermark and at or below `ceiling`
     /// (`None` = all of them — the end-of-apply sweep that makes a pure
     /// re-tag land on a fully-up-to-date target).
@@ -151,7 +149,7 @@ impl ModuleRuntime {
     /// strictly below the migration being processed, and for the final sweep.
     /// A re-anchor AT a pending migration's version goes through the split
     /// [`Self::gate_re_anchor_at`] / [`Self::commit_crossing`] pair instead
-    /// (two-phase, §13): its acquisition delta lives in migration V itself,
+    /// (two-phase): its acquisition delta lives in migration V itself,
     /// so wholeness only finalizes once V's sections have run.
     pub async fn cross_re_anchors_through(
         &mut self,
@@ -177,7 +175,7 @@ impl ModuleRuntime {
         Ok(())
     }
 
-    /// **Gate phase** of the two-phase crossing (§13): evaluate the re-anchor
+    /// **Gate phase** of the two-phase crossing: evaluate the re-anchor
     /// at exactly `version` (if one exists above the watermark) against the
     /// subscription, WITHOUT writing anything. The caller runs version V's
     /// sections next and then calls [`Self::commit_crossing`] with the
@@ -214,7 +212,7 @@ impl ModuleRuntime {
         acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<PendingCrossing> {
         // Section names of THIS re-anchor the target has a completed|
-        // satisfied row for (§14 per-section adoption). Feeds the extended
+        // satisfied row for (per-section adoption). Feeds the extended
         // wholeness predicate.
         let applied_sections = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
             .covered_baseline_section_names(re_anchor.version)
@@ -228,7 +226,7 @@ impl ModuleRuntime {
                 let version = re_anchor.version;
                 if !needs_adoption.is_empty() {
                     // The needed-modules gate — the only surviving membrane in
-                    // the merge/move family (§13). Names the DESTINATION
+                    // the merge/move family. Names the DESTINATION
                     // module (always in config), never a source.
                     let list = needs_adoption.iter().cloned().collect::<Vec<_>>();
                     anyhow::bail!(
@@ -264,11 +262,11 @@ impl ModuleRuntime {
         }
     }
 
-    /// **Commit phase** of the two-phase crossing (§13): rewrite the
+    /// **Commit phase** of the two-phase crossing: rewrite the
     /// subscription through the gated re-anchor's remaps, record the crossing
     /// event and advance the watermark — one transaction (the caller holds
     /// the advisory lock). Runs after the version's own sections completed
-    /// (acquisition deltas live in migration V, §12), so wholeness has
+    /// (acquisition deltas live in migration V), so wholeness has
     /// finalized. Crossing ≠ mutation: an untouched subscription still
     /// records its crossing and advances the watermark.
     pub async fn commit_crossing(
@@ -323,7 +321,7 @@ impl ModuleRuntime {
 
     /// Record a fresh provision's outcome: subscribe the provisioned modules
     /// and initialize the crossing watermark to the baseline's version —
-    /// provision never crosses; every re-anchor ≤ W is moot (§13). One
+    /// provision never crosses; every re-anchor ≤ W is moot. One
     /// transaction, under the caller's advisory lock.
     pub async fn record_provisioned(
         &mut self,

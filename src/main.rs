@@ -255,7 +255,7 @@ enum MigrateCommands {
     /// Create a baseline and optionally consolidate old migrations
     Baseline(MigrateBaselineArgs),
 
-    /// Break-glass repair of section tracking state (mark-completed/reset/restamp)
+    /// Break-glass repair of section tracking state (mark-completed/restamp)
     Resolve(MigrateResolveArgs),
 }
 

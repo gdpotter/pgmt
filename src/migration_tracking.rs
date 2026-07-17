@@ -212,8 +212,7 @@ async fn migrate_tracking_table_schema(
 
     let has = |name: &str| existing_columns.iter().any(|c| c == name);
 
-    // `applied_by` was missing from the earlier inline `CREATE TABLE` definitions
-    // in apply.rs/status.rs, so some tables in the wild lack it.
+    // Tracking tables created before `applied_by` existed lack the column.
     if !has("applied_by") {
         sqlx::query(&format!(
             "ALTER TABLE {} ADD COLUMN applied_by TEXT DEFAULT CURRENT_USER",

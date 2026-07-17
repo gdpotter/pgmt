@@ -22,7 +22,7 @@ pub enum SectionStatus {
     Running,
     Completed,
     /// A remap section covered by an established source at provision/adoption
-    /// time (modules.md §9, §14): the objects are already present under the
+    /// time: the objects are already present under the
     /// source's name, so nothing ran here — but the section is accounted for.
     /// `completed` keeps its invariant ("this DDL committed here") and absence
     /// keeps its ("crashed or never requested"); the incomplete-baseline guard
@@ -109,7 +109,7 @@ pub async fn ensure_section_tracking_table(
 
     migrate_section_table_schema(pool, tracking_table, &sections_table).await?;
 
-    // The stored module subscription (§13) is part of the same evolve step:
+    // The stored module subscription is part of the same evolve step:
     // the tables arrive here so every apply/provision path that ensures the
     // section table also has the subscription tables available. (The read-only
     // `migrate status` path never calls this — it probes instead.)
@@ -359,7 +359,7 @@ pub async fn validate_and_sync_section_checksums(
         };
         has_checksummed = true;
         // Satisfied rows are terminal and covered, like completed: their
-        // section is immutable (source-covered adoption record, §9).
+        // section is immutable (source-covered adoption record).
         let completed = matches!(
             status.parse::<SectionStatus>(),
             Ok(s) if s.is_covered()
@@ -468,7 +468,7 @@ pub async fn initialize_sections(
     Ok(())
 }
 
-/// Record the given sections as `satisfied` (modules.md §9, §14): a remap
+/// Record the given sections as `satisfied`: a remap
 /// section whose source the target already holds, so nothing runs — the
 /// objects are present under the source's name and a later crossing relabels
 /// them. Insert-then-mark inside ONE transaction so the determination and the

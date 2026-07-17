@@ -291,7 +291,7 @@ CREATE TABLE ref_beta (id INT);
                     .or(predicate::str::contains("the following required")),
             );
 
-        // A `satisfied` section is covered exactly like `completed` (§9/§14):
+        // A `satisfied` section is covered exactly like `completed`:
         // mark-completed refuses to overwrite it, and restamp accepts it.
         let pool = helper.connect_to_dev_db().await?;
         sqlx::query(

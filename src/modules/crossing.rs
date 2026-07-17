@@ -8,10 +8,10 @@ use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Whether a re-anchor baseline section's remap *source* is already held by a
-/// target with the given established set (§14 per-section adoption rule). A
-/// plain section (no `remaps`) is never source-covered — it must run. The base
-/// source (`(unmoduled)`) is held everywhere; a module source is held iff
-/// established. Provenance-cut guarantees at most one source per section.
+/// target with the given established set. A plain section (no `remaps`) is
+/// never source-covered — it must run. The base source (`(unmoduled)`) is held
+/// everywhere; a module source is held iff established. Provenance-cut
+/// guarantees at most one source per section.
 pub fn remap_source_held(
     section: &crate::migration::section_parser::MigrationSection,
     established: &BTreeSet<String>,
@@ -23,10 +23,10 @@ pub fn remap_source_held(
     }
 }
 
-/// One provenance-cut remap section of a re-anchor (§12): its owning module
+/// One provenance-cut remap section of a re-anchor: its owning module
 /// (`None` = the base, a demotion target) and its single acquired-from source
 /// (`None` = the base). Named so the wholeness check can look up whether the
-/// target already applied it (a completed|satisfied row, §14 per-section rule).
+/// target already applied it (a completed|satisfied row).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RemapSection {
     pub name: String,
@@ -35,8 +35,8 @@ pub(crate) struct RemapSection {
 }
 
 /// A committed **re-anchoring baseline**: a baseline file with at least one
-/// `remaps=` section (§12). Re-anchors are the only baselines apply ever
-/// consumes — as one-time *crossings* (§13) that rewrite the target's stored
+/// `remaps=` section. Re-anchors are the only baselines apply ever
+/// consumes — as one-time *crossings* that rewrite the target's stored
 /// subscription. Plain checkpoint baselines stay inert to apply.
 #[derive(Debug, Clone)]
 pub(crate) struct ReAnchor {
@@ -113,11 +113,11 @@ pub(crate) enum CrossingCheck {
     /// subscription is still *crossed* (evaluated and consumed, watermark
     /// advances), just not a mutation.
     Whole { rewritten: BTreeSet<String> },
-    /// Wholeness fails (the strong membrane, §13). The crossing cannot
+    /// Wholeness fails (the strong membrane). The crossing cannot
     /// complete on this target.
     Blocked {
         /// The needed-modules gate (the only surviving membrane in the
-        /// merge/move family, §13): destination modules the crossing would
+        /// merge/move family): destination modules the crossing would
         /// relabel held objects into, which are pre-existing and not
         /// subscribed here — adopt them first (`provision --modules <these>`).
         /// Never a source module (a merge may have deleted its declaration).
@@ -125,15 +125,15 @@ pub(crate) enum CrossingCheck {
         /// Remap section names this target cannot satisfy at all: source
         /// absent, never applied, and migration V carries no acquisition
         /// section that will run here — an artifact generated before
-        /// migration-borne acquisition (§12). Regenerate the re-anchor.
+        /// migration-borne acquisition. Regenerate the re-anchor.
         unsatisfiable: BTreeSet<String>,
     },
 }
 
-/// The extended wholeness rule (§13). A remap section is **satisfied** iff its
+/// The extended wholeness rule. A remap section is **satisfied** iff its
 /// source is established (objects present under the source's name → the
 /// crossing relabels) OR the target has already applied the section (a
-/// completed|satisfied row — §14 per-section adoption). Wholeness at V requires
+/// completed|satisfied row — per-section adoption). Wholeness at V requires
 /// every remap section of every owning module the target is *engaged* with to
 /// be satisfied.
 ///
@@ -144,20 +144,20 @@ pub(crate) enum CrossingCheck {
 /// - Engaged but some remap section neither satisfied nor satisfiable by the
 ///   pending migration's acquisition sections → **blocked** as unsatisfiable:
 ///   only reachable with artifacts generated before migration-borne
-///   acquisition (§12) — regenerate the re-anchor.
-/// - **Needed-modules gate (§13):** M is *needed* iff any of its remap
+///   acquisition — regenerate the re-anchor.
+/// - **Needed-modules gate:** M is *needed* iff any of its remap
 ///   sections is **source**-satisfied here — the crossing would relabel objects
 ///   the target physically holds into M. Needed and brand-new (remap sections
 ///   only) → auto-subscribe below. Needed, pre-existing (has a plain section)
 ///   and NOT subscribed → **blocked**: adopt M first (`provision --modules M`,
-///   collision-free under §14 per-section adoption). A crossing must never
+///   collision-free under per-section adoption). A crossing must never
 ///   relabel objects into an unsubscribed module — that orphans them (their
 ///   future sections would skip at info level: silent drift on exactly the
 ///   objects that moved).
 /// - Engaged and every remap section satisfied or satisfiable → whole for M.
 ///   A section is *satisfiable* when migration V carries its acquisition
 ///   section and M is run-eligible (base / subscribed / brand-new) — it will
-///   run in this apply before the commit (§13 two-phase). Subscribe M when it is
+///   run in this apply before the commit (two-phase). Subscribe M when it is
 ///   already subscribed, or **brand-new** (no plain section → the crossing adds
 ///   no objects: auto-subscribe). Then drop any wholly-absorbed source (not in
 ///   [`ReAnchor::surviving_modules`]).
@@ -165,7 +165,7 @@ pub(crate) enum CrossingCheck {
 /// `applied_sections` is the set of section *names* of THIS re-anchor that the
 /// target has a completed|satisfied row for. `acquirable` is the set of
 /// `(module, source)` pairs carried as remap sections by the pending migration
-/// at V in THIS apply (§12 migration-borne acquisition) — empty when V's
+/// at V in THIS apply (migration-borne acquisition) — empty when V's
 /// migration is not about to run (single-shot crossings, the final sweep):
 /// such a section is *satisfiable* because it **will run in this apply**,
 /// provided its owning module is run-eligible (the base, subscribed, or
@@ -204,11 +204,11 @@ pub(crate) fn evaluate_crossing(
             continue;
         }
 
-        // Needed-modules gate (§13): crossing would relabel objects the target
+        // Needed-modules gate: crossing would relabel objects the target
         // physically holds into M (a source-satisfied remap section), but M is
         // pre-existing (has a plain section) and not subscribed — relabeling
         // now would orphan those objects into an unsubscribed module. Block:
-        // adopt M through the re-anchor first (§14 per-section adoption).
+        // adopt M through the re-anchor first (per-section adoption).
         if let Some(m) = module
             && !subscribed
             && re_anchor.plain_modules.contains(m)
@@ -218,7 +218,7 @@ pub(crate) fn evaluate_crossing(
             continue;
         }
 
-        // Will-run eligibility (§13 gate): M's acquisition sections in
+        // Will-run eligibility gate: M's acquisition sections in
         // migration V execute here when M is the base (flows with every
         // apply), subscribed, or brand-new and auto-subscribing at this
         // crossing. (Pre-existing-unsubscribed was caught above.)
@@ -274,10 +274,10 @@ pub(crate) fn evaluate_crossing(
     }
 }
 
-/// A gate-passed crossing awaiting its commit (§13 two-phase): the gate ran
+/// A gate-passed crossing awaiting its commit (two-phase): the gate ran
 /// before version V's sections; the commit (subscription rewrite, watermark,
 /// event) runs after they complete — acquisition deltas live in migration V
-/// itself (§12), so wholeness only finalizes once they've run.
+/// itself, so wholeness only finalizes once they've run.
 #[derive(Debug, Clone)]
 pub struct PendingCrossing {
     pub(crate) version: u64,
@@ -286,7 +286,7 @@ pub struct PendingCrossing {
 
 impl PendingCrossing {
     /// The post-crossing subscription the gate computed — the vocabulary
-    /// version V's own section selection and warnings must already see (§13).
+    /// version V's own section selection and warnings must already see.
     pub fn rewritten(&self) -> &BTreeSet<String> {
         &self.rewritten
     }
@@ -346,9 +346,10 @@ mod tests {
 
     #[test]
     fn test_crossing_modularization_from_base_auto_subscribes() {
-        // §19c: (unmoduled) → {app, analytics}. Each module's only content is a
-        // remap section sourced from the base (always whole), no plain section
-        // → auto-subscribe on an empty subscription.
+        // Modularizing an existing project: (unmoduled) → {app, analytics}.
+        // Each module's only content is a remap section sourced from the base
+        // (always whole), no plain section → auto-subscribe on an empty
+        // subscription.
         let ra = re_anchor(
             1200,
             &[
@@ -406,9 +407,9 @@ mod tests {
     #[test]
     fn test_crossing_merge_some_but_not_all_acquires_via_migration() {
         // a, b → c with only a subscribed. Migration V carries the
-        // acquisition sections (§12), c is brand-new and engaged → the
+        // acquisition sections, c is brand-new and engaged → the
         // `remaps="b"` section WILL RUN in this apply → whole: c subscribes,
-        // absorbed a and b drop. §16 merge cell: "runs".
+        // absorbed a and b drop.
         let ra = re_anchor(
             1600,
             &[("c", Some("c"), Some("a")), ("c_2", Some("c"), Some("b"))],
@@ -427,7 +428,7 @@ mod tests {
             }
         );
         // Without the acquisition sections (an artifact predating
-        // migration-borne acquisition, §12) the b-section is unsatisfiable.
+        // migration-borne acquisition) the b-section is unsatisfiable.
         assert_eq!(
             evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
             blocked(&[], &["c_2"])
@@ -456,7 +457,7 @@ mod tests {
     #[test]
     fn test_crossing_move_into_pre_existing_module() {
         // Part of a → existing b: a plain `b` section (retained) + a remap
-        // `b_2 remaps="a"`. The needed-modules gate (§13): the crossing would
+        // `b_2 remaps="a"`. The needed-modules gate: the crossing would
         // relabel a-held objects into b, but b is pre-existing (plain section)
         // and NOT subscribed → BLOCK — relabeling into an unsubscribed module
         // would orphan those objects. Adopt b first.
@@ -528,7 +529,7 @@ mod tests {
     fn test_crossing_demotion_without_source_acquires_via_migration() {
         // a → base on a target without a: the base must be whole everywhere.
         // Migration V's unmoduled acquisition section flows with the base on
-        // every apply (§12/§16: "runs") → whole, no membrane.
+        // every apply → whole, no membrane.
         let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
             evaluate_crossing(
@@ -541,7 +542,8 @@ mod tests {
                 rewritten: subs(&["other"])
             }
         );
-        // Without it (pre-§12 artifact): unsatisfiable.
+        // Without it (an artifact predating migration-borne acquisition):
+        // unsatisfiable.
         assert_eq!(
             evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_acq()),
             blocked(&[], &["default"])
