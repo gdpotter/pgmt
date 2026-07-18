@@ -136,6 +136,20 @@ impl TrackingStore {
         Ok(established)
     }
 
+    /// Whether the main tracking table has no rows at all — a target pgmt has
+    /// never written to (no migration row and no baseline row). Distinct from
+    /// [`Self::target_is_established`], which asks about covered content: a
+    /// crashed first provision leaves a baseline row here yet establishes
+    /// nothing. Used by the apply first-contact guard.
+    pub async fn main_table_is_empty(&self) -> Result<bool> {
+        let has_row: bool =
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {})", self.main))
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to check whether the tracking table is empty")?;
+        Ok(!has_row)
+    }
+
     /// The stored whole-file checksum of the baseline row at `version`, if any.
     /// The fallback immutability guard for legacy baseline rows with no
     /// per-section checksums.

@@ -1827,3 +1827,140 @@ async fn test_split_behind_finishes_source_sections_before_crossing() -> Result<
     })
     .await
 }
+
+/// F6: a repo whose ONLY pending change is a re-anchor baseline, with the
+/// migrations directory absent, must still consume the crossing on a bare
+/// apply — the sweep and lock key off committed baselines, not the migrations
+/// dir. (Regression: an early return on a missing migrations dir skipped the
+/// final sweep, so a pure re-tag never landed.)
+#[tokio::test]
+async fn test_pure_retag_no_migrations_dir_still_crosses() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+        helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("events.sql", "CREATE TABLE events (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        // Modularize: a pure re-tag (base -> {app, analytics}) with a re-anchor.
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  app:\n    paths: [\"schema/users.sql\"]\n  analytics:\n    paths: [\"schema/events.sql\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "modularize", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(consumed_cursor(&pool).await?, None);
+
+        // Delete the migrations directory entirely: the only pending change is
+        // the re-anchor baseline. Bare apply must still cross it.
+        std::fs::remove_dir_all(helper.migrations_dir())?;
+        assert!(!helper.migrations_dir().exists());
+
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["analytics".to_string(), "app".to_string()],
+            "the crossing rewrote the subscription even with no migrations dir"
+        );
+        assert_eq!(
+            consumed_cursor(&pool).await?,
+            Some(re_anchor_version as i64),
+            "the sweep consumed the re-anchor and advanced the cursor"
+        );
+        assert!(baseline_row_exists(&pool, re_anchor_version).await?);
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// F7: a bare `apply` against a fresh target (empty tracking, no baseline row)
+/// in a repo that ships a committed baseline refuses with provision guidance,
+/// before it tries to run migrations against a schema the baseline was never
+/// applied to.
+#[tokio::test]
+async fn test_bare_apply_on_fresh_target_with_committed_baseline_refuses() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+        assert!(
+            !helper.list_baseline_files()?.is_empty(),
+            "the repo ships a committed baseline"
+        );
+
+        let fresh = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &fresh])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("no baseline established"))
+            .stderr(predicate::str::contains("provision"));
+        Ok(())
+    })
+    .await
+}
+
+/// F7 counter-case: a repo with NO committed baselines is the legitimate
+/// apply-from-empty replay flow. A bare `apply` against a fresh target must
+/// keep working — the first-contact guard only fires when baselines exist.
+#[tokio::test]
+async fn test_bare_apply_from_empty_without_baselines_still_works() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+        assert!(
+            helper.list_baseline_files()?.is_empty(),
+            "no baselines in the repo"
+        );
+
+        let fresh = helper.create_extra_database().await?;
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &fresh])
+            .assert()
+            .success();
+
+        let pool = sqlx::PgPool::connect(&fresh).await?;
+        assert!(
+            table_exists(&pool, "users").await?,
+            "the fresh apply-from-empty replay created the schema"
+        );
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}

@@ -28,7 +28,18 @@ pub async fn cmd_migrate_apply(
     println!("Applying migrations to target database");
 
     let migrations_dir = root_dir.join(&config.directories.migrations);
-    if !migrations_dir.exists() {
+    let baselines_dir = root_dir.join(&config.directories.baselines);
+
+    // The crossing sweep and the module guards key off committed baselines,
+    // NOT the migrations dir — a repo whose only pending change is a re-anchor
+    // baseline must still cross it. So only early-return (before connecting or
+    // locking) when the migrations dir is absent AND no baseline exists; an
+    // existing-but-empty migrations dir still connects, as before.
+    // `discover_migrations` / `discover_baselines` return empty for an absent
+    // directory.
+    let migrations = discover_migrations(&migrations_dir)?;
+    let has_baselines = !crate::migration::discover_baselines(&baselines_dir)?.is_empty();
+    if !migrations_dir.exists() && !has_baselines {
         println!("No migrations directory found - nothing to apply");
         return Ok(());
     }
@@ -41,8 +52,6 @@ pub async fn cmd_migrate_apply(
     // connection for the whole run; released explicitly on success (and on drop
     // otherwise).
     let lock = MigrationLock::acquire(target.as_str(), &config.migration.tracking_table).await?;
-
-    let migrations = discover_migrations(&migrations_dir)?;
 
     let result = apply_with_module_guard(config, root_dir, &pool, &migrations, &selection).await;
     lock.release().await?;
@@ -84,6 +93,27 @@ async fn apply_with_module_guard(
     ensure_section_tracking_table(pool, &config.migration.tracking_table).await?;
     let store =
         crate::migration_tracking::TrackingStore::new(pool, &config.migration.tracking_table)?;
+
+    // First-contact guard: in a repo that ships committed baselines, a fresh
+    // target must be provisioned, not applied to. A bare `apply` against a
+    // target pgmt has never written to (empty tracking → no baseline row) would
+    // otherwise run migrations against a schema whose baseline was never laid
+    // down, failing with raw `relation does not exist` errors. Scoped to a
+    // genuinely-empty target so it can't fire on a mid-flight one, and skipped
+    // entirely when the repo ships no baselines — that is the legitimate
+    // apply-from-empty flow (fresh replay), which must keep working.
+    let baselines_dir = root_dir.join(&config.directories.baselines);
+    let has_committed_baseline = !crate::migration::discover_baselines(&baselines_dir)?.is_empty();
+    if has_committed_baseline && store.main_table_is_empty().await? {
+        anyhow::bail!(
+            "this target has no baseline established; provision it first:\n  \
+             pgmt migrate provision\n\
+             `migrate apply` maintains an already-provisioned database — it does not lay \
+             down baseline content, so applying migrations here would fail against a schema \
+             the baseline was never applied to."
+        );
+    }
+
     let incomplete = store.incomplete_baseline_sections().await?;
     if !incomplete.is_empty() {
         // Any incomplete BASE section → the watermark itself is untrustworthy;

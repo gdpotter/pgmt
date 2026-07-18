@@ -222,14 +222,20 @@ CREATE TABLE users (
             table_pos
         );
 
-        // Apply migration and verify it works
+        // Establish the schema on a fresh target. The repo ships a committed
+        // baseline (`--create-baseline`), so a fresh target is provisioned, not
+        // applied to — a bare `apply` here is refused by the first-contact
+        // guard.
         helper
             .command()
-            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
             .assert()
-            .success()
-            .stdout(predicate::str::contains("Applying migration"))
-            .stdout(predicate::str::contains("Completed in"));
+            .success();
 
         // Verify objects exist
         assert!(helper.table_exists_in_dev("public", "users").await?);
