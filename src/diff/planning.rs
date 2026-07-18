@@ -1,80 +1,47 @@
 //! Step-graph planning: turn diffed steps into an executable order.
 //!
-//! Two ordering paths share the same edge rules — catalog `forward_deps`
-//! (reversed for drops), step-declared fallbacks, and the synthetic rules
-//! (drop-before-create, namespace-slot collisions, create-before-alter,
-//! same-id ALTER chains, extensions-first):
+//! One path for everyone. Each step is annotated into a single [`PlannedStep`]
+//! graph — the step, its owning module (`None` = the unmoduled base), and its
+//! explicit dependency edges — and that graph is traversed once with module
+//! affinity ([`affinity_order`]) to produce the final execution order. A
+//! non-module project is the degenerate case: every step is base, module
+//! affinity has nothing to group, and the traversal reduces to a deterministic
+//! Kahn topological sort.
 //!
-//! - `diff_order`: the historical two-batch sort (primary steps, then
-//!   relationship steps — FKs and sequence ownership). Used for non-module
-//!   projects, whose generated files must stay byte-stable.
-//! - `annotate` + `affinity_order`: one [`PlannedStep`] graph (step + owning
-//!   module + explicit edges) traversed with module affinity, so each
-//!   module's steps stay contiguous unless a dependency forces a jump. Used
-//!   by module-tagged generation.
+//! The edges come from one derivation ([`collect_edges`]): catalog
+//! `forward_deps` (reversed for drops) with a step-declared fallback where the
+//! catalog is silent, plus the synthetic rules (drop-before-create,
+//! namespace-slot collisions, create-before-alter, same-id ALTER chains,
+//! routine-overload drop-before-create, extensions-first). [`annotate`] adds
+//! one edge no catalog records — an `ALTER SEQUENCE … OWNED BY` step follows
+//! its owning table — and drops the relationship-provider edges (a relationship
+//! step shares its object's id but does not PROVIDE the object).
 
 use crate::catalog::Catalog;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::is_system_schema;
 use crate::diff::operations::{MigrationStep, OperationKind};
 use crate::diff::{grants, namespace};
-use petgraph::algo::toposort;
-use petgraph::graph::DiGraph;
 use std::collections::{BTreeMap, BTreeSet};
-use tracing::{info, warn};
+use tracing::warn;
 
-/// Topo-sort the steps in two batches: primary object creation/modification
-/// (schemas, extensions, tables, views, …) first, then relationship
-/// establishment (sequence ownership, foreign keys). Uses old_catalog for
-/// drop steps and new_catalog for create/alter steps.
-pub fn diff_order(
+/// Coalesce column grants, annotate the steps into one graph, and traverse it
+/// with module affinity — THE ordering, shared by every caller.
+///
+/// `module_of` attributes each step to its owning module (`None` = the
+/// unmoduled base). A non-module plan passes an all-`None` closure, so affinity
+/// degenerates to a deterministic Kahn sort. Column-grant coalescing runs here
+/// (after diff + cascade expansion, before ordering) so it sees every producer
+/// of column-grant steps; see [`grants::coalesce_column_grants`].
+pub fn order_planned(
     steps: Vec<MigrationStep>,
     old_catalog: &Catalog,
     new_catalog: &Catalog,
-) -> anyhow::Result<Vec<MigrationStep>> {
-    info!("Ordering migration steps...");
-
-    // Fold per-column grants on the same relation into single statements before
-    // ordering. Runs here (after diff + cascade expansion) so it sees every
-    // producer of column-grant steps; see `grants::coalesce_column_grants`.
+    module_of: &mut dyn FnMut(&MigrationStep) -> anyhow::Result<Option<String>>,
+) -> anyhow::Result<Vec<PlannedStep>> {
     let steps = grants::coalesce_column_grants(steps);
-
-    let mut primary_steps = Vec::new();
-    let mut relationship_steps = Vec::new();
-
-    // Collect IDs of relationship steps so we can co-locate their comments
-    let relationship_ids: BTreeSet<DbObjectId> = steps
-        .iter()
-        .filter(|step| step.is_relationship())
-        .map(|step| step.id())
-        .collect();
-
-    for step in steps {
-        if step.is_relationship() {
-            relationship_steps.push(step);
-        } else {
-            let id = step.id();
-            if let DbObjectId::Comment { object_id } = &id {
-                if relationship_ids.contains(object_id.as_ref()) {
-                    relationship_steps.push(step);
-                } else {
-                    primary_steps.push(step);
-                }
-            } else {
-                primary_steps.push(step);
-            }
-        }
-    }
-
-    // Order primary steps (includes extensions, schemas, tables, etc.)
-    let mut ordered_steps = order_steps_by_dependencies(primary_steps, old_catalog, new_catalog)?;
-
-    // Then add ordered relationship steps
-    let ordered_relationships =
-        order_steps_by_dependencies(relationship_steps, old_catalog, new_catalog)?;
-    ordered_steps.extend(ordered_relationships);
-
-    Ok(ordered_steps)
+    let planned = annotate(steps, old_catalog, new_catalog, module_of)?;
+    affinity_order(planned)
 }
 
 /// Resolve a dependency ID for ordering purposes.
@@ -89,29 +56,25 @@ fn resolve_for_ordering(dep: &DbObjectId) -> DbObjectId {
     }
 }
 
-/// The seven shared ordering edge rules, computed once over `steps`.
+/// The shared ordering edge rules, computed once over `steps`.
 ///
 /// Returns directed edges as `(before_idx, after_idx)` index pairs — `before`
-/// must be emitted before `after` — in the deterministic sequence the legacy
-/// two-batch path emits them (comment attachment, catalog `forward_deps`
-/// reversed for drops with a step-declared fallback, same-id
+/// must be emitted before `after` — plus the missing catalog dependencies
+/// encountered, so the caller can warn. Rules: comment attachment, catalog
+/// `forward_deps` reversed for drops with a step-declared fallback, same-id
 /// drop→create→alter, namespace-slot drop-before-create, routine-overload
-/// drop-before-create, extensions-first). Also returns the missing catalog
-/// dependencies encountered, so each consumer decides whether to warn.
+/// drop-before-create, and extensions-first.
 ///
-/// This is the SINGLE derivation of the edge rules. Both ordering paths
-/// consume it: the legacy `order_steps_by_dependencies` feeds the pairs into a
-/// petgraph toposort in emission order (byte-stability), and the module
-/// `annotate` folds them into a dependency set. The two genuine module-only
-/// deltas live annotate-side, visible as deltas: `skip_relationship_providers`
-/// (a relationship step shares its object's id but does not PROVIDE the
-/// object) and the separately-added `owned_by` edge.
+/// A relationship step (an FK create or an `ALTER SEQUENCE … OWNED BY`) shares
+/// its object's id but does not PROVIDE the object, so it is never used as a
+/// dependency provider: binding "X depends on seq" to seq's OWNED BY step would
+/// make the table wait on an ALTER that waits on the table. [`annotate`]
+/// separately adds the one edge no catalog records — the `owned_by` table edge.
 #[allow(clippy::type_complexity)]
 fn collect_edges(
     steps: &[MigrationStep],
     old_catalog: &Catalog,
     new_catalog: &Catalog,
-    skip_relationship_providers: bool,
 ) -> (Vec<(usize, usize)>, Vec<(DbObjectId, DbObjectId)>) {
     let mut id_to_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
     for (i, step) in steps.iter().enumerate() {
@@ -167,8 +130,7 @@ fn collect_edges(
                         // object's id but does not PROVIDE the object — binding
                         // "X depends on seq" to seq's OWNED BY step would make
                         // the table wait on an ALTER that waits on the table.
-                        if skip_relationship_providers && !is_drop && steps[dep_i].is_relationship()
-                        {
+                        if !is_drop && steps[dep_i].is_relationship() {
                             continue;
                         }
                         if is_drop {
@@ -195,7 +157,7 @@ fn collect_edges(
                 let resolved_dep = resolve_for_ordering(dep);
                 if let Some(indices) = id_to_indices.get(&resolved_dep) {
                     for &dep_i in indices {
-                        if skip_relationship_providers && steps[dep_i].is_relationship() {
+                        if steps[dep_i].is_relationship() {
                             continue;
                         }
                         // Always: dependency comes before this step
@@ -379,90 +341,6 @@ fn collect_edges(
     (edges, missing_deps)
 }
 
-/// Internal function to order steps using the existing object-based dependency system
-fn order_steps_by_dependencies(
-    steps: Vec<MigrationStep>,
-    old_catalog: &Catalog,
-    new_catalog: &Catalog,
-) -> anyhow::Result<Vec<MigrationStep>> {
-    let mut graph: DiGraph<usize, ()> = DiGraph::new();
-    let mut node_indices = Vec::new();
-
-    // Add each step as a node in the graph
-    for (i, _step) in steps.iter().enumerate() {
-        node_indices.push(graph.add_node(i));
-    }
-
-    // The legacy two-batch path carries no relationship-provider skip: it keeps
-    // relationship steps in their own batch instead (see `diff_order`).
-    let (edges, missing_deps) = collect_edges(&steps, old_catalog, new_catalog, false);
-
-    for (from, to) in edges {
-        graph.add_edge(node_indices[from], node_indices[to], ());
-    }
-
-    // Warn about missing dependencies (excluding system schemas)
-    for (object_id, missing_dep) in &missing_deps {
-        // Skip system schema dependencies - these are expected to be missing
-        if let Some(schema) = missing_dep.schema()
-            && is_system_schema(schema)
-        {
-            continue;
-        }
-
-        warn!(
-            "{:?} depends on {:?} which is not in the catalog (may be filtered by config)",
-            object_id, missing_dep
-        );
-    }
-
-    let index_to_step_idx: BTreeMap<_, _> = node_indices
-        .iter()
-        .enumerate()
-        .map(|(i, &node)| (node, i))
-        .collect();
-
-    let sorted = toposort(&graph, None)
-        .map_err(|cycle| {
-            let node = cycle.node_id();
-            if let Some(&step_idx) = index_to_step_idx.get(&node) {
-                let step = &steps[step_idx];
-                let step_type = match step {
-                    MigrationStep::Schema(_) => "Schema",
-                    MigrationStep::Table(_) => "Table",
-                    MigrationStep::View(_) => "View",
-                    MigrationStep::Type(_) => "Type",
-                    MigrationStep::Domain(_) => "Domain",
-                    MigrationStep::Sequence(_) => "Sequence",
-                    MigrationStep::Function(_) => "Function",
-                    MigrationStep::Aggregate(_) => "Aggregate",
-                    MigrationStep::Operator(_) => "Operator",
-                    MigrationStep::Cast(_) => "Cast",
-                    MigrationStep::Index(_) => "Index",
-                    MigrationStep::Constraint(_) => "Constraint",
-                    MigrationStep::Trigger(_) => "Trigger",
-                    MigrationStep::Policy(_) => "Policy",
-                    MigrationStep::Extension(_) => "Extension",
-                    MigrationStep::Grant(_) => "Grant",
-                    MigrationStep::Comment(_) => "Comment",
-                };
-                anyhow::anyhow!(
-                    "Dependency cycle detected involving {} operation on {:?}. This usually indicates circular dependencies between database objects. Check for circular references in your schema.",
-                    step_type,
-                    step.id()
-                )
-            } else {
-                anyhow::anyhow!("Dependency cycle detected in migration ordering. This usually indicates circular dependencies between database objects.")
-            }
-        })?;
-
-    let ordered = sorted
-        .into_iter()
-        .filter_map(|node| index_to_step_idx.get(&node).map(|&i| steps[i].clone()))
-        .collect();
-    Ok(ordered)
-}
-
 // ---------------------------------------------------------------------------
 // Annotated step graph (PlannedStep) + module-affinity traversal
 // ---------------------------------------------------------------------------
@@ -495,10 +373,22 @@ pub fn annotate(
     new_catalog: &Catalog,
     module_of: &mut dyn FnMut(&MigrationStep) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<Vec<PlannedStep>> {
-    // The shared edge rules, with the relationship-provider skip active (a
-    // relationship step shares its object's id but does not PROVIDE it).
-    // Missing catalog deps are ignored here — the module path does not warn.
-    let (edges, _missing) = collect_edges(&steps, old_catalog, new_catalog, true);
+    let (edges, missing_deps) = collect_edges(&steps, old_catalog, new_catalog);
+
+    // Warn about catalog dependencies that aren't present (excluding system
+    // schemas, which are expected to be missing — they may be filtered by
+    // config).
+    for (object_id, missing_dep) in &missing_deps {
+        if let Some(schema) = missing_dep.schema()
+            && is_system_schema(schema)
+        {
+            continue;
+        }
+        warn!(
+            "{:?} depends on {:?} which is not in the catalog (may be filtered by config)",
+            object_id, missing_dep
+        );
+    }
 
     let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); steps.len()];
     for (before, after) in edges {
@@ -785,7 +675,7 @@ mod tests {
             }),
         ];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(1, 0)),
             "drop must precede create for the same id; edges={edges:?}"
@@ -798,7 +688,7 @@ mod tests {
     fn test_collect_edges_create_before_alter() {
         let steps = vec![table_alter("public", "t"), table_create("public", "t")];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(1, 0)),
             "create must precede alter for the same id; edges={edges:?}"
@@ -812,7 +702,7 @@ mod tests {
     fn test_collect_edges_same_id_alter_chain() {
         let steps = vec![table_alter("public", "t"), table_alter("public", "t")];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(0, 1)),
             "consecutive same-id alters keep emission order; edges={edges:?}"
@@ -836,7 +726,7 @@ mod tests {
             })),
         ];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         // Distinct ids, so the same-id rule cannot apply.
         assert_ne!(steps[0].id(), steps[1].id());
         assert!(
@@ -866,7 +756,7 @@ mod tests {
             }),
         ];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(1, 0)),
             "extension create must precede non-extension creates; edges={edges:?}"
@@ -892,7 +782,7 @@ mod tests {
             }),
         ];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(1, 0)),
             "comment must follow the step that creates its object; edges={edges:?}"
@@ -916,7 +806,7 @@ mod tests {
         let mut new_catalog = Catalog::empty();
         new_catalog.forward_deps.insert(a, vec![b]);
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &new_catalog, false);
+        let (edges, _) = collect_edges(&steps, &empty, &new_catalog);
         assert!(
             edges.contains(&(1, 0)),
             "a create must follow its dependency b; edges={edges:?}"
@@ -940,7 +830,7 @@ mod tests {
         let mut old_catalog = Catalog::empty();
         old_catalog.forward_deps.insert(a, vec![b]);
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &old_catalog, &empty, false);
+        let (edges, _) = collect_edges(&steps, &old_catalog, &empty);
         assert!(
             edges.contains(&(0, 1)),
             "dependent a must be dropped before its dependency b; edges={edges:?}"
@@ -978,7 +868,7 @@ mod tests {
             }),
         ];
         let empty = Catalog::empty();
-        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        let (edges, _) = collect_edges(&steps, &empty, &empty);
         assert!(
             edges.contains(&(1, 0)),
             "a step's declared dependency must precede it when the catalog is \

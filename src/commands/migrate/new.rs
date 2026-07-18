@@ -159,7 +159,6 @@ pub async fn cmd_migrate_new(
         section_baseline_if_moduled(
             module_gen.as_ref(),
             &result.path,
-            &result.steps,
             &new_catalog,
             &file_mapping,
             &historical,
@@ -188,7 +187,6 @@ pub async fn cmd_migrate_new(
     // moves are satisfied everywhere by construction and stay baseline-only).
     let migration_sql: Option<String> = render_generated_migration(
         module_gen.as_ref(),
-        &migration_result.steps,
         migration_result.has_changes,
         &migration_result.migration_sql,
         &old_catalog,

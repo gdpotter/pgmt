@@ -7,7 +7,7 @@ use pgmt::diff::domains::diff;
 use pgmt::diff::operations::{
     CommentOperation, DomainOperation, MigrationStep, SqlRenderer, TypeOperation,
 };
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 use pgmt::render::Safety;
 
 #[tokio::test]
@@ -818,9 +818,7 @@ async fn test_domain_cascade_on_base_type_change() -> Result<()> {
             let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have DROP + CREATE for domain (cascade) and type
             let drop_domain_pos = steps

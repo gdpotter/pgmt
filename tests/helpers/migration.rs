@@ -2,7 +2,7 @@ use crate::helpers::harness::{PgTestInstance, TestDatabase};
 use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{MigrationStep, SqlRenderer};
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 
 /// Helper for migration tests that eliminates boilerplate setup
 pub struct MigrationTestHelper {
@@ -23,16 +23,13 @@ impl MigrationTestHelper {
         (initial_db, target_db)
     }
 
-    /// Run the full migration pipeline: diff_all -> cascade::expand -> diff_order
+    /// Run the full migration pipeline (`diff::plan`: diff → cascade → order).
     pub async fn run_migration_pipeline(
         &self,
         initial_catalog: &Catalog,
         target_catalog: &Catalog,
     ) -> Result<Vec<MigrationStep>> {
-        let mut steps = diff_all(initial_catalog, target_catalog);
-        steps = cascade::expand(steps, initial_catalog, target_catalog);
-        steps = diff_order(steps, initial_catalog, target_catalog)?;
-        Ok(steps)
+        plan(initial_catalog, target_catalog)
     }
 
     /// Execute migration steps on a database

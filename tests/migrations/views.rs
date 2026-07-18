@@ -7,7 +7,7 @@ use pgmt::diff::operations::{
     CommentOperation, MigrationStep, SchemaOperation, SqlRenderer, TableOperation, TypeOperation,
     ViewOperation,
 };
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 
 #[tokio::test]
 async fn test_create_view_migration() -> Result<()> {
@@ -186,9 +186,7 @@ async fn test_table_column_type_change_cascades_to_view() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline - cascade should handle view dependency
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have multiple steps in correct order due to cascading
             assert!(steps.len() >= 3);
@@ -296,9 +294,7 @@ async fn test_view_dependency_chain() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have DROP VIEW steps for both views that were removed
             assert!(!steps.is_empty());
@@ -362,9 +358,7 @@ async fn test_cross_schema_view_dependencies() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have CREATE SCHEMA and CREATE VIEW steps
             assert!(!steps.is_empty());
@@ -466,9 +460,7 @@ async fn test_view_with_custom_type_dependency() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have CREATE TYPE, CREATE TABLE, CREATE VIEW in dependency order
             assert!(steps.len() >= 3);
@@ -588,9 +580,7 @@ async fn test_view_comment_migration() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have SET VIEW COMMENT step
             assert!(!steps.is_empty());
@@ -663,9 +653,7 @@ async fn test_drop_view_comment_migration() -> Result<()> {
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Generate migration steps using full pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have DROP VIEW COMMENT step
             assert!(!steps.is_empty());

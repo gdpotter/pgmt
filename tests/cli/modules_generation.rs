@@ -272,8 +272,10 @@ async fn test_undeclared_cross_module_reference_warns() -> Result<()> {
     .await
 }
 
-/// Characterization: a project without `modules:` produces byte-for-byte the
-/// same migrations as before — plain SQL, no section headers.
+/// Characterization: a project without `modules:` runs the single ordering
+/// path as the all-base degenerate case and emits plain SQL — no section
+/// headers, no module attribution. (Byte-exact statement ordering for the
+/// single path is pinned by the `sql_snapshots` snapshots.)
 #[tokio::test]
 async fn test_non_module_project_has_no_section_headers() -> Result<()> {
     with_cli_helper(async |helper| {

@@ -149,7 +149,6 @@ pub async fn cmd_migrate_update_with_options(
         section_baseline_if_moduled(
             module_gen.as_ref(),
             &result.path,
-            &result.steps,
             &new_catalog,
             &file_mapping,
             &historical,
@@ -180,7 +179,6 @@ pub async fn cmd_migrate_update_with_options(
     // sections plus, at a re-anchor, the acquisition sections.
     let migration_sql: String = render_generated_migration(
         module_gen.as_ref(),
-        &migration_result.steps,
         migration_result.has_changes,
         &migration_result.migration_sql,
         &old_catalog,
@@ -412,7 +410,6 @@ pub async fn cmd_migrate_update_specific(
         section_baseline_if_moduled(
             module_gen.as_ref(),
             &result.path,
-            &result.steps,
             &new_catalog,
             &file_mapping,
             &historical,
@@ -449,7 +446,6 @@ pub async fn cmd_migrate_update_specific(
     // no-changes handling above already produced the file).
     let migration_sql: Option<String> = render_generated_migration(
         module_gen.as_ref(),
-        &migration_result.steps,
         migration_result.has_changes,
         &migration_result.migration_sql,
         &old_catalog,

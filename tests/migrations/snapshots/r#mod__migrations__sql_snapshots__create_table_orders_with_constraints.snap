@@ -13,8 +13,8 @@ CREATE TABLE "app"."orders" (
     CONSTRAINT "orders_pkey" PRIMARY KEY ("id")
 );
 
-ALTER TABLE "app"."orders" ADD CONSTRAINT "orders_total_check" CHECK (total >= 0::numeric);
+ALTER SEQUENCE "app"."orders_id_seq" OWNED BY "app"."orders"."id";
 
 ALTER TABLE "app"."orders" ADD CONSTRAINT "orders_status_check" CHECK (status::text = ANY (ARRAY['pending'::character varying, 'completed'::character varying, 'cancelled'::character varying]::text[]));
 
-ALTER SEQUENCE "app"."orders_id_seq" OWNED BY "app"."orders"."id";
+ALTER TABLE "app"."orders" ADD CONSTRAINT "orders_total_check" CHECK (total >= 0::numeric);

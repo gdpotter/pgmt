@@ -12,6 +12,6 @@ CREATE TABLE "app"."users" (
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
 
-ALTER TABLE "app"."users" ADD CONSTRAINT "users_email_key" UNIQUE ("email");
-
 ALTER SEQUENCE "app"."users_id_seq" OWNED BY "app"."users"."id";
+
+ALTER TABLE "app"."users" ADD CONSTRAINT "users_email_key" UNIQUE ("email");

@@ -28,19 +28,42 @@ use crate::catalog::{
     sequence::Sequence, table::Table, view::View,
 };
 use crate::diff::operations::MigrationStep;
-pub use planning::diff_order;
+pub use planning::PlannedStep;
 use std::collections::BTreeMap;
 use tracing::info;
 
-/// The engine: diff two catalogs, expand cascades, and order the steps.
+/// The engine: diff two catalogs, expand cascades, and order the steps — with
+/// module attribution.
+///
+/// This is THE planning pipeline: `diff_all` → `cascade::expand` →
+/// `order_planned` (coalesce grants → annotate one edge graph → traverse with
+/// module affinity). Exactly one ordering per plan. `module_of` attributes each
+/// step to its owning module (`None` = the unmoduled base); the returned
+/// [`PlannedStep`]s carry that attribution so a downstream consumer (module
+/// sectioning) can CUT the already-ordered stream at module boundaries without
+/// ever re-ordering.
+pub fn plan_annotated(
+    old: &Catalog,
+    new: &Catalog,
+    module_of: &mut dyn FnMut(&MigrationStep) -> anyhow::Result<Option<String>>,
+) -> anyhow::Result<Vec<PlannedStep>> {
+    let steps = diff_all(old, new);
+    let expanded = cascade::expand(steps, old, new);
+    planning::order_planned(expanded, old, new, module_of)
+}
+
+/// The engine for non-module callers: diff two catalogs and return the ordered
+/// steps. Every step is the unmoduled base, so module affinity degenerates to a
+/// deterministic topological sort.
 ///
 /// Every command's migration plan comes from here — apply, diff, migrate
 /// new/update/validate/diff, baseline rendering, and validation all diff two
 /// managed catalogs through this one path.
 pub fn plan(old: &Catalog, new: &Catalog) -> anyhow::Result<Vec<MigrationStep>> {
-    let steps = diff_all(old, new);
-    let expanded = cascade::expand(steps, old, new);
-    diff_order(expanded, old, new)
+    Ok(plan_annotated(old, new, &mut |_| Ok(None))?
+        .into_iter()
+        .map(|planned| planned.step)
+        .collect())
 }
 
 pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {

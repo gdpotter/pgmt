@@ -127,7 +127,6 @@ pub async fn cmd_migrate_baseline(
     if config.modules.is_enabled() {
         let partition = ModulePartition::from_config(config)?;
         let sections = sectionize_steps(
-            &result.steps,
             &base_catalog,
             &replayed,
             &partition,

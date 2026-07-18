@@ -7,7 +7,7 @@ use pgmt::catalog::Catalog;
 use pgmt::catalog::custom_type::{TypeKind, fetch};
 use pgmt::diff::custom_types::diff;
 use pgmt::diff::operations::{CommentOperation, MigrationStep, SqlRenderer, TypeOperation};
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 
 #[tokio::test]
 async fn test_create_enum_migration() -> Result<()> {
@@ -611,9 +611,7 @@ async fn test_composite_type_cascades_to_dependent_composite_type() -> Result<()
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
             // Run full migration pipeline
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // Should have DROP + CREATE for both types (4 steps minimum)
             assert!(

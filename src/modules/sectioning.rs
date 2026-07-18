@@ -132,16 +132,16 @@ pub(crate) fn assign_section_names(sections: &mut [StepSection]) {
     }
 }
 
-/// Section migration steps by module: annotate each step with its owning
-/// module and dependency edges (one graph — `planning::annotate`), order it
-/// with module affinity so each module's steps stay contiguous whenever
-/// dependencies allow, and cut the result at module boundaries.
+/// Section a diff into module-tagged sections. Attribute each step to its
+/// owning module, run THE planning pipeline once (`diff::plan_annotated`:
+/// diff → cascade → coalesce → annotate → module-affinity order), and cut the
+/// already-ordered stream at module boundaries. No re-ordering: the ordering
+/// lives in `plan_annotated`, this only cuts.
 ///
 /// Interleaving (`billing`, `core`, `billing_2`) therefore appears exactly
 /// when real cross-module coupling forces it — a drop in one module
 /// unblocking a drop in another — never as an artifact of emission order.
 pub fn sectionize_steps(
-    steps: &[crate::diff::operations::MigrationStep],
     old_catalog: &Catalog,
     new_catalog: &Catalog,
     partition: &ModulePartition,
@@ -149,7 +149,6 @@ pub fn sectionize_steps(
     historical: &HistoricalAttribution,
 ) -> Result<Vec<StepSection>> {
     use crate::diff::operations::SqlRenderer;
-    use crate::diff::planning;
 
     // Grant ids are opaque strings; recover their target objects from the
     // catalogs so grant steps can follow their targets.
@@ -215,8 +214,7 @@ pub fn sectionize_steps(
         )
     };
 
-    let planned = planning::annotate(steps.to_vec(), old_catalog, new_catalog, &mut module_of)?;
-    let ordered = planning::affinity_order(planned)?;
+    let ordered = crate::diff::plan_annotated(old_catalog, new_catalog, &mut module_of)?;
 
     // Cut the (now maximally contiguous) order at module boundaries.
     let mut sections: Vec<StepSection> = Vec::new();
@@ -337,14 +335,12 @@ pub fn evaluate_module_generation(
 /// the desired-state attribution matters for sectioning.
 pub(crate) fn write_sectioned_baseline(
     path: &std::path::Path,
-    steps: &[crate::diff::operations::MigrationStep],
     new_catalog: &Catalog,
     partition: &ModulePartition,
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
 ) -> Result<Vec<StepSection>> {
     let sections = sectionize_steps(
-        steps,
         &Catalog::empty(),
         new_catalog,
         partition,
@@ -409,23 +405,19 @@ pub(crate) fn acquisition_sections(provenance_cut_sections: &[StepSection]) -> V
 /// STARTING catalog (the diff's old side — objects at their V−1 state).
 ///
 /// This reuses the exact machinery baseline generation uses — CREATE steps for
-/// a whole catalog via [`crate::diff::plan`] against `empty`, sectionized and
-/// provenance-cut — but aims it at `old_catalog` instead of the desired
-/// catalog. The provenance cut already isolates the moved objects into
-/// single-source remap sections; [`acquisition_sections`] then keeps the
-/// module-sourced ones and attaches the reviewer comment. A migration with no
-/// module-sourced moves yields an empty vec.
+/// a whole catalog sectionized and provenance-cut — but aims it at `old_catalog`
+/// instead of the desired catalog. The provenance cut already isolates the
+/// moved objects into single-source remap sections; [`acquisition_sections`]
+/// then keeps the module-sourced ones and attaches the reviewer comment. A
+/// migration with no module-sourced moves yields an empty vec.
 fn acquisition_sections_from_starting_catalog(
     old_catalog: &Catalog,
     partition: &ModulePartition,
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
 ) -> Result<Vec<StepSection>> {
-    let empty = Catalog::empty();
-    let steps = crate::diff::plan(&empty, old_catalog)?;
     let sections = sectionize_steps(
-        &steps,
-        &empty,
+        &Catalog::empty(),
         old_catalog,
         partition,
         file_mapping,
@@ -448,7 +440,7 @@ fn acquisition_sections_from_starting_catalog(
 /// sections continue the section numbering.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_migration_with_acquisitions(
-    migration_steps: &[crate::diff::operations::MigrationStep],
+    has_changes: bool,
     re_anchored: bool,
     old_catalog: &Catalog,
     new_catalog: &Catalog,
@@ -456,17 +448,16 @@ pub(crate) fn render_migration_with_acquisitions(
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
 ) -> Result<Option<String>> {
-    let ordinary = if migration_steps.is_empty() {
-        Vec::new()
-    } else {
+    let ordinary = if has_changes {
         sectionize_steps(
-            migration_steps,
             old_catalog,
             new_catalog,
             partition,
             file_mapping,
             historical,
         )?
+    } else {
+        Vec::new()
     };
     // Acquisition sections establish the delta's precondition (the moved
     // objects at V−1), so they lead the file — prepended before the ordinary
@@ -498,7 +489,6 @@ pub(crate) fn render_migration_with_acquisitions(
 pub fn section_baseline_if_moduled(
     module_gen: Option<&ModuleGeneration>,
     baseline_path: &std::path::Path,
-    baseline_steps: &[crate::diff::operations::MigrationStep],
     new_catalog: &Catalog,
     file_mapping: &FileToObjectMapping,
     historical: &HistoricalAttribution,
@@ -506,7 +496,6 @@ pub fn section_baseline_if_moduled(
     if let Some(module_gen) = module_gen {
         write_sectioned_baseline(
             baseline_path,
-            baseline_steps,
             new_catalog,
             &module_gen.partition,
             file_mapping,
@@ -523,10 +512,8 @@ pub fn section_baseline_if_moduled(
 /// and — for modules — no module-sourced moves: a pure base-sourced re-tag
 /// stays baseline-only). The two `migrate update` sites that need a String map
 /// `None` to their "-- No changes detected" placeholder.
-#[allow(clippy::too_many_arguments)]
 pub fn render_generated_migration(
     module_gen: Option<&ModuleGeneration>,
-    migration_steps: &[crate::diff::operations::MigrationStep],
     has_changes: bool,
     plain_migration_sql: &str,
     old_catalog: &Catalog,
@@ -536,7 +523,7 @@ pub fn render_generated_migration(
 ) -> Result<Option<String>> {
     match module_gen {
         Some(module_gen) => render_migration_with_acquisitions(
-            if has_changes { migration_steps } else { &[] },
+            has_changes,
             module_gen.diverged,
             old_catalog,
             new_catalog,

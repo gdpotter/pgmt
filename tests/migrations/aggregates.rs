@@ -3,7 +3,7 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{AggregateOperation, MigrationStep};
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 
 /// Helper SQL to create a state transition function for testing
 fn create_sfunc_sql(schema: &str, name: &str) -> String {
@@ -425,9 +425,7 @@ async fn test_aggregate_cascade_on_function_drop() -> Result<()> {
             let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // The aggregate should cascade (depends on function, which depends on type)
             let drop_agg = steps.iter().any(|s| {

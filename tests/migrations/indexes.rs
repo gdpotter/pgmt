@@ -3,7 +3,7 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{CommentOperation, IndexOperation, MigrationStep, TypeOperation};
-use pgmt::diff::{cascade, diff_all, diff_order};
+use pgmt::diff::plan;
 
 #[tokio::test]
 async fn test_index_create_migration() -> Result<()> {
@@ -312,9 +312,7 @@ async fn test_index_cascade_on_type_change() -> Result<()> {
             let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
             let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
 
-            let mut steps = diff_all(&initial_catalog, &target_catalog);
-            steps = cascade::expand(steps, &initial_catalog, &target_catalog);
-            steps = diff_order(steps, &initial_catalog, &target_catalog)?;
+            let steps = plan(&initial_catalog, &target_catalog)?;
 
             // The type change should cascade to the index
             let drop_index_pos = steps
