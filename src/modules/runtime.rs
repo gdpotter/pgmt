@@ -4,7 +4,7 @@
 //! [`crate::migration_tracking::TrackingStore`].
 
 use super::crossing::{
-    CrossingCheck, PendingCrossing, ReAnchor, discover_re_anchors, evaluate_crossing,
+    CrossingCheck, PendingCrossing, ReAnchor, discover_re_anchors, evaluate_crossing, run_eligible,
 };
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -261,7 +261,16 @@ impl ModuleRuntime {
             .covered_baseline_section_names(re_anchor.version)
             .await?;
 
-        match evaluate_crossing(re_anchor, &self.established, &applied_sections, acquirable) {
+        // The gate consumes the SAME run-eligibility decision the classifier's
+        // `to_run` obeys: filter the migration's acquisition pairs through
+        // `run_eligible` here, so evaluate_crossing never re-predicts what runs.
+        let will_run: BTreeSet<(Option<String>, Option<String>)> = acquirable
+            .iter()
+            .filter(|(module, _)| run_eligible(module, &self.established, &re_anchor.plain_modules))
+            .cloned()
+            .collect();
+
+        match evaluate_crossing(re_anchor, &self.established, &applied_sections, &will_run) {
             CrossingCheck::Blocked {
                 needs_adoption,
                 unsatisfiable,

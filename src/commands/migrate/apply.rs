@@ -10,7 +10,7 @@ use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     format_tracking_table_name, initialize_sections, register_migration_start, version_from_db,
 };
-use crate::modules::{ModuleRuntime, ModuleSelection};
+use crate::modules::{ModuleRuntime, ModuleSelection, SectionClassification, SkipNotice};
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -407,7 +407,7 @@ pub(crate) async fn apply_pending_migrations(
 
         // Version V's own selection and warnings see the POST-crossing
         // vocabulary the gate computed — a split at V tags V's sections
-        // with the new names. Source-held checks below deliberately keep the
+        // with the new names. Source-held checks deliberately keep the
         // PRE-crossing subscription: remap sources are pre-V vocabulary, and
         // the commit (which drops absorbed sources) only lands after V's
         // sections run.
@@ -416,26 +416,6 @@ pub(crate) async fn apply_pending_migrations(
             .map(|p| p.rewritten().clone())
             .unwrap_or_else(|| runtime.established().clone());
 
-        // Module selection: ordinary sections run when their module is
-        // requested (+ the base, always); the rest skip and leave NO rows
-        // (derived skipped-ness, no trace of unrequested work). REMAP
-        // (acquisition) sections are crossing work: they run
-        // wherever their owning module is in the post-crossing vocabulary —
-        // the base always, auto-subscribing brand-new modules included —
-        // independent of the requested set (declining would leave the
-        // crossing's module partial).
-        let section_selected = |s: &crate::migration::section_parser::MigrationSection| {
-            if s.remaps.is_none() {
-                selection.selects(s.module.as_deref())
-            } else {
-                match s.module.as_deref() {
-                    None => true,
-                    Some(m) => vocabulary.contains(m) || selection.selects(Some(m)),
-                }
-            }
-        };
-        let selected: Vec<&crate::migration::section_parser::MigrationSection> =
-            sections.iter().filter(|s| section_selected(s)).collect();
         let statuses = if registered.is_some() {
             section_statuses(
                 pool,
@@ -448,87 +428,50 @@ pub(crate) async fn apply_pending_migrations(
             Default::default()
         };
 
-        // Uniform execution rule for remap sections: in ANY
-        // artifact a remap section executes only where its source is absent,
-        // and records `satisfied` where the source is established — the
-        // acquired objects already exist here under the source's name, and the
-        // crossing relabels them. Partition the selected sections accordingly:
-        // `to_run` executes; `to_satisfy` records rows without DDL.
-        let satisfied_by_source = |s: &crate::migration::section_parser::MigrationSection| {
-            s.remaps.is_some() && crate::modules::remap_source_held(s, runtime.established())
-        };
-        let to_run: Vec<&crate::migration::section_parser::MigrationSection> = selected
-            .iter()
-            .copied()
-            .filter(|s| !satisfied_by_source(s))
-            .collect();
-        let to_satisfy: Vec<(i32, crate::migration::section_parser::MigrationSection)> = sections
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| section_selected(s) && satisfied_by_source(s))
-            .filter(|(_, s)| !statuses.get(&s.name).is_some_and(|st| st.is_covered()))
-            .map(|(i, s)| (i as i32, s.clone()))
-            .collect();
+        // THE section classifier: one pure verdict for what runs, what is
+        // recorded satisfied, what is skipped (and at what notice level), and
+        // whether coupling is violated. `to_run` already excludes covered
+        // sections, so SectionExecutor's per-section is_covered re-query is
+        // defense-in-depth and the reporter count is accurate.
+        let SectionClassification {
+            to_run,
+            to_satisfy,
+            selected,
+            skipped,
+            coupling_violation,
+        } = crate::modules::classify_sections(
+            &sections,
+            &statuses,
+            &vocabulary,
+            selection,
+            runtime.established(),
+        );
 
-        // Only sections that are NOT already covered here (completed or
-        // satisfied) are actually being skipped — an unselected module whose
-        // sections ran in an earlier deploy is up to date, not drifting.
-        let mut skipped_modules: BTreeSet<&str> = BTreeSet::new();
-        for section in &sections {
-            if let Some(module) = section.module.as_deref()
-                && !section_selected(section)
-                && !statuses
-                    .get(&section.name)
-                    .is_some_and(|st| st.is_covered())
-            {
-                skipped_modules.insert(module);
-            }
-        }
-        for module in &skipped_modules {
-            if vocabulary.contains(*module) {
-                eprintln!(
+        for skip in &skipped {
+            match skip.notice {
+                SkipNotice::Drift => eprintln!(
                     "Warning: module '{}' is established on this target but not in the \
                      requested set — its sections in migration {} were skipped. This is \
                      schema drift until a deploy names it (--modules ...,{}).",
-                    module, migration.version, module
-                );
-            } else {
-                println!(
+                    skip.module, migration.version, skip.module
+                ),
+                SkipNotice::NotEstablished => println!(
                     "Skipping module '{}' sections in migration {} (not established here)",
-                    module, migration.version
-                );
+                    skip.module, migration.version
+                ),
             }
         }
 
-        // Conservative intra-migration coupling check: section order encodes
-        // potential dependency, so a selected section must not run while an
-        // EARLIER unselected section of an established module is still
-        // pending — its objects may be prerequisites. (Never-established
-        // modules' objects don't exist here; real cross-module needs are
-        // covered by the dependency-closure guard.)
-        for (idx, section) in sections.iter().enumerate() {
-            if !section_selected(section) {
-                continue;
-            }
-            for earlier in &sections[..idx] {
-                if let Some(module) = earlier.module.as_deref()
-                    && !section_selected(earlier)
-                    && vocabulary.contains(module)
-                    && !statuses
-                        .get(&earlier.name)
-                        .is_some_and(|st| st.is_covered())
-                {
-                    anyhow::bail!(
-                        "migration {} couples module '{}' (section '{}') ahead of selected \
-                         section '{}'; deploy them together (--modules ...,{})",
-                        migration.version,
-                        module,
-                        earlier.name,
-                        section.name,
-                        module
-                    );
-                }
-            }
+        if let Some(v) = &coupling_violation {
+            anyhow::bail!(
+                "migration {} couples module '{}' (section '{}') ahead of selected \
+                 section '{}'; deploy them together (--modules ...,{})",
+                migration.version,
+                v.module,
+                v.earlier_section,
+                v.section,
+                v.module
+            );
         }
 
         if registered.is_some() {
@@ -549,8 +492,9 @@ pub(crate) async fn apply_pending_migrations(
             // Under module selection, "done" means every SELECTED section is
             // covered (completed, or satisfied for source-held remap sections)
             // — unselected modules' sections stay unrecorded until adopted.
-            let fully_applied = selected.iter().all(|s| {
-                statuses.get(&s.name).is_some_and(|st| st.is_covered()) || satisfied_by_source(s)
+            let fully_applied = selected.iter().all(|(_, s)| {
+                statuses.get(&s.name).is_some_and(|st| st.is_covered())
+                    || crate::modules::remap_source_held(s, runtime.established())
             });
             if fully_applied && to_satisfy.is_empty() {
                 debug!("Migration {} already applied, skipping", migration.version);
@@ -559,7 +503,7 @@ pub(crate) async fn apply_pending_migrations(
             }
             let done = selected
                 .iter()
-                .filter(|s| statuses.get(&s.name).is_some_and(|st| st.is_covered()))
+                .filter(|(_, s)| statuses.get(&s.name).is_some_and(|st| st.is_covered()))
                 .count();
             println!(
                 "\nResuming migration {} - {} ({}/{} sections already complete)",
@@ -568,20 +512,16 @@ pub(crate) async fn apply_pending_migrations(
                 done,
                 selected.len()
             );
-            // Register any selected TO-RUN sections this target hasn't seen
-            // yet (adopting a module completes past versions' sections). Each
+            // Register any TO-RUN sections this target hasn't seen yet
+            // (adopting a module completes past versions' sections). Each
             // carries its index in the FULL file so section_order stays stable
             // per version regardless of which subset this call registers.
-            // Source-satisfied remap sections are recorded below instead.
-            let missing: Vec<(i32, crate::migration::section_parser::MigrationSection)> = sections
+            // Source-satisfied remap sections are recorded below instead; the
+            // classifier already excluded them from `to_run`.
+            let missing: Vec<(i32, crate::migration::section_parser::MigrationSection)> = to_run
                 .iter()
-                .enumerate()
-                .filter(|(_, s)| {
-                    section_selected(s)
-                        && !satisfied_by_source(s)
-                        && !statuses.contains_key(&s.name)
-                })
-                .map(|(i, s)| (i as i32, s.clone()))
+                .filter(|(_, s)| !statuses.contains_key(&s.name))
+                .cloned()
                 .collect();
             if !missing.is_empty() {
                 initialize_sections(
@@ -607,26 +547,20 @@ pub(crate) async fn apply_pending_migrations(
                 "\nApplying migration {} - {}",
                 migration.version, migration.description
             );
-            // Register the version row + the selected TO-RUN Pending section
-            // rows atomically, before anything executes. Each selected section
-            // carries its index in the FULL file so section_order stays stable
-            // per version even when a later call registers another subset.
-            // Source-satisfied remap sections are recorded below (insert +
-            // satisfied in one transaction) — never left Pending.
-            let selected_ordered: Vec<(i32, crate::migration::section_parser::MigrationSection)> =
-                sections
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| section_selected(s) && !satisfied_by_source(s))
-                    .map(|(i, s)| (i as i32, s.clone()))
-                    .collect();
+            // Register the version row + the TO-RUN Pending section rows
+            // atomically, before anything executes. Each section carries its
+            // index in the FULL file so section_order stays stable per version
+            // even when a later call registers another subset. Nothing is
+            // recorded yet, so `to_run` here is exactly the selected non-
+            // source-satisfied sections (statuses is empty on this path);
+            // source-satisfied remap sections are recorded satisfied below.
             register_migration_start(
                 pool,
                 &config.migration.tracking_table,
                 migration.version,
                 &migration.description,
                 &checksum,
-                &selected_ordered,
+                &to_run,
             )
             .await?;
         }
@@ -667,8 +601,9 @@ pub(crate) async fn apply_pending_migrations(
             false,
         );
 
-        // Execute each to-run section (already-covered ones skip inside)
-        for section in &to_run {
+        // Execute each to-run section (any already-covered ones would skip
+        // inside — defense-in-depth; the classifier already excluded them).
+        for (_, section) in &to_run {
             executor
                 .execute_section(migration.version, section)
                 .await

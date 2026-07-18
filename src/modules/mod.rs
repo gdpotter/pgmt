@@ -59,11 +59,13 @@
 //! - [`runtime`] — apply-time [`ModuleRuntime`]: the stored subscription plus
 //!   the two-phase crossing, delegating all SQL to the tracking store.
 
+mod classifier;
 mod crossing;
 mod partition;
 mod runtime;
 mod sectioning;
 
+pub use classifier::{SectionClassification, SkipNotice, classify_sections};
 pub use crossing::remap_source_held;
 pub use partition::{
     HistoricalAttribution, ModulePartition, ModuleSelection, UNMODULED_DISPLAY, display_module,
@@ -84,7 +86,14 @@ pub use sectioning::{
 // submodules as pub-fn return types, and `validate_module_references` /
 // `ModuleReferenceReport` are used by `tests/integration/modules_attribution`.
 #[allow(unused_imports)]
+pub use classifier::{CouplingViolation, SkippedModule};
+#[allow(unused_imports)]
 pub use crossing::PendingCrossing;
+// `run_eligible` is consumed by the crossing gate (runtime uses it via the
+// private submodule) and by the classifier's gate-consistency test; the
+// crate-level re-export is for the latter and is otherwise unnamed here.
+#[allow(unused_imports)]
+pub(crate) use crossing::run_eligible;
 #[allow(unused_imports)]
 pub use partition::{ModuleReferenceReport, validate_module_references};
 #[allow(unused_imports)]

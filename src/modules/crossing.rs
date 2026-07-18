@@ -135,6 +135,29 @@ pub(crate) enum CrossingCheck {
     },
 }
 
+/// Will-run eligibility for an owning module's acquisition sections at a
+/// crossing: the base flows with every apply, a subscribed module runs, and a
+/// **brand-new** module (no plain section, so the crossing adds no objects)
+/// auto-subscribes and runs. A pre-existing unsubscribed module is NOT
+/// run-eligible (relabeling into it would orphan objects — the needed-modules
+/// gate catches that separately).
+///
+/// THE one definition of run-eligibility: the crossing gate feeds it the
+/// pending migration's acquisition pairs to compute the `will_run` set
+/// [`evaluate_crossing`] consumes, and the same predicate governs the
+/// classifier's `to_run` — so the gate's prediction and the executor's decision
+/// cannot drift.
+pub(crate) fn run_eligible(
+    module: &Option<String>,
+    subscription: &BTreeSet<String>,
+    plain_modules: &BTreeSet<String>,
+) -> bool {
+    match module {
+        None => true,
+        Some(m) => subscription.contains(m) || !plain_modules.contains(m),
+    }
+}
+
 /// The extended wholeness rule. A remap section is **satisfied** iff its
 /// source is established (objects present under the source's name → the
 /// crossing relabels) OR the target has already applied the section (a
@@ -168,18 +191,19 @@ pub(crate) enum CrossingCheck {
 ///   [`ReAnchor::surviving_modules`]).
 ///
 /// `applied_sections` is the set of section *names* of THIS re-anchor that the
-/// target has a completed|satisfied row for. `acquirable` is the set of
+/// target has a completed|satisfied row for. `will_run` is the set of
 /// `(module, source)` pairs carried as remap sections by the pending migration
-/// at V in THIS apply (migration-borne acquisition) — empty when V's
-/// migration is not about to run (single-shot crossings, the final sweep):
-/// such a section is *satisfiable* because it **will run in this apply**,
-/// provided its owning module is run-eligible (the base, subscribed, or
-/// brand-new-and-auto-subscribing).
+/// at V that **will actually run in this apply** — the caller has already
+/// filtered the migration's acquisition pairs through [`run_eligible`], so this
+/// function no longer predicts run-eligibility itself (that would be a second,
+/// drift-prone copy of the decision). `will_run` is empty when V's migration is
+/// not about to run (single-shot crossings, the final sweep): such a section is
+/// *satisfiable* only if its source is present or it was already applied.
 pub(crate) fn evaluate_crossing(
     re_anchor: &ReAnchor,
     subscription: &BTreeSet<String>,
     applied_sections: &BTreeSet<String>,
-    acquirable: &BTreeSet<(Option<String>, Option<String>)>,
+    will_run: &BTreeSet<(Option<String>, Option<String>)>,
 ) -> CrossingCheck {
     let source_established =
         |s: &Option<String>| s.as_ref().is_none_or(|m| subscription.contains(m));
@@ -223,17 +247,12 @@ pub(crate) fn evaluate_crossing(
             continue;
         }
 
-        // Will-run eligibility gate: M's acquisition sections in
-        // migration V execute here when M is the base (flows with every
-        // apply), subscribed, or brand-new and auto-subscribing at this
-        // crossing. (Pre-existing-unsubscribed was caught above.)
-        let run_eligible = match module {
-            None => true,
-            Some(m) => subscribed || !re_anchor.plain_modules.contains(m),
-        };
+        // A section is *satisfiable* when its source is present, it was already
+        // applied, or migration V's paired acquisition section for it will run
+        // in this apply. The will-run decision is the caller's (via
+        // [`run_eligible`]) — evaluate_crossing no longer re-derives it.
         let satisfiable = |rs: &RemapSection| {
-            satisfied_now(rs)
-                || (run_eligible && acquirable.contains(&(rs.module.clone(), rs.source.clone())))
+            satisfied_now(rs) || will_run.contains(&(rs.module.clone(), rs.source.clone()))
         };
 
         if !sections.iter().all(|rs| satisfiable(rs)) {
@@ -248,9 +267,8 @@ pub(crate) fn evaluate_crossing(
 
         // Whole for this module. Subscribe it when appropriate, then drop
         // wholly-absorbed sources.
-        let auto_subscribe = module
-            .as_ref()
-            .is_some_and(|m| subscribed || !re_anchor.plain_modules.contains(m));
+        let auto_subscribe =
+            module.is_some() && run_eligible(module, subscription, &re_anchor.plain_modules);
         if let Some(m) = module
             && auto_subscribe
         {
@@ -338,16 +356,19 @@ mod tests {
         }
     }
 
-    /// (module, source) pairs the pending migration carries as acquisition
-    /// sections — the will-run input to [`evaluate_crossing`].
-    fn acq(pairs: &[(Option<&str>, Option<&str>)]) -> BTreeSet<(Option<String>, Option<String>)> {
+    /// (module, source) pairs the pending migration's acquisition sections
+    /// WILL run in this apply — the run-eligibility-filtered input to
+    /// [`evaluate_crossing`] (the caller filters via [`run_eligible`]).
+    fn will_run(
+        pairs: &[(Option<&str>, Option<&str>)],
+    ) -> BTreeSet<(Option<String>, Option<String>)> {
         pairs
             .iter()
             .map(|(m, s)| (m.map(str::to_string), s.map(str::to_string)))
             .collect()
     }
 
-    fn no_acq() -> BTreeSet<(Option<String>, Option<String>)> {
+    fn no_will_run() -> BTreeSet<(Option<String>, Option<String>)> {
         BTreeSet::new()
     }
 
@@ -367,7 +388,7 @@ mod tests {
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &BTreeSet::new(), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &BTreeSet::new(), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             }
@@ -385,7 +406,7 @@ mod tests {
             &["app", "analytics"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["app"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["app"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["analytics", "app"])
             },
@@ -404,7 +425,7 @@ mod tests {
             &["c"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
             }
@@ -428,7 +449,7 @@ mod tests {
                 &ra,
                 &subs(&["a"]),
                 &BTreeSet::new(),
-                &acq(&[(Some("c"), Some("a")), (Some("c"), Some("b"))]),
+                &will_run(&[(Some("c"), Some("a")), (Some("c"), Some("b"))]),
             ),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
@@ -437,7 +458,7 @@ mod tests {
         // Without the acquisition sections (an artifact predating
         // migration-borne acquisition) the b-section is unsatisfiable.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_will_run()),
             blocked(&[], &["c_2"])
         );
     }
@@ -454,7 +475,7 @@ mod tests {
             &["c"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &subs(&["c_2"]), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a"]), &subs(&["c_2"]), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["c"])
             }
@@ -475,7 +496,7 @@ mod tests {
             &["a", "b"], // partial move: a keeps objects of its own
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_will_run()),
             blocked(&["b"], &[]),
             "needed + pre-existing + not subscribed blocks the crossing"
         );
@@ -487,20 +508,20 @@ mod tests {
                 &ra,
                 &subs(&["a"]),
                 &BTreeSet::new(),
-                &acq(&[(Some("b"), Some("a"))]),
+                &will_run(&[(Some("b"), Some("a"))]),
             ),
             blocked(&["b"], &[]),
         );
         // Once b is subscribed (adopted), the crossing keeps both; a survives.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a", "b"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["a", "b"])
             }
         );
         // A target with neither a nor b is not engaged: irrelevant, no block.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
             }
@@ -513,7 +534,7 @@ mod tests {
         // a wholly absorbed → drops out.
         let ra = re_anchor(1700, &[("b", Some("b"), Some("a"))], &[], &["b"]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["a"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["b"])
             }
@@ -525,7 +546,12 @@ mod tests {
         // a → base: a subscribed → removed (its objects are base now).
         let ra = re_anchor(1800, &[("default", None, Some("a"))], &[], &[]);
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["a", "other"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(
+                &ra,
+                &subs(&["a", "other"]),
+                &BTreeSet::new(),
+                &no_will_run()
+            ),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
             }
@@ -543,7 +569,7 @@ mod tests {
                 &ra,
                 &subs(&["other"]),
                 &BTreeSet::new(),
-                &acq(&[(None, Some("a"))]),
+                &will_run(&[(None, Some("a"))]),
             ),
             CrossingCheck::Whole {
                 rewritten: subs(&["other"])
@@ -552,7 +578,7 @@ mod tests {
         // Without it (an artifact predating migration-borne acquisition):
         // unsatisfiable.
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["other"]), &BTreeSet::new(), &no_will_run()),
             blocked(&[], &["default"])
         );
     }
@@ -569,7 +595,7 @@ mod tests {
             &["analytics", "reports"],
         );
         assert_eq!(
-            evaluate_crossing(&ra, &subs(&["core"]), &BTreeSet::new(), &no_acq()),
+            evaluate_crossing(&ra, &subs(&["core"]), &BTreeSet::new(), &no_will_run()),
             CrossingCheck::Whole {
                 rewritten: subs(&["core"])
             }
