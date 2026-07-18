@@ -735,6 +735,257 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Direct `collect_edges` pins — one per synthetic edge rule.
+    //
+    // These exercise the edge derivation itself (not the affinity traversal on
+    // top of it). Each fabricates a minimal step list in an order that TEMPTS
+    // the rule into being wrong, and asserts the required `(before, after)`
+    // pair is present. Every case is isolated so exactly one rule can produce
+    // the asserted edge — a mutation that deletes that rule fails the pin.
+    // -----------------------------------------------------------------------
+
+    fn table_create(schema: &str, name: &str) -> MigrationStep {
+        MigrationStep::Table(crate::diff::operations::TableOperation::Create {
+            schema: schema.to_string(),
+            name: name.to_string(),
+            columns: vec![],
+            primary_key: None,
+        })
+    }
+
+    fn table_drop(schema: &str, name: &str) -> MigrationStep {
+        MigrationStep::Table(crate::diff::operations::TableOperation::Drop {
+            schema: schema.to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    fn table_alter(schema: &str, name: &str) -> MigrationStep {
+        MigrationStep::Table(crate::diff::operations::TableOperation::Alter {
+            schema: schema.to_string(),
+            name: name.to_string(),
+            actions: vec![],
+        })
+    }
+
+    /// The same-id drop→create rule, ISOLATED. Schemas have no namespace slot
+    /// and no catalog deps, so the only edge that can order a same-named
+    /// create/drop is the same-id rule. Fed create-first (the order the mutation
+    /// audit found unpinned) — the edge must still force drop (idx 1) before
+    /// create (idx 0).
+    #[test]
+    fn test_collect_edges_same_id_drop_before_create() {
+        let steps = vec![
+            MigrationStep::Schema(SchemaOperation::Create {
+                name: "s".to_string(),
+            }),
+            MigrationStep::Schema(SchemaOperation::Drop {
+                name: "s".to_string(),
+            }),
+        ];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "drop must precede create for the same id; edges={edges:?}"
+        );
+    }
+
+    /// Create-before-alter: an ALTER on an object must follow its CREATE. Fed
+    /// alter-first to tempt a flip. Table create (idx 1) → table alter (idx 0).
+    #[test]
+    fn test_collect_edges_create_before_alter() {
+        let steps = vec![table_alter("public", "t"), table_create("public", "t")];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "create must precede alter for the same id; edges={edges:?}"
+        );
+    }
+
+    /// Same-id ALTER chain: consecutive ALTERs on one object keep emission
+    /// order (e.g. DROP CONSTRAINT before re-ADD). Two same-id alters (idx 0,
+    /// idx 1) → edge (0, 1).
+    #[test]
+    fn test_collect_edges_same_id_alter_chain() {
+        let steps = vec![table_alter("public", "t"), table_alter("public", "t")];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(0, 1)),
+            "consecutive same-id alters keep emission order; edges={edges:?}"
+        );
+    }
+
+    /// Namespace-slot drop-before-create across object types. A CONSTRAINT and a
+    /// TABLE of the same name collide in `pg_class` (the Relation slot) with no
+    /// pg_depend edge and distinct DbObjectIds, so only the namespace rule can
+    /// order them. Constraint drop (idx 1) must precede the colliding table
+    /// create (idx 0).
+    #[test]
+    fn test_collect_edges_namespace_slot_drop_before_create() {
+        use crate::diff::operations::{ConstraintOperation, constraint::ConstraintIdentifier};
+        let steps = vec![
+            table_create("public", "foo"),
+            MigrationStep::Constraint(ConstraintOperation::Drop(ConstraintIdentifier {
+                schema: "public".to_string(),
+                table_name: "orders".to_string(),
+                name: "foo".to_string(),
+            })),
+        ];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        // Distinct ids, so the same-id rule cannot apply.
+        assert_ne!(steps[0].id(), steps[1].id());
+        assert!(
+            edges.contains(&(1, 0)),
+            "same-slot drop must precede the colliding create; edges={edges:?}"
+        );
+    }
+
+    /// Extensions-first: every extension CREATE precedes every non-extension,
+    /// non-schema CREATE. Fed table-first. Extension create (idx 1) → table
+    /// create (idx 0).
+    #[test]
+    fn test_collect_edges_extensions_created_first() {
+        use crate::catalog::extension::Extension;
+        use crate::diff::operations::ExtensionOperation;
+        let steps = vec![
+            table_create("public", "t"),
+            MigrationStep::Extension(ExtensionOperation::Create {
+                extension: Extension {
+                    name: "citext".to_string(),
+                    schema: "public".to_string(),
+                    version: "1.0".to_string(),
+                    relocatable: false,
+                    comment: None,
+                    depends_on: vec![],
+                },
+            }),
+        ];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "extension create must precede non-extension creates; edges={edges:?}"
+        );
+    }
+
+    /// Comment attachment: a comment step follows the step that
+    /// creates/alters its object. Comment on schema `s` (idx 0) must follow the
+    /// schema create (idx 1) → edge (1, 0).
+    #[test]
+    fn test_collect_edges_comment_follows_its_object() {
+        use crate::catalog::target::AttrTarget;
+        use crate::diff::operations::CommentOperation;
+        let steps = vec![
+            MigrationStep::Comment(CommentOperation::Set {
+                target: AttrTarget::object(DbObjectId::Schema {
+                    name: "s".to_string(),
+                }),
+                comment: "hi".to_string(),
+            }),
+            MigrationStep::Schema(SchemaOperation::Create {
+                name: "s".to_string(),
+            }),
+        ];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "comment must follow the step that creates its object; edges={edges:?}"
+        );
+    }
+
+    /// Catalog `forward_deps`, create direction: an object follows the objects
+    /// it depends on. new_catalog records `a depends on b`; both are creates, so
+    /// b (idx 1) → a (idx 0).
+    #[test]
+    fn test_collect_edges_forward_deps_create_direction() {
+        let a = DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "a".to_string(),
+        };
+        let b = DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "b".to_string(),
+        };
+        let steps = vec![table_create("public", "a"), table_create("public", "b")];
+        let mut new_catalog = Catalog::empty();
+        new_catalog.forward_deps.insert(a, vec![b]);
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &new_catalog, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "a create must follow its dependency b; edges={edges:?}"
+        );
+    }
+
+    /// Catalog `forward_deps`, drop direction (REVERSED): a dependent object is
+    /// dropped before the object it depends on. old_catalog records `a depends
+    /// on b`; both are drops, so a (idx 0) → b (idx 1).
+    #[test]
+    fn test_collect_edges_forward_deps_drop_direction_reversed() {
+        let a = DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "a".to_string(),
+        };
+        let b = DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "b".to_string(),
+        };
+        let steps = vec![table_drop("public", "a"), table_drop("public", "b")];
+        let mut old_catalog = Catalog::empty();
+        old_catalog.forward_deps.insert(a, vec![b]);
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &old_catalog, &empty, false);
+        assert!(
+            edges.contains(&(0, 1)),
+            "dependent a must be dropped before its dependency b; edges={edges:?}"
+        );
+    }
+
+    /// Step-declared dependency fallback: when the catalog is silent about a
+    /// step (dynamically generated grants/revokes), its own `depends_on` orders
+    /// it. A grant depending on schema `s`, empty catalogs, so the fallback
+    /// fires: schema create (idx 1) → grant (idx 0).
+    #[test]
+    fn test_collect_edges_step_declared_dependency_fallback() {
+        use crate::catalog::grant::{Grant, GranteeType};
+        use crate::catalog::target::AttrTarget;
+        use crate::diff::operations::GrantOperation;
+        let schema_id = DbObjectId::Schema {
+            name: "s".to_string(),
+        };
+        let grant = Grant {
+            grantee: GranteeType::Public,
+            target: AttrTarget::object(DbObjectId::Table {
+                schema: "s".to_string(),
+                name: "t".to_string(),
+            }),
+            privileges: vec!["SELECT".to_string()],
+            with_grant_option: false,
+            depends_on: vec![schema_id.clone()],
+            object_owner: "owner".to_string(),
+            is_default_acl: false,
+        };
+        let steps = vec![
+            MigrationStep::Grant(GrantOperation::Grant { grant }),
+            MigrationStep::Schema(SchemaOperation::Create {
+                name: "s".to_string(),
+            }),
+        ];
+        let empty = Catalog::empty();
+        let (edges, _) = collect_edges(&steps, &empty, &empty, false);
+        assert!(
+            edges.contains(&(1, 0)),
+            "a step's declared dependency must precede it when the catalog is \
+             silent; edges={edges:?}"
+        );
+    }
+
     /// Routine overload rule: a new overload's CREATE must not run before the
     /// old overload's DROP. The two steps share schema+name but carry distinct
     /// DbObjectIds (their arguments differ), so the same-id drop-before-create
