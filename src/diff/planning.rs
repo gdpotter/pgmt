@@ -397,11 +397,9 @@ pub fn annotate(
         }
     }
 
-    // MODULE-ONLY DELTA: the owned_by edge. `ALTER SEQUENCE ... OWNED BY
-    // schema.table.column` must follow its owning table's steps, but `owned_by`
-    // is an unparsed string the catalogs never see, so no shared rule records
-    // it. The legacy path instead orders every relationship step in a second
-    // batch after all primary steps, which covers this implicitly.
+    // The owned_by edge: `ALTER SEQUENCE ... OWNED BY schema.table.column` must
+    // follow its owning table's steps, but `owned_by` is an unparsed string the
+    // catalogs never see, so no rule in `collect_edges` records it. Add it here.
     let mut id_to_indices: BTreeMap<DbObjectId, Vec<usize>> = BTreeMap::new();
     for (i, step) in steps.iter().enumerate() {
         id_to_indices.entry(step.id()).or_default().push(i);

@@ -121,8 +121,11 @@ impl MigrationStep {
             .any(|s| s.safety == Safety::Destructive)
     }
 
-    /// Returns true if this step is a "relationship" step that creates circular dependencies
-    /// These steps should be executed in a second phase after all primary object creation
+    /// Returns true if this step is a "relationship" step: one whose id it
+    /// shares with an object it does not PROVIDE (an FK create, an `ALTER
+    /// SEQUENCE … OWNED BY`). Ordering (`planning::collect_edges`) never treats
+    /// such a step as a dependency provider, so nothing waits on it merely for
+    /// sharing the object's id.
     pub fn is_relationship(&self) -> bool {
         match self {
             MigrationStep::Sequence(SequenceOperation::AlterOwnership { .. }) => true,

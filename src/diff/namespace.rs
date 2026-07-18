@@ -81,7 +81,7 @@ pub fn namespace_slots(id: &DbObjectId) -> Vec<NamespaceSlot> {
         // (schema, name, argtypes); a function and a procedure with the same
         // signature collide, so they occupy a shared Routine slot. (Broader
         // same-name overload ambiguity is handled by the function-overload rule
-        // in `order_steps_by_dependencies`.)
+        // in `planning::collect_edges`.)
         DbObjectId::Function {
             schema,
             name,
