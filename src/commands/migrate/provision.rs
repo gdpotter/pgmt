@@ -258,9 +258,7 @@ async fn provision_inner(
         // any newly requested modules — both the baseline-adopted ones above
         // and pure-replay ones the apply loop below will catch up.
         if let Some(named) = selection.named() {
-            runtime
-                .record_adopted(pool, &config.migration.tracking_table, named)
-                .await?;
+            runtime.record_adopted(named).await?;
         }
         return apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await;
     }
@@ -307,11 +305,7 @@ async fn provision_inner(
             // later re-anchors among the post-baseline migrations are ordinary
             // crossings for the shared apply loop below.
             runtime
-                .record_provisioned(
-                    pool,
-                    &config.migration.tracking_table,
-                    &selection.named().cloned().unwrap_or_default(),
-                )
+                .record_provisioned(&selection.named().cloned().unwrap_or_default())
                 .await?;
 
             apply_pending_migrations(pool, config, &post_baseline, &selection, &mut runtime)
@@ -336,11 +330,7 @@ async fn provision_inner(
             // derived cursor stays None (and there are no re-anchors either —
             // re-anchors are baselines).
             runtime
-                .record_provisioned(
-                    pool,
-                    &config.migration.tracking_table,
-                    &selection.named().cloned().unwrap_or_default(),
-                )
+                .record_provisioned(&selection.named().cloned().unwrap_or_default())
                 .await?;
             apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await?;
             println!("✅ Provisioned from migrations.");

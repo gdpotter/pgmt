@@ -83,6 +83,13 @@ impl TrackingStore {
         &self.main
     }
 
+    /// The pool handle this store wraps — for callers that must open their own
+    /// transaction (e.g. the crossing/provision recorders) and then run the
+    /// store's executor-taking writers inside it.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// `"schema"."name_sections"`.
     pub fn sections_table(&self) -> &str {
         &self.sections

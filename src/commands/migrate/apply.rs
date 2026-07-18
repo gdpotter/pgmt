@@ -175,9 +175,7 @@ async fn apply_with_module_guard(
         }
         // Explicitly requesting a module IS its adoption: subscribe
         // any newly requested modules before replaying their sections.
-        runtime
-            .record_adopted(pool, &config.migration.tracking_table, named)
-            .await?;
+        runtime.record_adopted(named).await?;
     }
 
     apply_pending_migrations(pool, config, migrations, selection, &mut runtime).await
@@ -251,11 +249,7 @@ pub(crate) async fn apply_pending_migrations(
         // failure bails at either point, refusing this and every later
         // version — the strong membrane.
         runtime
-            .cross_re_anchors_through(
-                pool,
-                &config.migration.tracking_table,
-                Some(migration.version.saturating_sub(1)),
-            )
+            .cross_re_anchors_through(Some(migration.version.saturating_sub(1)))
             .await?;
 
         // Skip migrations covered by a recorded baseline.
@@ -293,11 +287,7 @@ pub(crate) async fn apply_pending_migrations(
             // Nothing of this version runs here, so a re-anchor at it is a
             // single-shot gate+commit.
             runtime
-                .cross_re_anchors_through(
-                    pool,
-                    &config.migration.tracking_table,
-                    Some(migration.version),
-                )
+                .cross_re_anchors_through(Some(migration.version))
                 .await?;
             continue;
         }
@@ -325,12 +315,48 @@ pub(crate) async fn apply_pending_migrations(
             )
         })?;
 
+        let registered = applied_migrations.get(&migration.version);
+
+        // Two-phase gate: a re-anchor AT this version is gate-checked
+        // now — before V's sections — and committed only after they complete
+        // (acquisition deltas live in migration V itself). The gate sees
+        // which (module, source) acquisition sections this migration carries:
+        // a remap section is satisfiable when it WILL run in this apply.
+        //
+        // The gate runs BEFORE the immutability/checksum-sync step below: a
+        // membrane refusal must abort before `update_stored_file_checksum`
+        // mutates the stored fingerprint, and both need only the parsed
+        // sections — no work is lost by deciding the refusal first.
+        let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
+            .iter()
+            .filter_map(|s| {
+                let remap = s.remaps.as_deref()?;
+                let source = if remap == crate::modules::UNMODULED_DISPLAY {
+                    None
+                } else {
+                    Some(remap.to_string())
+                };
+                Some((s.module.clone(), source))
+            })
+            .collect();
+        let mut pending_crossing = runtime
+            .gate_re_anchor_at(migration.version, &acquirable)
+            .await?;
+        // Commit helper for the early-exit paths: nothing of V remains to
+        // run, so the gated crossing commits immediately.
+        macro_rules! commit_pending {
+            () => {
+                if let Some(pending) = pending_crossing.take() {
+                    runtime.commit_crossing(pending).await?;
+                }
+            };
+        }
+
         // Immutability is enforced at SECTION granularity (the unit of resume):
         // an already-applied section may never change, but an unapplied one may
         // be fixed in the repo and re-run. Validate the current file's sections
         // against the registered rows; the whole-file checksum is only a
         // fallback guard for legacy rows with no per-section checksums.
-        let registered = applied_migrations.get(&migration.version);
         if let Some(stored_file_checksum) = registered {
             let had_checksummed = validate_and_sync_section_checksums(
                 pool,
@@ -366,43 +392,6 @@ pub(crate) async fn apply_pending_migrations(
                 )
                 .await?;
             }
-        }
-
-        // Two-phase gate: a re-anchor AT this version is gate-checked
-        // now — before V's sections — and committed only after they complete
-        // (acquisition deltas live in migration V itself). The gate sees
-        // which (module, source) acquisition sections this migration carries:
-        // a remap section is satisfiable when it WILL run in this apply.
-        let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
-            .iter()
-            .filter_map(|s| {
-                let remap = s.remaps.as_deref()?;
-                let source = if remap == crate::modules::UNMODULED_DISPLAY {
-                    None
-                } else {
-                    Some(remap.to_string())
-                };
-                Some((s.module.clone(), source))
-            })
-            .collect();
-        let mut pending_crossing = runtime
-            .gate_re_anchor_at(
-                pool,
-                &config.migration.tracking_table,
-                migration.version,
-                &acquirable,
-            )
-            .await?;
-        // Commit helper for the early-exit paths: nothing of V remains to
-        // run, so the gated crossing commits immediately.
-        macro_rules! commit_pending {
-            () => {
-                if let Some(pending) = pending_crossing.take() {
-                    runtime
-                        .commit_crossing(pool, &config.migration.tracking_table, pending)
-                        .await?;
-                }
-            };
         }
 
         // Version V's own selection and warnings see the POST-crossing
@@ -635,9 +624,7 @@ pub(crate) async fn apply_pending_migrations(
     // re-anchor with no accompanying DDL) land on the next bare apply of a
     // fully-up-to-date target — the loop keys off the derived cursor, not off
     // pending migrations.
-    runtime
-        .cross_re_anchors_through(pool, &config.migration.tracking_table, None)
-        .await?;
+    runtime.cross_re_anchors_through(None).await?;
 
     Ok(())
 }

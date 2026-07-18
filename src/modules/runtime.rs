@@ -88,6 +88,10 @@ pub struct ModuleRuntime {
     /// adoption-routing input any consumer reads (see [`Self::adoption_baseline`],
     /// which returns the max-version baseline). `None` when no baseline exists.
     latest_baseline: Option<(u64, Vec<crate::migration::section_parser::MigrationSection>)>,
+    /// The tracking-table query surface, built once in [`Self::load`]. Every
+    /// SQL-touching method runs through this rather than re-formatting table
+    /// names and rebuilding a store per call.
+    store: crate::migration_tracking::TrackingStore,
 }
 
 impl ModuleRuntime {
@@ -130,6 +134,7 @@ impl ModuleRuntime {
             established: stored.modules,
             re_anchors,
             latest_baseline,
+            store,
         })
     }
 
@@ -184,19 +189,12 @@ impl ModuleRuntime {
     /// [`Self::gate_re_anchor_at`] / [`Self::commit_crossing`] pair instead
     /// (two-phase): its acquisition delta lives in migration V itself,
     /// so wholeness only finalizes once V's sections have run.
-    pub async fn cross_re_anchors_through(
-        &mut self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
-        ceiling: Option<u64>,
-    ) -> Result<()> {
+    pub async fn cross_re_anchors_through(&mut self, ceiling: Option<u64>) -> Result<()> {
         // The cursor is derived, not cached: the highest baseline version on
         // the target. Read once at entry — re-anchors are processed in
         // ascending version order and each commit writes a baseline row above
         // any already handled, so a single read covers the whole loop.
-        let cursor = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
-            .consumed_through_cursor()
-            .await?;
+        let cursor = self.store.consumed_through_cursor().await?;
         for i in 0..self.re_anchors.len() {
             let re_anchor = self.re_anchors[i].clone();
             if cursor.is_some_and(|w| re_anchor.version <= w) {
@@ -207,10 +205,8 @@ impl ModuleRuntime {
             }
             // Single-shot: nothing of this version remains to run, so no
             // acquisition section is "about to run" — pass an empty set.
-            let pending = self
-                .gate_re_anchor(pool, tracking_table, &re_anchor, &BTreeSet::new())
-                .await?;
-            self.commit_crossing(pool, tracking_table, pending).await?;
+            let pending = self.gate_re_anchor(&re_anchor, &BTreeSet::new()).await?;
+            self.commit_crossing(pending).await?;
         }
         Ok(())
     }
@@ -223,14 +219,10 @@ impl ModuleRuntime {
     /// strong membrane: nothing at or after V may run.
     pub async fn gate_re_anchor_at(
         &self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
         version: u64,
         acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<Option<PendingCrossing>> {
-        let cursor = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
-            .consumed_through_cursor()
-            .await?;
+        let cursor = self.store.consumed_through_cursor().await?;
         let Some(re_anchor) = self
             .re_anchors
             .iter()
@@ -238,10 +230,7 @@ impl ModuleRuntime {
         else {
             return Ok(None);
         };
-        Ok(Some(
-            self.gate_re_anchor(pool, tracking_table, re_anchor, acquirable)
-                .await?,
-        ))
+        Ok(Some(self.gate_re_anchor(re_anchor, acquirable).await?))
     }
 
     /// Evaluate one re-anchor against the subscription (no writes). Whole →
@@ -249,15 +238,14 @@ impl ModuleRuntime {
     /// Blocked → bail with membrane guidance.
     async fn gate_re_anchor(
         &self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
         re_anchor: &ReAnchor,
         acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<PendingCrossing> {
         // Section names of THIS re-anchor the target has a completed|
         // satisfied row for (per-section adoption). Feeds the extended
         // wholeness predicate.
-        let applied_sections = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?
+        let applied_sections = self
+            .store
             .covered_baseline_section_names(re_anchor.version)
             .await?;
 
@@ -328,13 +316,11 @@ impl ModuleRuntime {
     /// sections (source not held) record nothing. Crossing ≠ mutation: an
     /// untouched subscription still records its consumption row (the main row
     /// names no modules, so it is always safe to write).
-    pub async fn commit_crossing(
-        &mut self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
-        pending: PendingCrossing,
-    ) -> Result<()> {
-        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
+    pub async fn commit_crossing(&mut self, pending: PendingCrossing) -> Result<()> {
+        // Clone the store handle (cheap — a pool handle plus table names) so the
+        // final `self.established` mutation isn't blocked by a borrow of self.
+        let store = self.store.clone();
+        let pool = store.pool();
         let PendingCrossing { version, rewritten } = pending;
 
         // Re-read the consumed re-anchor's file: its whole-file checksum pins
@@ -399,14 +385,9 @@ impl ModuleRuntime {
     /// row provision already laid down (or none, on a baseline-free replay)
     /// IS the cursor seed — the derived cursor is the highest baseline
     /// version, so every re-anchor ≤ it is moot without any special step.
-    pub async fn record_provisioned(
-        &mut self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
-        modules: &BTreeSet<String>,
-    ) -> Result<()> {
-        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
-        let mut tx = pool.begin().await?;
+    pub async fn record_provisioned(&mut self, modules: &BTreeSet<String>) -> Result<()> {
+        let store = self.store.clone();
+        let mut tx = store.pool().begin().await?;
         for module in modules {
             store
                 .add_module(&mut *tx, module, &SubscriptionSource::Provision)
@@ -422,12 +403,7 @@ impl ModuleRuntime {
 
     /// Record an explicit adoption: subscribe each of `modules` not already
     /// subscribed (source = adopt). Idempotent for already-subscribed ones.
-    pub async fn record_adopted(
-        &mut self,
-        pool: &sqlx::PgPool,
-        tracking_table: &crate::config::types::TrackingTable,
-        modules: &BTreeSet<String>,
-    ) -> Result<()> {
+    pub async fn record_adopted(&mut self, modules: &BTreeSet<String>) -> Result<()> {
         let new: Vec<&String> = modules
             .iter()
             .filter(|m| !self.established.contains(*m))
@@ -435,8 +411,8 @@ impl ModuleRuntime {
         if new.is_empty() {
             return Ok(());
         }
-        let store = crate::migration_tracking::TrackingStore::new(pool, tracking_table)?;
-        let mut tx = pool.begin().await?;
+        let store = self.store.clone();
+        let mut tx = store.pool().begin().await?;
         for module in &new {
             store
                 .add_module(&mut *tx, module, &SubscriptionSource::Adopt)

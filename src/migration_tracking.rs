@@ -279,17 +279,31 @@ async fn migrate_tracking_table_schema(
 /// file — rather than a local `enumerate()`, so orders stay stable per version
 /// across the separate registration calls a module subset deploy makes (see
 /// [`section_tracking::initialize_sections`]).
-#[allow(clippy::too_many_arguments)]
+struct RegisterStart<'a> {
+    version: u64,
+    description: &'a str,
+    checksum: &'a str,
+    sections: &'a [(i32, crate::migration::section_parser::MigrationSection)],
+    /// Whether these are baseline sections (part of the tracking key).
+    is_baseline: bool,
+    /// Governs the MAIN-row insert only: a baseline re-registers harmlessly
+    /// (`ON CONFLICT DO NOTHING`), a migration inserts exactly once.
+    on_conflict_ignore: bool,
+}
+
 async fn register_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
-    version: u64,
-    description: &str,
-    checksum: &str,
-    sections: &[(i32, crate::migration::section_parser::MigrationSection)],
-    is_baseline: bool,
-    on_conflict_ignore: bool,
+    params: RegisterStart<'_>,
 ) -> Result<()> {
+    let RegisterStart {
+        version,
+        description,
+        checksum,
+        sections,
+        is_baseline,
+        on_conflict_ignore,
+    } = params;
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
     let sections_table = section_tracking::format_sections_table_name(tracking_table);
     let kind = if is_baseline { "baseline" } else { "migration" };
@@ -348,12 +362,14 @@ pub async fn register_baseline_start(
     register_start(
         pool,
         tracking_table,
-        version,
-        description,
-        checksum,
-        sections,
-        true,
-        true,
+        RegisterStart {
+            version,
+            description,
+            checksum,
+            sections,
+            is_baseline: true,
+            on_conflict_ignore: true,
+        },
     )
     .await
 }
@@ -371,12 +387,14 @@ pub async fn register_migration_start(
     register_start(
         pool,
         tracking_table,
-        version,
-        description,
-        checksum,
-        sections,
-        false,
-        false,
+        RegisterStart {
+            version,
+            description,
+            checksum,
+            sections,
+            is_baseline: false,
+            on_conflict_ignore: false,
+        },
     )
     .await
 }
