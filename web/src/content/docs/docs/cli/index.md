@@ -19,6 +19,7 @@ description: Complete command reference for pgmt.
 | `pgmt migrate diff`          | Detect drift in target database          |
 | `pgmt migrate baseline`      | Create baseline / consolidate migrations |
 | `pgmt migrate baseline list` | List baselines                           |
+| `pgmt migrate resolve`       | Break-glass repair of tracking state     |
 | `pgmt debug dependencies`    | Analyze object dependencies              |
 
 ## Global Options
@@ -278,6 +279,8 @@ pgmt migrate apply [OPTIONS]
 
 ```bash
 --target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
+--modules <NAMES>             # Comma-separated modules to apply, or "all"
+                              # [env: PGMT_MODULES]. Default: base only
 ```
 
 **Examples:**
@@ -285,7 +288,10 @@ pgmt migrate apply [OPTIONS]
 ```bash
 pgmt migrate apply --target-url postgres://prod/myapp
 pgmt migrate apply            # Uses target_url from pgmt.yaml
+pgmt migrate apply --modules billing   # Base + billing (+ its dependencies)
 ```
+
+`--modules` only applies to [module](/docs/guides/modules) projects; on a project without a `modules:` block it's an error.
 
 ---
 
@@ -302,6 +308,8 @@ pgmt migrate provision [OPTIONS]
 ```bash
 --target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
 --dry-run                     # Preview what would be applied, without changing the database
+--modules <NAMES>             # Comma-separated modules to provision/adopt, or "all"
+                              # [env: PGMT_MODULES]. Default: base only
 ```
 
 **What it does, based on the target's state:**
@@ -323,7 +331,7 @@ pgmt migrate provision --target-url postgres://localhost/demo --dry-run
 
 ## pgmt migrate status
 
-Show which migrations the development database has applied.
+Report which migrations a database has applied — the triage tool for incidents. Reports on the **target** when one is resolvable (`--target-url` flag, `PGMT_TARGET_URL`, or a yaml target); otherwise it falls back to the **dev** database. It is strictly read-only: it takes no advisory lock and never creates or evolves the tracking tables, so a stuck deploy stays diagnosable.
 
 ```bash
 pgmt migrate status [OPTIONS]
@@ -332,19 +340,21 @@ pgmt migrate status [OPTIONS]
 **Options:**
 
 ```bash
---dev-url <URL>               # Development database [env: PGMT_DEV_URL]
+--target-url <URL>            # Target database to report on [env: PGMT_TARGET_URL]
+--dev-url <URL>               # Development database [env: PGMT_DEV_URL] (fallback)
 ```
 
 **Example output:**
 
 ```
-Applied:
+Migration status for target database
+Applied migrations:
   1734500000 - create_users (applied: 2024-12-18 10:00)
   1734510000 - add_posts (applied: 2024-12-18 11:00)
-
-Pending:
-  1734520000_add_comments.sql
+  1734520000 - add_comments (INCOMPLETE: 1 section(s) pending or failed — resume with `pgmt migrate apply`)
 ```
+
+On a [module](/docs/guides/modules) project, a per-module `Modules:` rollup follows the listing.
 
 ---
 
@@ -361,6 +371,7 @@ pgmt migrate validate [OPTIONS]
 ```bash
 --format <FORMAT>             # human | json
 --verbose                     # Detailed output
+--quiet                       # Suppress verbose output (useful with --format=json)
 --ignore-migrations <NAMES>   # Comma-separated migrations to skip during validation
 --shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
@@ -441,6 +452,42 @@ pgmt migrate baseline list
 
 ---
 
+## pgmt migrate resolve
+
+Break-glass repair of section tracking state, for when the tracking table has diverged from what actually happened in the database. Exactly one verb is required. It takes the same advisory lock as `apply`/`provision`. The normal recovery path is fix-the-section-in-the-repo and re-apply; reach for `resolve` only when that can't express the repair. See [Production Operations](/docs/guides/production-operations#repairing-tracking-state).
+
+```bash
+pgmt migrate resolve <VERB> [OPTIONS]
+```
+
+**Verbs (exactly one required):**
+
+```bash
+--mark-completed <VERSION/SECTION>   # Record a pending/failed/running section as
+                                     # completed without running it (its effects
+                                     # already landed, e.g. a manual hot-fix)
+--restamp <VERSION[/SECTION]>        # Re-stamp stored checksum(s) after a conscious
+                                     # edit of an applied section (section optional:
+                                     # omit to restamp every completed section of the
+                                     # version)
+```
+
+**Options:**
+
+```bash
+--baseline                           # Operate on the baseline row instead of a migration row
+--target-url <URL>                   # Target database [env: PGMT_TARGET_URL]
+```
+
+**Examples:**
+
+```bash
+pgmt migrate resolve --mark-completed 1734567890/add_index --target-url "$DATABASE_URL"
+pgmt migrate resolve --restamp 1734567890 --target-url "$DATABASE_URL"
+```
+
+---
+
 ## pgmt debug dependencies
 
 Analyze object dependencies from both PostgreSQL introspection and `-- require:` headers. Useful for troubleshooting dependency ordering issues.
@@ -504,6 +551,8 @@ matching CLI flag (flag > env > file):
 PGMT_DEV_URL                  # Development database URL
 PGMT_SHADOW_URL               # Shadow database URL (instead of auto Docker)
 PGMT_TARGET_URL               # Target (production/staging) database URL
+PGMT_MODULES                  # Modules to apply/provision (comma-separated, or "all");
+                              # overridden by the --modules flag
 PGMT_KEEP_SHADOW_ON_FAILURE   # Keep the shadow container alive after a startup
                               # failure for debugging (any non-empty value)
 RUST_LOG                      # Log filter (e.g. RUST_LOG=debug)
