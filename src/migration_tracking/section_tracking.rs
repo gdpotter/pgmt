@@ -387,6 +387,10 @@ pub async fn validate_and_sync_section_checksums(
 
     let sections_table = format_sections_table_name(tracking_table);
     let kind = if is_baseline { "baseline" } else { "migration" };
+    // Recovery hints must carry --baseline when the drifted row IS a baseline
+    // section — the bare coordinate targets the migration row space and the
+    // verb would find no row.
+    let baseline_flag = if is_baseline { " --baseline" } else { "" };
 
     // Current file: name -> (order, checksum, mode, module).
     let mut file_map: BTreeMap<&str, (i32, String, &'static str, Option<&str>)> = BTreeMap::new();
@@ -455,7 +459,7 @@ pub async fn validate_and_sync_section_checksums(
                      Actual checksum:   {checksum}\n\n\
                      Applied sections are immutable. Create a new migration for further changes. \
                      If the edit was conscious and its effects already match the database, \
-                     re-stamp the stored checksum: pgmt migrate resolve --restamp {version}/{name}."
+                     re-stamp the stored checksum: pgmt migrate resolve --restamp {version}/{name}{baseline_flag}."
                 );
             }
             if stored_order != *order {
@@ -463,7 +467,7 @@ pub async fn validate_and_sync_section_checksums(
                     "section '{name}' of {kind} {version} was reordered after it was applied \
                      (was position {stored_order}, now {order}). Applied sections are immutable. \
                      Create a new migration for further changes. If the reorder is intentional, \
-                     accept it with `pgmt migrate resolve --restamp {version}`."
+                     accept it with `pgmt migrate resolve --restamp {version}{baseline_flag}`."
                 );
             }
             if let Some(sm) = &stored_mode

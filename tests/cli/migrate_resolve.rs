@@ -502,7 +502,10 @@ async fn test_restamp_baseline_flow() -> Result<()> {
             ])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("was modified after it was applied"));
+            .stderr(predicate::str::contains("was modified after it was applied"))
+            // The recovery hint must carry --baseline: the drifted row is a
+            // baseline section, and the bare coordinate would find no row.
+            .stderr(predicate::str::contains("--baseline"));
 
         // Re-stamp the baseline row space: core's stored checksum syncs to the
         // file. `--baseline` reports "core:" from the baselines dir, not a
