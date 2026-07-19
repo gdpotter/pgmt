@@ -284,6 +284,12 @@ struct RegisterStart<'a> {
     description: &'a str,
     checksum: &'a str,
     sections: &'a [(i32, crate::migration::section_parser::MigrationSection)],
+    /// Source-satisfied remap sections to record `satisfied` in the SAME
+    /// transaction as the main row + pending sections. Folding them in here is
+    /// what keeps first registration crash-atomic: an acquisition migration
+    /// (empty `sections`, non-empty `satisfied`) must never commit a main row
+    /// with zero section rows — the corrupt state apply hard-bails on.
+    satisfied: &'a [(i32, crate::migration::section_parser::MigrationSection)],
     /// Whether these are baseline sections (part of the tracking key).
     is_baseline: bool,
     /// Governs the MAIN-row insert only: a baseline re-registers harmlessly
@@ -301,6 +307,7 @@ async fn register_start(
         description,
         checksum,
         sections,
+        satisfied,
         is_baseline,
         on_conflict_ignore,
     } = params;
@@ -329,6 +336,20 @@ async fn register_start(
     for (order, section) in sections {
         section_tracking::insert_pending_section(
             &mut *tx,
+            &sections_table,
+            version,
+            is_baseline,
+            *order,
+            section,
+        )
+        .await?;
+    }
+
+    // Source-satisfied remap rows, recorded in the same transaction so the
+    // main row never commits without them.
+    for (order, section) in satisfied {
+        section_tracking::insert_satisfied_section(
+            &mut tx,
             &sections_table,
             version,
             is_baseline,
@@ -367,6 +388,7 @@ pub async fn register_baseline_start(
             description,
             checksum,
             sections,
+            satisfied: &[],
             is_baseline: true,
             on_conflict_ignore: true,
         },
@@ -374,8 +396,11 @@ pub async fn register_baseline_start(
     .await
 }
 
-/// Register a migration as started: the main row (inserted exactly once) plus
-/// its Pending section rows. See [`register_start`].
+/// Register a migration as started: the main row (inserted exactly once), its
+/// Pending section rows, and any source-satisfied remap sections — all in ONE
+/// transaction. `satisfied` is folded in here so first registration is
+/// crash-atomic even for an acquisition migration whose `sections` (to-run set)
+/// is empty. See [`register_start`].
 pub async fn register_migration_start(
     pool: &PgPool,
     tracking_table: &TrackingTable,
@@ -383,6 +408,7 @@ pub async fn register_migration_start(
     description: &str,
     checksum: &str,
     sections: &[(i32, crate::migration::section_parser::MigrationSection)],
+    satisfied: &[(i32, crate::migration::section_parser::MigrationSection)],
 ) -> Result<()> {
     register_start(
         pool,
@@ -392,6 +418,7 @@ pub async fn register_migration_start(
             description,
             checksum,
             sections,
+            satisfied,
             is_baseline: false,
             on_conflict_ignore: false,
         },

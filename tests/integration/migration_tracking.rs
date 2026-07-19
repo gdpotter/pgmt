@@ -1,6 +1,7 @@
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;
 use pgmt::config::types::TrackingTable;
+use pgmt::migration::section_parser::MigrationSection;
 use pgmt::migration_tracking::{
     TrackingStore, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
     register_baseline_start, register_migration_start, version_to_db,
@@ -115,7 +116,8 @@ async fn test_same_version_migration_and_baseline_rows() -> Result<()> {
         };
         ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
 
-        register_migration_start(db.pool(), &tracking_table, 1234, "migration", "aaa", &[]).await?;
+        register_migration_start(db.pool(), &tracking_table, 1234, "migration", "aaa", &[], &[])
+            .await?;
         register_baseline_start(db.pool(), &tracking_table, 1234, "baseline", "bbb", &[]).await?;
 
         let rows: Vec<(i64, bool)> = sqlx::query_as(
@@ -197,6 +199,186 @@ async fn test_ensure_section_table_migrates_legacy_schema() -> Result<()> {
 
         // Idempotent second call.
         ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        Ok(())
+    })
+    .await
+}
+
+/// Build a minimal remap section for the atomicity tests.
+fn remap_section(name: &str, module: &str, source: &str) -> MigrationSection {
+    use std::time::Duration;
+    MigrationSection {
+        name: name.to_string(),
+        description: None,
+        mode: pgmt::migration::section_parser::TransactionMode::Transactional,
+        timeout: Duration::from_secs(30),
+        lock_timeout: None,
+        retry_config: None,
+        sql: format!("-- {name}"),
+        raw_header: format!("-- pgmt:section name={name} module={module} remaps={source}"),
+        module: Some(module.to_string()),
+        remaps: Some(source.to_string()),
+        start_line: 1,
+    }
+}
+
+/// The introducing evolve creates the section table AND backfills synthetic
+/// `default` rows for every pre-existing (legacy) main row in ONE transaction.
+/// A crash can therefore never leave the table present with the backfill lost
+/// — the state that would brick every legacy version at apply's "tracking row
+/// but no section rows" bail. We can't crash a transaction from a test, so we
+/// assert the observable invariant it guarantees: after a SINGLE call to
+/// `ensure_section_tracking_table` on a genuine legacy target (main rows, no
+/// section table), the synthetic rows exist.
+#[tokio::test]
+async fn test_introducing_evolve_backfills_atomically() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "legacy_backfill".to_string(),
+        };
+
+        // Genuine legacy shape: a main table with rows, NO section table.
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+        db.execute(
+            "INSERT INTO \"public\".\"legacy_backfill\" (version, description, checksum, is_baseline) \
+             VALUES (100, 'first', 'aaa', FALSE), (200, 'second', 'bbb', FALSE)",
+        )
+        .await;
+
+        // One call introduces the section table and backfills atomically.
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT migration_version, section_name, status \
+             FROM \"public\".\"legacy_backfill_sections\" ORDER BY migration_version",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(
+            rows,
+            vec![
+                (100, "default".to_string(), "completed".to_string()),
+                (200, "default".to_string(), "completed".to_string()),
+            ],
+            "every legacy main row gets one synthetic completed 'default' section"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// An inherited-bricked target (a section table already exists but a legacy
+/// main row has zero section rows — the pre-fix crash could leave this) is NOT
+/// speculatively healed: the introducing backfill runs only when the section
+/// table is absent, and once it exists a zero-section main row is a legitimate
+/// state. The hard apply-time bail is the correct response for a genuinely
+/// corrupt row, so `ensure_section_tracking_table` leaves the bricked row
+/// untouched rather than forging content.
+#[tokio::test]
+async fn test_existing_section_table_never_backfills() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "inherited_brick".to_string(),
+        };
+
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+        db.execute(
+            "INSERT INTO \"public\".\"inherited_brick\" (version, description, checksum, is_baseline) \
+             VALUES (100, 'legacy', 'aaa', FALSE)",
+        )
+        .await;
+        // A section table that ALREADY exists (current shape), with no rows for
+        // the legacy main row — the inherited-bricked state.
+        db.execute(
+            "CREATE TABLE \"public\".\"inherited_brick_sections\" (\
+                migration_version BIGINT NOT NULL, is_baseline BOOLEAN NOT NULL, \
+                section_name TEXT NOT NULL, section_order INT NOT NULL, status TEXT NOT NULL, \
+                started_at TIMESTAMP WITH TIME ZONE, completed_at TIMESTAMP WITH TIME ZONE, \
+                attempts INT DEFAULT 0, last_error TEXT, rows_affected BIGINT, \
+                duration_ms BIGINT, checksum TEXT, mode TEXT, module TEXT, applied_by TEXT, \
+                pgmt_version TEXT, \
+                PRIMARY KEY (migration_version, is_baseline, section_name))",
+        )
+        .await;
+
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"public\".\"inherited_brick_sections\"",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert_eq!(
+            count, 0,
+            "an existing section table is never backfilled (no speculative healing)"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// First registration of an acquisition migration whose to-run set is empty
+/// (all remap sources already held) writes the main row AND the satisfied
+/// section rows in ONE transaction, so a crash can't leave a main row with zero
+/// section rows — the state apply hard-bails on as corrupt. Asserts both landed
+/// together (single snapshot) and that no main-row-without-sections exists.
+#[tokio::test]
+async fn test_register_migration_start_folds_satisfied_atomically() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable {
+            schema: "public".to_string(),
+            name: "acq_migrations".to_string(),
+        };
+        ensure_tracking_table_exists(db.pool(), &tracking_table).await?;
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        // Acquisition-shaped registration: empty to-run, one satisfied remap.
+        let satisfied = vec![(0i32, remap_section("analytics", "analytics", "app"))];
+        register_migration_start(
+            db.pool(),
+            &tracking_table,
+            1700000000,
+            "acquire analytics from app",
+            "ccc",
+            &[],
+            &satisfied,
+        )
+        .await?;
+
+        // Single snapshot: the main row and its satisfied section row both exist.
+        let main_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM \"public\".\"acq_migrations\" WHERE version = 1700000000",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert_eq!(main_count, 1, "the main row exists");
+
+        let sections: Vec<(String, String)> = sqlx::query_as(
+            "SELECT section_name, status FROM \"public\".\"acq_migrations_sections\" \
+             WHERE migration_version = 1700000000",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(
+            sections,
+            vec![("analytics".to_string(), "satisfied".to_string())],
+            "the satisfied section row committed with the main row"
+        );
+
+        // A main row with zero section rows must never exist for this version.
+        let bricked: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM \"public\".\"acq_migrations\" m \
+             WHERE NOT EXISTS (SELECT 1 FROM \"public\".\"acq_migrations_sections\" s \
+                 WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline))",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert!(!bricked, "no main row exists without section rows");
 
         Ok(())
     })

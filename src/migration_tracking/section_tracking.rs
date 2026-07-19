@@ -79,49 +79,65 @@ pub async fn ensure_section_tracking_table(
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    // Detect whether this evolve INTRODUCES section tracking: probe for the
-    // table before creating it. All production callers hold the migration
-    // advisory lock across this call, so the check-then-create-then-backfill
-    // sequence is atomic against every other writer — no crossing or evolve can
-    // interleave. Only the introducing evolve backfills synthetic legacy rows;
-    // once the table exists, a zero-section main row is a legitimate ledger
-    // state (a version-level event that processed no local work) and must never
-    // be backfilled.
+    // Detect whether this call INTRODUCES section tracking: probe for the table
+    // before creating it. The advisory lock every production caller holds guards
+    // concurrency (no crossing or evolve interleaves), but NOT crash durability
+    // — so the introducing path creates the table and backfills the synthetic
+    // legacy rows in ONE transaction. A crash can then never leave the table
+    // present with the backfill lost, which would brick every legacy version at
+    // the apply-time "tracking row but no section rows" bail. Only the
+    // introducing path backfills; once the table exists, a zero-section main row
+    // is a legitimate ledger state (a version-level event that processed no
+    // local work) and must never be backfilled.
     let table_existed: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
         .bind(&sections_table)
         .fetch_one(pool)
         .await
         .context("Failed to probe for the section tracking table")?;
 
-    sqlx::query(&format!(
-        r#"
-        CREATE TABLE IF NOT EXISTS {} (
-            migration_version BIGINT NOT NULL,
-            is_baseline BOOLEAN NOT NULL,
-            section_name TEXT NOT NULL,
-            section_order INT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TIMESTAMP WITH TIME ZONE,
-            completed_at TIMESTAMP WITH TIME ZONE,
-            attempts INT DEFAULT 0,
-            last_error TEXT,
-            rows_affected BIGINT,
-            duration_ms BIGINT,
-            checksum TEXT,
-            mode TEXT,
-            module TEXT,
-            applied_by TEXT,
-            pgmt_version TEXT,
-            PRIMARY KEY (migration_version, is_baseline, section_name)
-        )
-        "#,
-        sections_table
-    ))
-    .execute(pool)
-    .await
-    .context("Failed to create section tracking table")?;
+    if !table_existed {
+        // Introducing path: CREATE TABLE + backfill, atomic. CREATE TABLE is
+        // transactional in Postgres, so either both land or neither does.
+        let mut tx = pool.begin().await?;
+        sqlx::query(&format!(
+            r#"
+            CREATE TABLE IF NOT EXISTS {} (
+                migration_version BIGINT NOT NULL,
+                is_baseline BOOLEAN NOT NULL,
+                section_name TEXT NOT NULL,
+                section_order INT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TIMESTAMP WITH TIME ZONE,
+                completed_at TIMESTAMP WITH TIME ZONE,
+                attempts INT DEFAULT 0,
+                last_error TEXT,
+                rows_affected BIGINT,
+                duration_ms BIGINT,
+                checksum TEXT,
+                mode TEXT,
+                module TEXT,
+                applied_by TEXT,
+                pgmt_version TEXT,
+                PRIMARY KEY (migration_version, is_baseline, section_name)
+            )
+            "#,
+            sections_table
+        ))
+        .execute(&mut *tx)
+        .await
+        .context("Failed to create section tracking table")?;
 
-    migrate_section_table_schema(pool, tracking_table, &sections_table, !table_existed).await?;
+        backfill_synthetic_legacy_sections(&mut tx, tracking_table, &sections_table).await?;
+
+        tx.commit()
+            .await
+            .context("Failed to introduce section tracking table")?;
+    } else {
+        // Already-exists path: bring a pre-existing (possibly legacy) table to
+        // the current shape. Never backfills — a zero-section main row here is a
+        // legitimate state, not a legacy row awaiting materialization.
+        migrate_section_table_schema(pool, &sections_table).await?;
+    }
 
     // The stored module subscription is part of the same evolve step:
     // the tables arrive here so every apply/provision path that ensures the
@@ -149,12 +165,7 @@ pub async fn ensure_section_tracking_table(
 /// no column DEFAULT) and key sections by `(migration_version, section_name)`.
 /// Later revisions added per-section `checksum`/`mode`/`module`/`applied_by`/
 /// `pgmt_version` (all nullable; NULL = legacy/pre-upgrade row).
-async fn migrate_section_table_schema(
-    pool: &PgPool,
-    tracking_table: &TrackingTable,
-    sections_table: &str,
-    introduced: bool,
-) -> Result<()> {
+async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Result<()> {
     let existing_columns: Vec<String> = sqlx::query_scalar(
         "SELECT attname::text FROM pg_attribute
          WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped",
@@ -215,10 +226,6 @@ async fn migrate_section_table_schema(
     )
     .await?;
 
-    if introduced {
-        backfill_synthetic_legacy_sections(pool, tracking_table, sections_table).await?;
-    }
-
     Ok(())
 }
 
@@ -241,11 +248,13 @@ async fn migrate_section_table_schema(
 /// remaps relabeled nothing this target holds). Backfilling a `default`
 /// completed row onto such a row would forge content the target never applied.
 ///
-/// Skipped when the main table is absent (the section table can be created
-/// before it); the `NOT EXISTS` guard keeps the insert harmless if invoked
-/// against a partially-populated table.
+/// Runs on the caller's transaction (the introducing evolve's), so the CREATE
+/// TABLE and this backfill commit together — a crash can't leave the table
+/// present with the backfill lost. Skipped when the main table is absent (the
+/// section table can be created before it); the `NOT EXISTS` guard keeps the
+/// insert harmless if invoked against a partially-populated table.
 async fn backfill_synthetic_legacy_sections(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     tracking_table: &TrackingTable,
     sections_table: &str,
 ) -> Result<()> {
@@ -253,7 +262,7 @@ async fn backfill_synthetic_legacy_sections(
 
     let main_exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
         .bind(&main_table)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
     if main_exists.is_none() {
         return Ok(());
@@ -271,7 +280,7 @@ async fn backfill_synthetic_legacy_sections(
         sections = sections_table,
         main = main_table,
     ))
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .with_context(|| {
         format!(
@@ -313,6 +322,39 @@ pub(crate) async fn insert_pending_section<'e>(
     .bind(section.module.as_deref())
     .bind(PGMT_VERSION)
     .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Register one remap section as `satisfied` on the caller's connection:
+/// insert its Pending row (idempotent), then flip it to `satisfied` — but only
+/// if still `pending`, so a row that already completed/satisfied here is never
+/// demoted. The two statements share the caller's connection so the
+/// determination and the row land together (registration folds this into its
+/// own transaction; the crossing recorder runs it inside the crossing
+/// transaction). THE single definition of the insert-then-mark-satisfied
+/// statement pair — every satisfied-recording path routes through here.
+pub(crate) async fn insert_satisfied_section(
+    conn: &mut sqlx::PgConnection,
+    sections_table: &str,
+    version: u64,
+    is_baseline: bool,
+    order: i32,
+    section: &MigrationSection,
+) -> Result<()> {
+    insert_pending_section(&mut *conn, sections_table, version, is_baseline, order, section)
+        .await?;
+    sqlx::query(&format!(
+        "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
+         WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
+           AND status = 'pending'",
+        sections_table
+    ))
+    .bind(SectionStatus::Satisfied.as_str())
+    .bind(version_to_db(version)?)
+    .bind(is_baseline)
+    .bind(&section.name)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

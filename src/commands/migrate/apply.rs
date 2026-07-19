@@ -552,6 +552,22 @@ pub(crate) async fn apply_pending_migrations(
                 )
                 .await?;
             }
+            // Resume path: a main row already exists here (statuses is
+            // non-empty — the corrupt zero-section case bailed above), so
+            // recording the source-satisfied remap rows in their own
+            // transaction cannot create the main-row-without-sections state.
+            // Only first registration had that crash window; it folds the
+            // satisfied rows into the registration transaction instead.
+            if !to_satisfy.is_empty() {
+                crate::migration_tracking::section_tracking::record_sections_satisfied(
+                    pool,
+                    &config.migration.tracking_table,
+                    migration.version,
+                    false,
+                    &to_satisfy,
+                )
+                .await?;
+            }
         } else {
             // Nothing selected and nothing recorded: leave zero trace.
             if selected.is_empty() {
@@ -566,13 +582,14 @@ pub(crate) async fn apply_pending_migrations(
                 "\nApplying migration {} - {}",
                 migration.version, migration.description
             );
-            // Register the version row + the TO-RUN Pending section rows
-            // atomically, before anything executes. Each section carries its
-            // index in the FULL file so section_order stays stable per version
-            // even when a later call registers another subset. Nothing is
-            // recorded yet, so `to_run` here is exactly the selected non-
-            // source-satisfied sections (statuses is empty on this path);
-            // source-satisfied remap sections are recorded satisfied below.
+            // Register the version row + the TO-RUN Pending section rows + the
+            // source-satisfied remap rows, all in ONE transaction, before
+            // anything executes. Folding `to_satisfy` into registration keeps
+            // first registration crash-atomic: an acquisition migration whose
+            // to-run set is empty (all sources already held) must never commit a
+            // main row with zero section rows. Each section carries its index in
+            // the FULL file so section_order stays stable per version even when a
+            // later call registers another subset.
             register_migration_start(
                 pool,
                 &config.migration.tracking_table,
@@ -580,32 +597,24 @@ pub(crate) async fn apply_pending_migrations(
                 &migration.description,
                 &checksum,
                 &to_run,
+                &to_satisfy,
             )
             .await?;
         }
 
-        // Record the source-satisfied remap sections: nothing runs for
-        // them — their objects are already present under the source's name —
-        // but the rows account for them, so crossings and the guards see the
-        // section as covered.
-        if !to_satisfy.is_empty() {
-            crate::migration_tracking::section_tracking::record_sections_satisfied(
-                pool,
-                &config.migration.tracking_table,
+        // Announce the source-satisfied remap sections (recorded above, folded
+        // into first registration or in their own transaction on resume):
+        // nothing runs for them — their objects are already present under the
+        // source's name — but the rows account for them, so crossings and the
+        // guards see the section as covered.
+        for (_, section) in &to_satisfy {
+            println!(
+                "Section '{}' of migration {}: source '{}' is established here — \
+                 recorded satisfied (objects already present; nothing to run)",
+                section.name,
                 migration.version,
-                false,
-                &to_satisfy,
-            )
-            .await?;
-            for (_, section) in &to_satisfy {
-                println!(
-                    "Section '{}' of migration {}: source '{}' is established here — \
-                     recorded satisfied (objects already present; nothing to run)",
-                    section.name,
-                    migration.version,
-                    section.remaps.as_deref().unwrap_or("?"),
-                );
-            }
+                section.remaps.as_deref().unwrap_or("?"),
+            );
         }
 
         let start = Instant::now();
