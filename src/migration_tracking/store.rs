@@ -458,7 +458,7 @@ impl TrackingStore {
         sections: &[(i32, MigrationSection)],
     ) -> Result<()> {
         for (order, section) in sections {
-            crate::migration_tracking::section_tracking::insert_pending_section(
+            crate::migration_tracking::section_tracking::insert_satisfied_section(
                 &mut *conn,
                 &self.sections,
                 version,
@@ -466,18 +466,6 @@ impl TrackingStore {
                 *order,
                 section,
             )
-            .await?;
-            sqlx::query(&format!(
-                "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
-                 WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
-                   AND status = 'pending'",
-                self.sections
-            ))
-            .bind(SectionStatus::Satisfied.as_str())
-            .bind(version_to_db(version)?)
-            .bind(is_baseline)
-            .bind(&section.name)
-            .execute(&mut *conn)
             .await?;
         }
         Ok(())

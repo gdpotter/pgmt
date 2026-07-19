@@ -557,29 +557,8 @@ pub async fn record_sections_satisfied(
     let sections_table = format_sections_table_name(tracking_table);
     let mut tx = pool.begin().await?;
     for (order, section) in sections {
-        insert_pending_section(
-            &mut *tx,
-            &sections_table,
-            version,
-            is_baseline,
-            *order,
-            section,
-        )
-        .await?;
-        // Only a freshly-registered (pending) row becomes satisfied; a row that
-        // already completed/satisfied here stays as it is.
-        sqlx::query(&format!(
-            "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
-             WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
-               AND status = 'pending'",
-            sections_table
-        ))
-        .bind(SectionStatus::Satisfied.as_str())
-        .bind(version_to_db(version)?)
-        .bind(is_baseline)
-        .bind(&section.name)
-        .execute(&mut *tx)
-        .await?;
+        insert_satisfied_section(&mut tx, &sections_table, version, is_baseline, *order, section)
+            .await?;
     }
     tx.commit()
         .await
@@ -601,7 +580,7 @@ pub async fn section_statuses(
         "SELECT section_name, status FROM {} WHERE migration_version = $1 AND is_baseline = $2",
         sections_table
     ))
-    .bind(migration_version as i64)
+    .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .fetch_all(pool)
     .await?;
@@ -625,7 +604,7 @@ pub async fn get_section_status(
         "SELECT status FROM {} WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
         sections_table
     ))
-    .bind(migration_version as i64)
+    .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .bind(section_name)
     .fetch_optional(pool)
@@ -653,7 +632,7 @@ pub async fn record_section_start(
         sections_table
     ))
     .bind(SectionStatus::Running.as_str())
-    .bind(migration_version as i64)
+    .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .bind(section_name)
     .execute(pool)
@@ -689,7 +668,7 @@ pub async fn record_section_complete<'e>(
     .bind(SectionStatus::Completed.as_str())
     .bind(rows_affected)
     .bind(duration_ms)
-    .bind(migration_version as i64)
+    .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .bind(section_name)
     .execute(executor)
@@ -717,7 +696,7 @@ pub async fn record_section_failed(
     ))
     .bind(SectionStatus::Failed.as_str())
     .bind(error)
-    .bind(migration_version as i64)
+    .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .bind(section_name)
     .execute(pool)
