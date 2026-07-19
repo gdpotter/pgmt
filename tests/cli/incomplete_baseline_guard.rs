@@ -263,6 +263,87 @@ async fn test_incomplete_base_baseline_blocks_all_applies() -> Result<()> {
     .await
 }
 
+/// TWO modules (billing + analytics) are both left half-built at the same
+/// baseline version. The refusal/warning formatting must render the whole
+/// affected set: ", "-joined in prose and ","-joined (no spaces) in the
+/// copy-paste `provision` command. A bare `apply` proceeds with that warning;
+/// an `apply --modules billing` — naming only ONE of the two affected modules —
+/// refuses, and the refusal still names the FULL affected set (it is scoped to
+/// what failed to land, not to the selection).
+#[tokio::test]
+async fn test_multi_module_incomplete_baseline_lists_all_affected() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Establish base + all three modules from the baseline, then seed a
+        // crash on TWO of them: billing and analytics are left non-completed at
+        // the same baseline version while the base sections stay completed, so
+        // the base watermark is honest.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core,billing,analytics",
+            ])
+            .assert()
+            .success();
+        seed_baseline_section_status(helper, "billing", "failed").await?;
+        seed_baseline_section_status(helper, "analytics", "failed").await?;
+        let version = baseline_version(helper).await?;
+
+        // Bare apply proceeds and warns. The affected set renders alphabetically:
+        // ", "-joined in the prose list, ","-joined (no spaces) in the command.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(format!(
+                "module(s) analytics, billing have partially applied baseline content (baseline {version})"
+            )))
+            .stderr(predicate::str::contains(
+                "pgmt migrate provision --modules analytics,billing",
+            ));
+
+        // `apply --modules billing` names only one of the two affected modules,
+        // but the refusal reports the full affected set (both names) and the
+        // full-set provision command.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "module(s) analytics, billing have partially applied baseline content (baseline {version})"
+            )))
+            .stderr(predicate::str::contains(
+                "pgmt migrate provision --modules analytics,billing",
+            ));
+
+        Ok(())
+    })
+    .await
+}
+
 /// Insert a failing statement inside billing's baseline section by placing it
 /// on its own line immediately after the section's `-- pgmt:section` header, so
 /// the whole (transactional) section rolls back when it executes.

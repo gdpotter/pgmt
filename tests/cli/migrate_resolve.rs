@@ -6,7 +6,9 @@
 //! and prints the before/after state. (A failed/stale section needs no verb —
 //! the next apply re-runs it.)
 
-use crate::helpers::cli::{section_checksum, with_cli_helper};
+use crate::helpers::cli::{
+    THREE_MODULES_YAML, enable_modules, section_checksum, with_cli_helper, write_three_module_schema,
+};
 use anyhow::Result;
 use predicates::prelude::*;
 
@@ -421,4 +423,324 @@ CREATE TABLE ref_beta (id INT);
         Ok(())
     })
     .await
+}
+
+/// Append a harmless comment line into the named module's baseline section,
+/// changing that section's checksum without changing what its DDL does.
+fn edit_baseline_section(baseline: &str, module: &str) -> String {
+    let needle = format!("module=\"{module}\"");
+    let mut out = Vec::new();
+    let mut edited = false;
+    for line in baseline.lines() {
+        out.push(line.to_string());
+        if !edited && line.contains("pgmt:section") && line.contains(&needle) {
+            out.push("-- restamp: conscious edit to an applied section".to_string());
+            edited = true;
+        }
+    }
+    assert!(edited, "section for module '{module}' not found in baseline");
+    out.join("\n")
+}
+
+/// The `--baseline` flavour of `--restamp` routes every query to the
+/// is_baseline=TRUE row space and file discovery to the baselines dir. Provision
+/// base + core from a baseline (core's section is applied), consciously edit
+/// that applied `core` baseline section in the FILE so its stored checksum
+/// drifts, then adopt billing — which re-enters the baseline apply and bails on
+/// the drifted `core` section. `resolve --restamp <version> --baseline`
+/// re-stamps the stored baseline checksums from the file, and the adoption then
+/// runs clean.
+#[tokio::test]
+async fn test_restamp_baseline_flow() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Establish base + core from the baseline; billing not yet adopted.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core",
+            ])
+            .assert()
+            .success();
+
+        // Consciously edit the applied `core` baseline section in the file.
+        let baseline_name = helper.list_baseline_files()?[0].clone();
+        let baseline_path = helper.baselines_dir().join(&baseline_name);
+        let original = std::fs::read_to_string(&baseline_path)?;
+        let edited = edit_baseline_section(&original, "core");
+        assert_ne!(edited, original, "the edit must change the file");
+        std::fs::write(&baseline_path, &edited)?;
+
+        let version = baseline_version_in_dev(helper).await?;
+
+        // Adopting billing re-enters the baseline apply, which validates every
+        // recorded baseline section against the file — the edited `core` section
+        // now bails as an immutable applied section that changed.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("was modified after it was applied"));
+
+        // Re-stamp the baseline row space: core's stored checksum syncs to the
+        // file. `--baseline` reports "core:" from the baselines dir, not a
+        // migration.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--restamp",
+                &version.to_string(),
+                "--baseline",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Re-stamping"))
+            .stdout(predicate::str::contains("core:"));
+
+        // The stored baseline checksum for `core` now reflects the edited file.
+        let pool = helper.connect_to_dev_db().await?;
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT checksum FROM public.pgmt_migrations_sections \
+             WHERE section_name = 'core' AND is_baseline = TRUE",
+        )
+        .fetch_one(&pool)
+        .await?;
+        pool.close().await;
+        assert_eq!(
+            stored,
+            Some(section_checksum(&edited, "core")),
+            "restamp stored the edited baseline section's checksum"
+        );
+
+        // Adoption now proceeds cleanly and billing's objects land.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .success();
+        assert!(
+            helper.table_exists_in_dev("public", "invoices").await?,
+            "billing adopted after the baseline restamp"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// The `--baseline` flavour of `--mark-completed` records an is_baseline=TRUE
+/// section as done. Provision base + core + billing (billing's DDL really
+/// lands), seed billing's baseline section as `failed` (a crashed provision
+/// whose objects nonetheless committed), confirm the incomplete-baseline guard
+/// then refuses an `apply --modules billing`, mark the baseline section
+/// completed, and confirm the guard no longer fires.
+#[tokio::test]
+async fn test_mark_completed_baseline_flow() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        enable_modules(helper, THREE_MODULES_YAML)?;
+        write_three_module_schema(helper)?;
+
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Establish base + core + billing; billing's objects really land here.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "core,billing",
+            ])
+            .assert()
+            .success();
+
+        // Seed a crash: billing's baseline section is left `failed` even though
+        // its objects are present. The incomplete-baseline guard now refuses an
+        // `apply --modules billing`.
+        seed_baseline_section_status(helper, "billing", "failed").await?;
+        let version = baseline_version_in_dev(helper).await?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "have partially applied baseline content",
+            ));
+
+        // Record the baseline section completed (its DDL is already present).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--mark-completed",
+                &format!("{version}/billing"),
+                "--baseline",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("failed -> completed"));
+
+        // The baseline billing row is now completed.
+        let pool = helper.connect_to_dev_db().await?;
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM public.pgmt_migrations_sections \
+             WHERE section_name = 'billing' AND is_baseline = TRUE",
+        )
+        .fetch_one(&pool)
+        .await?;
+        pool.close().await;
+        assert_eq!(status, "completed", "resolve marked the baseline section done");
+
+        // The guard no longer fires: `apply --modules billing` runs clean.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .success();
+
+        Ok(())
+    })
+    .await
+}
+
+/// `--mark-completed --baseline` must flip the lookup to the is_baseline=TRUE
+/// row space. Pointed at a coordinate that exists ONLY as a migration row
+/// (is_baseline=FALSE), it finds no baseline row and refuses with the no-row
+/// message naming the baseline kind — proving the flag routes the query rather
+/// than matching the migration row.
+#[tokio::test]
+async fn test_mark_completed_baseline_refuses_migration_coordinate() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        helper.write_migration_file(
+            "1000000800_solo.sql",
+            "-- pgmt:section name=\"solo\"\nCREATE TABLE mcb_solo (id INT);\n",
+        )?;
+
+        // Apply records a MIGRATION row (is_baseline=FALSE) for 1000000800/solo.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        // With --baseline the same coordinate resolves to the is_baseline=TRUE
+        // row space, where no row exists → refuse, naming the baseline kind.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--mark-completed",
+                "1000000800/solo",
+                "--baseline",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "no section row exists for baseline 1000000800/solo",
+            ));
+
+        Ok(())
+    })
+    .await
+}
+
+/// The baseline version recorded in the tracking table.
+async fn baseline_version_in_dev(helper: &crate::helpers::cli::CliTestHelper) -> Result<i64> {
+    let pool = helper.connect_to_dev_db().await?;
+    let version: i64 =
+        sqlx::query_scalar("SELECT version FROM public.pgmt_migrations WHERE is_baseline")
+            .fetch_one(&pool)
+            .await?;
+    pool.close().await;
+    Ok(version)
+}
+
+/// Flip a single baseline section row to a given status (seed a crashed
+/// provision without producing a real crash window).
+async fn seed_baseline_section_status(
+    helper: &crate::helpers::cli::CliTestHelper,
+    section_name: &str,
+    status: &str,
+) -> Result<()> {
+    let pool = helper.connect_to_dev_db().await?;
+    let affected = sqlx::query(
+        "UPDATE public.pgmt_migrations_sections
+         SET status = $1,
+             completed_at = CASE WHEN $1 = 'completed' THEN completed_at ELSE NULL END
+         WHERE is_baseline AND section_name = $2",
+    )
+    .bind(status)
+    .bind(section_name)
+    .execute(&pool)
+    .await?
+    .rows_affected();
+    pool.close().await;
+    assert_eq!(
+        affected, 1,
+        "expected exactly one baseline section '{section_name}' to seed"
+    );
+    Ok(())
 }
