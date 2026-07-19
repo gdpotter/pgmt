@@ -123,6 +123,20 @@ Sections of modules you didn't request are skipped with two-tier signalling:
 
 Two guardrails on the flag itself: `--modules` on a project without a `modules:` block is an error, and an unknown name errors listing what's declared (`unknown module 'nonexistent' in --modules (declared: analytics, billing, core)`).
 
+## Checking What's Deployed
+
+On a module project, `pgmt migrate status` appends a per-module `Modules:` rollup after the migration listing — one line for the base plus each declared module, showing whether it's established here, how many of its sections are applied, and the resume command for anything unfinished:
+
+```
+Modules:
+  (unmoduled)  established — 4 section(s) applied
+  core         established — 6 section(s) applied
+  billing      incomplete — 0 applied, 1 pending/failed (resume with `pgmt migrate provision --modules billing`)
+  analytics    not established (expected on subset targets)
+```
+
+A module you never deployed here reads `not established (expected on subset targets)` — the normal state for a subset target. Establishment comes from the target's stored subscription; a database that predates the subscription tables prints a note and derives establishment from its recorded section rows instead. See [Production Operations](/docs/guides/production-operations#checking-whats-applied).
+
 ## Adopting a Module Later
 
 A target provisioned with `core,billing` can pick up `analytics` afterwards. If the module's entire history lives in the migration files (it appeared after your latest baseline, or you have no baseline), plain `apply` adopts it by replaying its skipped sections:
@@ -202,4 +216,3 @@ Deploy the coupled modules in one command: `--modules core,billing`.
 
 - **Re-tag awareness on pre-existing targets** — a database deployed *before* you modularized doesn't yet read the re-anchor's `remaps` to learn that it already owns the re-tagged modules. Until that lands, treat modularization as safe for **new** targets, and keep deploying pre-existing targets with `--modules all`.
 - **`conflicts_with`** — mutually exclusive modules (regional variants like `billing_us` / `billing_eu` that define the same objects, with only one side ever on a target) are planned but not yet available.
-- **Per-module status view** — `migrate status` doesn't yet break down establishment and pending work by module.
