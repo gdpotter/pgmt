@@ -31,9 +31,10 @@
 //! whether it executed here (`completed`) or was covered by an established
 //! source (`satisfied`) — is defined in exactly one place
 //! ([`TrackingStore::covered_predicate`]) and reused by every method. Encoding
-//! it per-call is what let `target_is_established` miss `satisfied`-only
-//! baseline coverage and drive provision down the fresh path against a
-//! populated database.
+//! it per-call risks a caller missing `satisfied`-only baseline coverage:
+//! `satisfied` coverage also establishes the target, so counting only
+//! `completed` would drive provision down the fresh path against a populated
+//! database.
 
 use crate::config::types::TrackingTable;
 use crate::migration::section_parser::MigrationSection;
@@ -114,8 +115,9 @@ impl TrackingStore {
     /// "Covered" is `completed` OR `satisfied`: a baseline adopted through a
     /// re-anchor records its source-held remap sections `satisfied` — the
     /// objects already exist under the source's name — and those still
-    /// establish the target. Counting only `completed` here was the
-    /// bug that sent provision down the fresh path against a populated database.
+    /// establish the target. `satisfied` coverage also establishes the target;
+    /// counting only `completed` would send provision down the fresh path
+    /// against a populated database.
     pub async fn target_is_established(&self) -> Result<bool> {
         let covered = |alias: &str| Self::covered_predicate(alias);
         let established: bool = sqlx::query_scalar(&format!(

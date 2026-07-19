@@ -462,7 +462,8 @@ pub async fn validate_and_sync_section_checksums(
                 anyhow::bail!(
                     "section '{name}' of {kind} {version} was reordered after it was applied \
                      (was position {stored_order}, now {order}). Applied sections are immutable. \
-                     Create a new migration for further changes."
+                     Create a new migration for further changes. If the reorder is intentional, \
+                     accept it with `pgmt migrate resolve --restamp {version}`."
                 );
             }
             if let Some(sm) = &stored_mode

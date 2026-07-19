@@ -190,6 +190,93 @@ CREATE TABLE rsp_two (id INT);
     .await
 }
 
+/// A consciously reordered COMPLETED section otherwise stays blocked forever:
+/// apply bails on the reorder and (unlike a body edit) restamp must sync the
+/// stored `section_order`, not just the checksum. Reorder two completed
+/// sections, confirm apply bails, restamp (which reports the order change), then
+/// apply cleanly.
+#[tokio::test]
+async fn test_reorder_restamp_flow() -> Result<()> {
+    with_cli_helper(async |helper| {
+        const FILENAME: &str = "1000000400_resolve_reorder.sql";
+        const VERSION: i64 = 1000000400;
+        let original = r#"-- pgmt:section name="one"
+CREATE TABLE rso_one (id INT);
+
+-- pgmt:section name="two"
+CREATE TABLE rso_two (id INT);
+"#;
+        helper.init_project()?;
+        helper.write_migration_file(FILENAME, original)?;
+
+        // Apply cleanly: one at order 0, two at order 1.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        // Swap the two applied sections' order in the file (bodies unchanged).
+        let reordered = r#"-- pgmt:section name="two"
+CREATE TABLE rso_two (id INT);
+
+-- pgmt:section name="one"
+CREATE TABLE rso_one (id INT);
+"#;
+        helper.write_migration_file(FILENAME, reordered)?;
+
+        // Apply bails on the reorder, pointing at the restamp recovery.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("was reordered after it was applied"))
+            .stderr(predicate::str::contains("resolve --restamp"));
+
+        // Restamp syncs section_order and reports the change.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "resolve",
+                "--restamp",
+                &VERSION.to_string(),
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("section_order:"));
+
+        // The stored orders now match the reordered file (two=0, one=1).
+        let pool = helper.connect_to_dev_db().await?;
+        let order_one: i32 = sqlx::query_scalar(
+            "SELECT section_order FROM public.pgmt_migrations_sections WHERE section_name = 'one'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        let order_two: i32 = sqlx::query_scalar(
+            "SELECT section_order FROM public.pgmt_migrations_sections WHERE section_name = 'two'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        pool.close().await;
+        assert_eq!(order_two, 0, "two moved to the front");
+        assert_eq!(order_one, 1, "one moved to the back");
+
+        // Apply now proceeds cleanly — the reorder is accepted.
+        helper
+            .command()
+            .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+            .assert()
+            .success();
+
+        Ok(())
+    })
+    .await
+}
+
 /// Every refusal path: already-completed mark, nonexistent coordinate, missing
 /// section part, and two verbs at once (clap-level).
 #[tokio::test]

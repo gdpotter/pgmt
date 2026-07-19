@@ -223,7 +223,7 @@ async fn apply_with_module_guard(
 /// **Precondition:** the tracking tables already exist. Both command entry
 /// points (`cmd_migrate_apply` → `apply_with_module_guard`, and
 /// `cmd_migrate_provision` → `provision_inner`) ensure them once up front, so
-/// this shared loop does not — a redundant ensure on every call bought nothing.
+/// this shared loop does not.
 ///
 /// The `runtime` carries the target's stored subscription and the committed
 /// re-anchors; this loop interleaves the **crossing loop** with section
@@ -298,7 +298,7 @@ pub(crate) async fn apply_pending_migrations(
             let below_watermark = baseline_version.is_some_and(|bv| migration.version < bv);
             if below_watermark && !applied_migrations.contains_key(&migration.version) {
                 eprintln!(
-                    "WARNING: migration {} ({}) is below the baseline watermark ({}) \
+                    "Warning: migration {} ({}) is below the baseline watermark ({}) \
                      and was never applied to this database. It will never run here or on \
                      any other target (fresh provisions replay only migrations after the \
                      baseline). If its changes are needed, run 'pgmt migrate update {}' to \

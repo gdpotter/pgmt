@@ -213,9 +213,10 @@ async fn restamp(
             )
         })?;
 
-    // All recorded section rows for this version: (name, status, stored checksum).
-    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(&format!(
-        "SELECT section_name, status, checksum FROM {} \
+    // All recorded section rows for this version:
+    // (name, status, stored checksum, stored section_order).
+    let rows: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(&format!(
+        "SELECT section_name, status, checksum, section_order FROM {} \
          WHERE migration_version = $1 AND is_baseline = $2 ORDER BY section_order",
         sections_table
     ))
@@ -233,9 +234,9 @@ async fn restamp(
             .map(|st| st.is_covered())
             .unwrap_or(false)
     };
-    let targets: Vec<&(String, String, Option<String>)> = match section {
+    let targets: Vec<&(String, String, Option<String>, i32)> = match section {
         Some(name) => {
-            let row = rows.iter().find(|(n, _, _)| n == name).ok_or_else(|| {
+            let row = rows.iter().find(|(n, _, _, _)| n == name).ok_or_else(|| {
                 anyhow!(
                     "no section row exists for {} {}/{}",
                     kind(is_baseline),
@@ -255,7 +256,7 @@ async fn restamp(
             }
             vec![row]
         }
-        None => rows.iter().filter(|(_, s, _)| is_covered(s)).collect(),
+        None => rows.iter().filter(|(_, s, _, _)| is_covered(s)).collect(),
     };
 
     if targets.is_empty() {
@@ -274,10 +275,14 @@ async fn restamp(
         version
     );
 
-    for (name, _status, stored_checksum) in targets {
-        let fs = file_sections
+    for (name, _status, stored_checksum, stored_order) in targets {
+        // The section's index in the CURRENT file is its new section_order —
+        // restamping a consciously reordered section syncs the stored order too,
+        // otherwise the immutability reorder bail would keep blocking it forever.
+        let (new_order, fs) = file_sections
             .iter()
-            .find(|s| &s.name == name)
+            .enumerate()
+            .find(|(_, s)| &s.name == name)
             .ok_or_else(|| {
                 anyhow!(
                     "section '{}' is recorded as completed for {} {} but no longer exists in the \
@@ -287,16 +292,18 @@ async fn restamp(
                     version
                 )
             })?;
+        let new_order = new_order as i32;
 
         let new_checksum = calculate_checksum(&fs.checksum_content());
         sqlx::query(&format!(
-            "UPDATE {} SET checksum = $1, mode = $2, module = $3 \
-             WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
+            "UPDATE {} SET checksum = $1, mode = $2, module = $3, section_order = $4 \
+             WHERE migration_version = $5 AND is_baseline = $6 AND section_name = $7",
             sections_table
         ))
         .bind(&new_checksum)
         .bind(fs.mode.as_str())
         .bind(fs.module.as_deref())
+        .bind(new_order)
         .bind(version_to_db(version)?)
         .bind(is_baseline)
         .bind(name)
@@ -309,6 +316,9 @@ async fn restamp(
             stored_checksum.as_deref().unwrap_or("(none)"),
             new_checksum
         );
+        if *stored_order != new_order {
+            println!("    section_order: {stored_order} -> {new_order}");
+        }
     }
 
     // Keep the main-row whole-file fingerprint current too.
