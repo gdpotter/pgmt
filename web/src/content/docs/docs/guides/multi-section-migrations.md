@@ -162,10 +162,10 @@ Run `pgmt migrate apply` again - it skips completed sections and retries from th
 ↻ Section 3/3: create_index (retrying)
 ```
 
-Check status:
+Check status — `pgmt migrate status` flags any migration with pending or failed sections as `INCOMPLETE`, with the count and the command to resume it:
 
 ```bash
-pgmt migrate status --sections
+pgmt migrate status --target-url "$DATABASE_URL"
 ```
 
 ## Common Patterns
@@ -207,17 +207,13 @@ UPDATE users SET role = 'moderator' WHERE is_moderator = true;
 
 ## Validation
 
-Preview what will run:
+`pgmt migrate validate` reconstructs the schema from your migration chain and checks it against your schema files. It parses every section header along the way, so a malformed header or an invalid section option surfaces here:
 
 ```bash
-pgmt migrate apply --dry-run --sections
+pgmt migrate validate
 ```
 
-Validate section syntax:
-
-```bash
-pgmt migrate validate --sections
-```
+To see which sections are still outstanding on a target before you deploy, use `pgmt migrate status` (it flags migrations with pending or failed sections). To check whether the target has drifted from what the migrations describe, use `pgmt migrate diff`.
 
 ## Troubleshooting
 
@@ -229,8 +225,8 @@ pgmt migrate validate --sections
 
 **Section partially completed:**
 
-- pgmt tracks progress - just run `migrate apply` again
-- Use `--force-restart` only if you need to re-run from scratch
+- pgmt tracks progress - just run `migrate apply` again; it skips completed sections and re-runs from the first that isn't done
+- A failed section re-runs automatically on the next apply. If the section's SQL was wrong, fix it in the migration file first — pgmt picks up the corrected section (its checksum only locks once the section completes)
 
 **"relation already exists" on retry of `CREATE INDEX CONCURRENTLY`:**
 

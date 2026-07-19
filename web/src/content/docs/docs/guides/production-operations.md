@@ -69,17 +69,29 @@ The lock is held on its own connection and released when the run finishes — in
 
 ## Checksum Mismatches
 
-pgmt records a checksum for every applied migration. If someone edits a migration file after it's been applied, the next `pgmt migrate apply` fails:
+pgmt records a checksum per **section**, not per whole file. What happens when you edit a migration depends on whether the section you touched has already completed.
+
+**Editing a section that hasn't completed** (pending or failed) is allowed — this is the normal recovery path. pgmt updates its registration from the current file and re-runs the section on the next `pgmt migrate apply`. Fix the SQL in place and re-apply.
+
+**Editing a section that has already completed** bails, naming the section:
 
 ```
-Migration 1734567890 has been modified after being applied!
+section 'add_index' of migration 1734567890 was modified after it was applied.
 Expected checksum: a1b2c3d4...
 Actual checksum:   e5f6a7b8...
+
+Applied sections are immutable. Create a new migration for further changes. If
+the edit was conscious and its effects already match the database, re-stamp the
+stored checksum: pgmt migrate resolve --restamp 1734567890/add_index.
 ```
 
-This is intentional. Applied migrations are immutable - they represent what actually ran against your database. If the file changes, pgmt can't be sure the database matches the migration chain.
+A completed section represents what actually ran against your database, so pgmt won't silently accept a change to it.
 
-**To fix:** Restore the original migration file from git. If you need to make changes, create a new migration instead.
+**To fix:**
+
+- If the edit was **accidental**, restore the original file from git.
+- If you need to change what a completed section does, create a new migration instead.
+- If the edit was **conscious** and the database already matches it (a manual hot-fix, say), accept it with `pgmt migrate resolve --restamp <version>` — see [Repairing Tracking State](#repairing-tracking-state).
 
 ## Repairing Tracking State
 
@@ -87,7 +99,9 @@ The normal recovery path is **fix-in-repo**: when a section fails or an unapplie
 
 `resolve` is a **break-glass tool**. It operates on one section coordinate at a time (`<version>/<section>`), never in bulk, and prints the before/after state so the change is auditable. Because it mutates tracking state, prefer running it as a **manually-triggered CI job** against the target database rather than from a laptop with production access — the same place you run `migrate apply`. It takes the same advisory lock as apply/provision, so it can't race a deploy.
 
-There are three verbs (exactly one required):
+Re-arming a `failed` section to run again needs no special command: fix the section in the migration file and re-run `pgmt migrate apply`. Per-section checksums let pgmt pick up the corrected section and retry from where it stopped. Reach for `resolve` only for the two cases below, where the database and the tracking table have genuinely diverged.
+
+There are two verbs (exactly one required):
 
 ### `--mark-completed <version>/<section>`
 
@@ -95,14 +109,6 @@ A section is `failed`/`running`/`pending`, but the database already has its effe
 
 ```bash
 pgmt migrate resolve --mark-completed 1734567890/add_index --target-url "$DATABASE_URL"
-```
-
-### `--reset <version>/<section>`
-
-A `failed` or `running` section should be re-armed so the next apply runs it again (for example, a transient lock timeout you've since cleared). Sets it back to `pending` and clears the recorded error. pgmt refuses on a completed section — un-completing an applied section is never valid; if its effects were manually rolled back, create a new migration instead.
-
-```bash
-pgmt migrate resolve --reset 1734567890/add_index --target-url "$DATABASE_URL"
 ```
 
 ### `--restamp <version>[/<section>]`
@@ -120,7 +126,7 @@ Add `--baseline` to any verb to operate on a baseline row instead of a migration
 Once a migration is applied to any environment, treat it as permanent:
 
 - **Don't delete it.** Other environments still need to apply it, and the tracking table expects it to exist.
-- **Don't edit it.** Checksum validation will catch the modification and block future deploys.
+- **Don't edit a section that's already completed.** Checksum validation catches the modification and blocks future deploys. (A section that hasn't run yet — pending or failed on every target — is still editable; pgmt picks up the change on the next apply.)
 - **Don't reorder it.** Version numbers determine execution order.
 
 If you need to undo a change, create a new migration that reverses it. See [Reverting a Change](/docs/guides/migration-workflow#reverting-a-change).
