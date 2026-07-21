@@ -2,11 +2,11 @@ use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::diff::operations::MigrationStep;
 use crate::diff::{
-    aggregates as aggregates_diff, casts as casts_diff, constraints as constraints_diff,
-    custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
-    indexes as indexes_diff, operators as operators_diff, policies as policies_diff,
-    sequences as sequences_diff, tables as tables_diff, triggers as triggers_diff,
-    views as views_diff,
+    aggregates as aggregates_diff, casts as casts_diff, collations as collations_diff,
+    constraints as constraints_diff, custom_types as custom_types_diff, domains as domains_diff,
+    functions as functions_diff, indexes as indexes_diff, operators as operators_diff,
+    policies as policies_diff, sequences as sequences_diff, tables as tables_diff,
+    triggers as triggers_diff, views as views_diff,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -595,9 +595,12 @@ impl Catalog {
                 steps.extend(casts_diff::diff(None, Some(new)));
             }
 
-            // Recreate-cascade for collations (a dependent domain/column
-            // surviving an attribute change) is not yet supported.
-            DbObjectId::Collation { .. } => return None,
+            DbObjectId::Collation { schema, name } => {
+                let old = self.find_collation(schema, name)?;
+                let new = new_catalog.find_collation(schema, name)?;
+                steps.extend(collations_diff::diff(Some(old), None));
+                steps.extend(collations_diff::diff(None, Some(new)));
+            }
 
             DbObjectId::Schema { .. }
             | DbObjectId::Extension { .. }
