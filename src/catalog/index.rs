@@ -3,7 +3,9 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
+use super::utils::is_system_schema;
 
 /* ---------- Data structures ---------- */
 
@@ -49,7 +51,12 @@ impl std::fmt::Display for IndexType {
 #[derive(Debug, Clone)]
 pub struct IndexColumn {
     pub expression: String, // Column name or expression
-    pub collation: Option<String>,
+    /// Explicit per-key collation from `pg_index.indcollation`, recorded only
+    /// when it differs from what the key would inherit (the column's own
+    /// collation for plain keys, the default collation for expression keys).
+    /// `None` means the key uses its inherited collation and no COLLATE clause
+    /// is rendered.
+    pub collation: Option<CollationRef>,
     pub opclass: Option<String>,        // Operator class
     pub ordering: Option<String>,       // ASC/DESC for btree indexes
     pub nulls_ordering: Option<String>, // NULLS FIRST/LAST
@@ -184,7 +191,7 @@ struct IndexColumnRow {
     schema: String,
     name: String,
     expression: String,
-    collation: Option<String>,
+    collation: Option<CollationRef>,
     opclass: Option<String>,
     ordering: Option<String>,
     nulls_ordering: Option<String>,
@@ -198,11 +205,8 @@ async fn fetch_index_columns(conn: &mut PgConnection) -> Result<Vec<IndexColumnR
             n.nspname AS "schema!",
             i.relname AS "name!",
             pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true) AS "expression!",
-            CASE
-                WHEN c.collname IS NOT NULL AND c.collname != 'default'
-                THEN quote_ident(cn.nspname) || '.' || quote_ident(c.collname)
-                ELSE NULL
-            END AS "collation?",
+            cn.nspname AS "collation_schema?",
+            c.collname AS "collation_name?",
             CASE
                 WHEN op.opcname IS NOT NULL
                 THEN quote_ident(opn.nspname) || '.' || quote_ident(op.opcname)
@@ -226,7 +230,25 @@ async fn fetch_index_columns(conn: &mut PgConnection) -> Result<Vec<IndexColumnR
         LEFT JOIN pg_attribute a ON a.attrelid = t.oid
                                  AND a.attnum = idx.indkey[col_pos-1]
                                  AND idx.indkey[col_pos-1] > 0
-        LEFT JOIN pg_collation c ON a.attcollation = c.oid
+        -- Per-key collation lives in pg_index.indcollation (oidvector,
+        -- 0-indexed), NOT in the underlying column's attcollation — an explicit
+        -- `CREATE INDEX ... (col COLLATE "x")` override only shows up there.
+        -- Record it only when it differs from what the key would inherit:
+        -- the column's own collation for plain column keys, the database
+        -- default collation for expression keys (an expression's true derived
+        -- collation is not reachable from SQL; recording any non-default
+        -- collation is round-trip stable because re-fetching the applied index
+        -- yields the same value).
+        LEFT JOIN pg_collation c
+            ON c.oid = idx.indcollation[col_pos-1]
+            AND idx.indcollation[col_pos-1] != 0
+            AND (
+                CASE
+                    WHEN idx.indkey[col_pos-1] > 0
+                        THEN idx.indcollation[col_pos-1] IS DISTINCT FROM a.attcollation
+                    ELSE idx.indcollation[col_pos-1] != 'pg_catalog."default"'::regcollation
+                END
+            )
         LEFT JOIN pg_namespace cn ON c.collnamespace = cn.oid
         LEFT JOIN pg_opclass op ON col_pos <= array_length(idx.indclass, 1)
                                 AND idx.indclass[col_pos-1] = op.oid
@@ -246,7 +268,10 @@ async fn fetch_index_columns(conn: &mut PgConnection) -> Result<Vec<IndexColumnR
             schema: r.schema,
             name: r.name,
             expression: r.expression,
-            collation: r.collation,
+            collation: match (r.collation_schema, r.collation_name) {
+                (Some(schema), Some(name)) => Some(CollationRef { schema, name }),
+                _ => None,
+            },
             opclass: r.opclass,
             ordering: Some(r.ordering),
             nulls_ordering: Some(r.nulls_ordering),
@@ -449,6 +474,22 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Index>> {
 
         if let Some(deps) = index_deps.get(&key) {
             depends_on.extend(deps.clone());
+        }
+
+        // A user-defined key collation must exist before the index that uses
+        // it; system collations (pg_catalog."C", etc.) are not managed objects.
+        for col in &regular_columns {
+            if let Some(coll) = &col.collation
+                && !is_system_schema(&coll.schema)
+            {
+                let dep = DbObjectId::Collation {
+                    schema: coll.schema.clone(),
+                    name: coll.name.clone(),
+                };
+                if !depends_on.contains(&dep) {
+                    depends_on.push(dep);
+                }
+            }
         }
 
         indexes.push(Index {
