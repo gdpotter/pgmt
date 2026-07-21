@@ -111,14 +111,15 @@ pgmt will:
 
 ## Automatic Dependency Tracking
 
-Here's what makes pgmt special. Let's rename a column in the base table:
+Here's what makes pgmt special. Let's add a column to the base table:
 
 ```bash
 cat > schema/users.sql << 'EOF'
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
-    name TEXT NOT NULL,       -- Renamed from full_name
+    full_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,  -- New column
     created_at TIMESTAMP DEFAULT NOW()
 );
 EOF
@@ -134,11 +135,34 @@ pgmt apply
 
 pgmt automatically:
 
-1. Dropped the `active_users` view (because the column structure changed)
-2. Renamed the column: `ALTER TABLE users RENAME COLUMN full_name TO name`
-3. Recreated the `active_users` view with the same definition
+1. Dropped the `active_users` view (its column list is about to change)
+2. Added the column: `ALTER TABLE users ADD COLUMN is_active boolean DEFAULT true NOT NULL`
+3. Recreated the `active_users` view, which now includes `is_active`
 
 The view file didn't change - it still says `SELECT * FROM users` - but pgmt knows it needs to be recreated because the underlying table structure changed.
+
+### What About Renames?
+
+If you rename `full_name` to `name` in the schema file, pgmt sees a column
+named `full_name` that disappeared and a column named `name` that appeared.
+From the schema files alone there's no way to tell a rename apart from a
+genuine drop-and-add, and guessing wrong in either direction loses data - so
+pgmt refuses to guess. It proposes the drop and flags it as a destructive
+operation for you to review.
+
+To actually rename a column:
+
+- **In development:** run the rename yourself against the dev database
+  (`psql -c 'ALTER TABLE users RENAME COLUMN full_name TO name'`), then update
+  the schema file to match. The next `pgmt apply` sees no difference.
+- **For production:** run `pgmt migrate new` and edit the generated migration,
+  replacing the `DROP COLUMN`/`ADD COLUMN` pair with a single
+  `RENAME COLUMN` statement. `pgmt migrate validate` replays the edited
+  migration against a shadow database and confirms your rename produces the
+  declared schema.
+
+This review-don't-guess approach is a core design decision - see the
+[philosophy page](/docs/concepts/philosophy) for the reasoning.
 
 ### Make It More Complex
 
