@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Features
+
+- Support custom collations (`CREATE COLLATION` with libc, ICU, and PG17+ builtin providers, including `deterministic` and ICU `rules`): create, drop, and comment, with dependency ordering and cascades across the domains, table columns, composite type attributes, indexes, and views that use them. Previously `pgmt apply` silently ignored collations — a schema with `CREATE COLLATION` and a dependent object failed on the target — and column `COLLATE` clauses were dropped from generated SQL ([#15](https://github.com/gdpotter/pgmt/issues/15))
+
 ## 0.6.0 - 2026-07-23
 
 ### Features

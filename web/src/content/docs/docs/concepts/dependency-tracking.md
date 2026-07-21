@@ -84,6 +84,7 @@ pgmt automatically detects:
 - **Type usage**: Columns using custom types depend on those types
 - **Array types**: `priority[]` depends on `priority` type
 - **Foreign keys**: Tables with FKs depend on referenced tables
+- **Collations**: Domains, table columns, composite attributes, index keys, and views using a custom collation are ordered after it
 - **Operators in views**: A view using a custom operator (`a === b`) is ordered after it
 - **Function-based casts in views**: A view using a `WITH FUNCTION` cast (`value::target`) is ordered after the cast
 
