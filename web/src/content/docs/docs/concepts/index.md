@@ -28,4 +28,4 @@ Development, staging, and production are completely separate. Shadow databases l
 
 ---
 
-**Ready to get started?** See the [Quick Start Guide](../getting-started/quick-start) to try pgmt in practice.
+**Ready to get started?** See the [Quick Start Guide](/docs/getting-started/quick-start) to try pgmt in practice.

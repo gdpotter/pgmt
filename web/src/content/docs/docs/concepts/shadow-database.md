@@ -48,7 +48,7 @@ it manages - it won't create or drop databases on a server it doesn't own,
 since that database's lifecycle may belong to CI or other orchestration. If
 the database does exist solely for pgmt (a CI service container, say), set
 `reset: branch` to opt into the same branching semantics - see the
-[Configuration Reference](../reference/configuration).
+[Configuration Reference](/docs/reference/configuration).
 
 **This means:** pgmt supports every PostgreSQL feature automatically. Custom aggregates, procedural languages, extensions, expression indexes - if PostgreSQL can create it, pgmt can understand it. There's no "supported features" list to maintain because pgmt delegates parsing to PostgreSQL itself.
 
@@ -56,7 +56,7 @@ the database does exist solely for pgmt (a CI service container, say), set
 
 By default, pgmt manages shadow databases automatically - it starts a Docker container and works on a fresh, ephemeral branch of it for each operation, dropping the branch when done. No configuration needed.
 
-For advanced cases (specific PostgreSQL versions, existing databases, etc.), see the [Configuration Reference](../reference/configuration).
+For advanced cases (specific PostgreSQL versions, existing databases, etc.), see the [Configuration Reference](/docs/reference/configuration).
 
 ## Performance Impact
 
@@ -70,4 +70,4 @@ Shadow databases are schema-only - avoid `INSERT` statements in schema files as 
 
 - [How pgmt Works](how-it-works) - The complete workflow
 - [Dependency Tracking](dependency-tracking) - How pgmt orders schema files
-- [Configuration](../reference/configuration) - Shadow database settings
+- [Configuration](/docs/reference/configuration) - Shadow database settings

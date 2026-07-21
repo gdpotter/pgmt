@@ -79,7 +79,7 @@ For `pgmt migrate new`, there's no target database specified. Instead, pgmt reco
 
 This is why you can `git clone` a pgmt project and run `pgmt migrate new` without any database set up - pgmt reconstructs the state from baselines and migration history.
 
-**Baselines:** Over time, you might accumulate hundreds of migrations. You can run `pgmt migrate baseline` to snapshot the current state and clean up old migrations. See the [Baseline Management](../guides/baseline-management) guide.
+**Baselines:** Over time, you might accumulate hundreds of migrations. You can run `pgmt migrate baseline` to snapshot the current state and clean up old migrations. See the [Baseline Management](/docs/guides/baseline-management) guide.
 
 **Merge conflicts:** If you rebase and someone else changed the same view, you'll have a git conflict in your schema files. Resolve the conflict, then run `pgmt migrate new` again to regenerate the migration.
 
@@ -101,7 +101,7 @@ This is why you can `git clone` a pgmt project and run `pgmt migrate new` withou
 4. **Apply in order** - Run pending migrations one at a time, in version order
 5. **Record** - Insert each migration into `pgmt_migrations` after successful application
 
-**Setting up a new environment:** `migrate apply` maintains a database that already exists — it runs pending migration files but does not apply baselines. To stand up a _new_ database from the repo (a demo, fresh staging, disaster recovery), use `pgmt migrate provision`, which applies the latest baseline and then the migrations after it. See [Provisioning a New Environment](../guides/baseline-management#provisioning-a-new-environment).
+**Setting up a new environment:** `migrate apply` maintains a database that already exists — it runs pending migration files but does not apply baselines. To stand up a _new_ database from the repo (a demo, fresh staging, disaster recovery), use `pgmt migrate provision`, which applies the latest baseline and then the migrations after it. See [Provisioning a New Environment](/docs/guides/baseline-management#provisioning-a-new-environment).
 
 **Multi-section migrations:** You can split a migration into execution phases using `-- pgmt:section` comments. Each section has its own configuration for transaction mode, timeout, and retry logic.
 
@@ -122,7 +122,7 @@ ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';
 CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 ```
 
-Sections execute sequentially. If the index creation fails due to lock timeout, pgmt retries just that section (up to 10 attempts). See [Multi-Section Migrations](../guides/multi-section-migrations) for details.
+Sections execute sequentially. If the index creation fails due to lock timeout, pgmt retries just that section (up to 10 attempts). See [Multi-Section Migrations](/docs/guides/multi-section-migrations) for details.
 
 ## Under the Hood: The Diff Engine
 
