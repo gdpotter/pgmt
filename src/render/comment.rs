@@ -67,6 +67,7 @@ fn comment_keyword(target: &AttrTarget) -> &'static str {
         DbObjectId::View { .. } => "VIEW",
         DbObjectId::Type { .. } => "TYPE",
         DbObjectId::Domain { .. } => "DOMAIN",
+        DbObjectId::Collation { .. } => "COLLATION",
         DbObjectId::Function { .. } => "FUNCTION",
         DbObjectId::Procedure { .. } => "PROCEDURE",
         DbObjectId::Aggregate { .. } => "AGGREGATE",
@@ -104,6 +105,7 @@ fn comment_reference(target: &AttrTarget) -> String {
         | DbObjectId::View { schema, name }
         | DbObjectId::Type { schema, name }
         | DbObjectId::Domain { schema, name }
+        | DbObjectId::Collation { schema, name }
         | DbObjectId::Sequence { schema, name }
         | DbObjectId::Index { schema, name } => {
             format!("{}.{}", quote_ident(schema), quote_ident(name))

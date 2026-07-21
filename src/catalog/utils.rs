@@ -151,6 +151,11 @@ impl DependencyBuilder {
         }
     }
 
+    /// Add a dependency on a user-defined collation.
+    pub fn add_collation(&mut self, schema: String, name: String) {
+        self.deps.push(DbObjectId::Collation { schema, name });
+    }
+
     /// Build the final dependency list.
     pub fn build(self) -> Vec<DbObjectId> {
         self.deps

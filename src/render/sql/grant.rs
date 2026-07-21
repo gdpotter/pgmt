@@ -185,6 +185,8 @@ pub fn render_grant_object_clause(object: &DbObjectId) -> String {
         | DbObjectId::Extension { .. }
         | DbObjectId::Operator { .. }
         | DbObjectId::Cast { .. }
+        // Collations have no privileges in PostgreSQL (no GRANT ON COLLATION).
+        | DbObjectId::Collation { .. }
         | DbObjectId::Grant { .. }
         | DbObjectId::Comment { .. }
         | DbObjectId::Column { .. } => {

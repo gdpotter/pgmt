@@ -152,6 +152,7 @@ pub async fn cmd_migrate_baseline(
                     crate::diff::operations::MigrationStep::View(_) => "View",
                     crate::diff::operations::MigrationStep::Type(_) => "Type",
                     crate::diff::operations::MigrationStep::Domain(_) => "Domain",
+                    crate::diff::operations::MigrationStep::Collation(_) => "Collation",
                     crate::diff::operations::MigrationStep::Sequence(_) => "Sequence",
                     crate::diff::operations::MigrationStep::Function(_) => "Function",
                     crate::diff::operations::MigrationStep::Aggregate(_) => "Aggregate",

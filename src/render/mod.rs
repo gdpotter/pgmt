@@ -1,5 +1,6 @@
 pub mod aggregate;
 pub mod cast;
+pub mod collation;
 pub mod comment;
 pub mod constraint;
 pub mod domain;
@@ -63,6 +64,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::View(op) => op.to_sql(),
             MigrationStep::Type(op) => op.to_sql(),
             MigrationStep::Domain(op) => op.to_sql(),
+            MigrationStep::Collation(op) => op.to_sql(),
             MigrationStep::Sequence(op) => op.to_sql(),
             MigrationStep::Function(op) => op.to_sql(),
             MigrationStep::Aggregate(op) => op.to_sql(),
@@ -85,6 +87,7 @@ impl SqlRenderer for MigrationStep {
             MigrationStep::View(op) => op.db_object_id(),
             MigrationStep::Type(op) => op.db_object_id(),
             MigrationStep::Domain(op) => op.db_object_id(),
+            MigrationStep::Collation(op) => op.db_object_id(),
             MigrationStep::Sequence(op) => op.db_object_id(),
             MigrationStep::Function(op) => op.db_object_id(),
             MigrationStep::Aggregate(op) => op.db_object_id(),

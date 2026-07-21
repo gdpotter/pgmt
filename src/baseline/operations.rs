@@ -106,6 +106,7 @@ pub fn display_baseline_summary(result: &BaselineCreationResult) {
                 MigrationStep::View(_) => "View",
                 MigrationStep::Type(_) => "Type",
                 MigrationStep::Domain(_) => "Domain",
+                MigrationStep::Collation(_) => "Collation",
                 MigrationStep::Sequence(_) => "Sequence",
                 MigrationStep::Function(_) => "Function",
                 MigrationStep::Aggregate(_) => "Aggregate",

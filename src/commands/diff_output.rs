@@ -117,6 +117,7 @@ fn output_summary_format(steps: &[MigrationStep]) {
             MigrationStep::Policy(_) => "Policies",
             MigrationStep::Type(_) => "Custom Types",
             MigrationStep::Domain(_) => "Domains",
+            MigrationStep::Collation(_) => "Collations",
             MigrationStep::Grant(_) => "Grants",
             MigrationStep::Constraint(_) => "Constraints",
             MigrationStep::Comment(_) => "Comments",

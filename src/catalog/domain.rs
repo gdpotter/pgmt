@@ -5,8 +5,9 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::DependencyBuilder;
+use super::utils::{DependencyBuilder, is_system_schema};
 
 /// A CHECK constraint on a domain
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +24,9 @@ pub struct Domain {
     pub base_type: String,
     pub not_null: bool,
     pub default: Option<String>,
-    pub collation: Option<String>,
+    /// Non-default collation, schema-qualified. Same-named collations can
+    /// exist in different schemas, so the bare name is not a usable identity.
+    pub collation: Option<CollationRef>,
     pub check_constraints: Vec<DomainCheckConstraint>,
     pub comment: Option<String>,
     pub depends_on: Vec<DbObjectId>,
@@ -64,12 +67,18 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
             format_type(t.typbasetype, t.typtypmod) AS "base_type!",
             t.typnotnull AS "not_null!",
             pg_get_expr(t.typdefaultbin, 0) AS "default?",
+            -- Non-default collation, schema-qualified. The per-database
+            -- "default" collation carries no information, so it stays NULL.
             CASE
-                WHEN t.typcollation != 0 AND t.typcollation != (
-                    SELECT oid FROM pg_collation WHERE collname = 'default'
-                ) THEN (SELECT collname FROM pg_collation WHERE oid = t.typcollation)
-                ELSE NULL
-            END AS "collation?",
+                WHEN coll.collname IS NOT NULL
+                     AND NOT (coll.collname = 'default' AND colln.nspname = 'pg_catalog')
+                THEN colln.nspname
+            END AS "collation_schema?",
+            CASE
+                WHEN coll.collname IS NOT NULL
+                     AND NOT (coll.collname = 'default' AND colln.nspname = 'pg_catalog')
+                THEN coll.collname
+            END AS "collation_name?",
             d.description AS "comment?",
             -- For dependency tracking on the base type (resolve array element type)
             CASE
@@ -95,6 +104,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
         -- Element type for array base types
         LEFT JOIN pg_type elem_bt ON bt.typelem = elem_bt.oid AND bt.typelem != 0
         LEFT JOIN pg_namespace elem_btn ON elem_bt.typnamespace = elem_btn.oid
+        LEFT JOIN pg_collation coll ON coll.oid = t.typcollation AND t.typcollation != 0
+        LEFT JOIN pg_namespace colln ON coll.collnamespace = colln.oid
         LEFT JOIN pg_description d ON d.objoid = t.oid AND d.objsubid = 0
         -- Extension type lookup: compute once as derived table, then hash join
         LEFT JOIN (
@@ -165,6 +176,19 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
             row.base_type_extension_name.clone(),
         );
 
+        let collation = match (row.collation_schema, row.collation_name) {
+            (Some(schema), Some(name)) => Some(CollationRef { schema, name }),
+            _ => None,
+        };
+
+        // A user-defined collation must exist before the domain that uses it;
+        // system collations (pg_catalog."C", etc.) are not managed objects.
+        if let Some(coll) = &collation
+            && !is_system_schema(&coll.schema)
+        {
+            builder.add_collation(coll.schema.clone(), coll.name.clone());
+        }
+
         let depends_on = builder.build();
         let check_constraints = constraints_by_domain.remove(&row.oid.0).unwrap_or_default();
 
@@ -174,7 +198,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
             base_type: row.base_type,
             not_null: row.not_null,
             default: row.default,
-            collation: row.collation,
+            collation,
             check_constraints,
             comment: row.comment,
             depends_on,
