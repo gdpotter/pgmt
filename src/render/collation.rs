@@ -1,9 +1,24 @@
 //! SQL rendering for collation operations
 
-use crate::catalog::collation::{Collation, CollationProvider};
+use crate::catalog::collation::{Collation, CollationProvider, CollationRef};
 use crate::catalog::id::DbObjectId;
 use crate::diff::operations::CollationOperation;
 use crate::render::{RenderedSql, Safety, SqlRenderer, escape_string, quote_ident};
+
+/// Render a ` COLLATE "schema"."name"` clause (leading space included), or an
+/// empty string when the column/attribute uses its type's default collation.
+/// `format_type()` never includes COLLATE, so column renderers must append this
+/// explicitly.
+pub fn collate_clause(collation: Option<&CollationRef>) -> String {
+    match collation {
+        Some(c) => format!(
+            " COLLATE {}.{}",
+            quote_ident(&c.schema),
+            quote_ident(&c.name)
+        ),
+        None => String::new(),
+    }
+}
 
 /// Build the parenthesized option list of a CREATE COLLATION statement.
 fn build_collation_options(collation: &Collation) -> String {

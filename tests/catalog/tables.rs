@@ -912,3 +912,98 @@ async fn test_fetch_table_with_composite_type_column() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_fetch_column_with_explicit_collation() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TABLE users (id integer, name text COLLATE case_insensitive)")
+            .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+        assert_eq!(tables.len(), 1);
+        let table = &tables[0];
+
+        assert!(table.columns[0].collation.is_none());
+
+        let collation = table.columns[1]
+            .collation
+            .as_ref()
+            .expect("explicitly collated column carries its collation");
+        assert_eq!(collation.schema, "public");
+        assert_eq!(collation.name, "case_insensitive");
+
+        // The user collation is a managed object the table depends on.
+        assert!(
+            table.depends_on().contains(&DbObjectId::Collation {
+                schema: "public".to_string(),
+                name: "case_insensitive".to_string()
+            }),
+            "table must depend on the column's collation, got: {:?}",
+            table.depends_on()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_plain_text_column_has_no_collation() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE notes (id integer, body text, tags text[])")
+            .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+        let table = &tables[0];
+
+        // Default-collated columns stay None so plain text columns never
+        // diff or render a COLLATE clause.
+        for column in &table.columns {
+            assert!(
+                column.collation.is_none(),
+                "column {} should have no collation",
+                column.name
+            );
+        }
+        assert!(
+            !table
+                .depends_on()
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Collation { .. })),
+            "no collation dependency expected"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_column_with_system_collation_has_no_managed_dependency() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE users (code text COLLATE \"C\")")
+            .await;
+
+        let tables = fetch(&mut *db.conn().await).await.unwrap();
+        let table = &tables[0];
+
+        // System collations are stored (and rendered) so the clause round-trips...
+        let collation = table.columns[0]
+            .collation
+            .as_ref()
+            .expect("COLLATE \"C\" is stored");
+        assert_eq!(collation.schema, "pg_catalog");
+        assert_eq!(collation.name, "C");
+
+        // ...but pg_catalog collations are not managed objects.
+        assert!(
+            !table
+                .depends_on()
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Collation { .. })),
+            "system collation must not add a managed dependency, got: {:?}",
+            table.depends_on()
+        );
+    })
+    .await;
+}

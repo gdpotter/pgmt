@@ -3,6 +3,7 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
 use super::utils::{is_system_schema, resolve_type_dependency};
 use crate::render::quote_ident;
@@ -19,6 +20,11 @@ pub struct Column {
     /// sequence is internal to the column (pg_depend 'i'), not a standalone
     /// catalog object.
     pub identity: Option<IdentityKind>,
+    /// Explicit collation, schema-qualified. `None` when the column uses its
+    /// type's default collation, so plain `text` columns never carry a
+    /// `COLLATE` clause. System collations (pg_catalog."C", etc.) are stored
+    /// and rendered but add no managed dependency.
+    pub collation: Option<CollationRef>,
     pub comment: Option<String>,
     /// Dependencies for this column (e.g., functions used in generated expression)
     pub depends_on: Vec<DbObjectId>,
@@ -194,6 +200,8 @@ struct ColumnRow {
     attidentity: Option<String>,
     not_null: bool,
     attndims: i32,
+    collation_schema: Option<String>,
+    collation_name: Option<String>,
     column_comment: Option<String>,
     is_extension_type: bool,
     extension_name: Option<String>,
@@ -223,6 +231,12 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
           a.attidentity::text AS attidentity,
           a.attnotnull AS "not_null!",
           COALESCE(a.attndims, 0)::int AS "attndims!: i32",
+          -- Explicit collation, schema-qualified. Compared by OID against the
+          -- column type's default collation (pg_type.typcollation), so plain
+          -- text columns stay NULL and a user collation that happens to be
+          -- named "default" is still detected.
+          colln.nspname AS "collation_schema?",
+          coll.collname AS "collation_name?",
           d.description AS "column_comment?",
           -- Check if the type (or element type for arrays) is from an extension
           ext_types.extname IS NOT NULL AS "is_extension_type!: bool",
@@ -249,6 +263,12 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
         -- Get relkind for composite types (to distinguish table/view from explicit composite)
         LEFT JOIN pg_class t_rel ON t.typrelid = t_rel.oid AND t.typrelid != 0
         LEFT JOIN pg_class elem_t_rel ON elem_t.typrelid = elem_t_rel.oid AND elem_t.typrelid != 0
+        -- Only a collation that differs from the type's default is meaningful
+        LEFT JOIN pg_collation coll
+          ON coll.oid = a.attcollation
+         AND a.attcollation != 0
+         AND a.attcollation != t.typcollation
+        LEFT JOIN pg_namespace colln ON coll.collnamespace = colln.oid
         LEFT JOIN pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum
         -- Extension type lookup: compute once as derived table, then hash join
         LEFT JOIN (
@@ -285,6 +305,8 @@ async fn fetch_table_columns(conn: &mut PgConnection) -> Result<Vec<ColumnRow>> 
             attidentity: r.attidentity,
             not_null: r.not_null,
             attndims: r.attndims,
+            collation_schema: r.collation_schema,
+            collation_name: r.collation_name,
             column_comment: r.column_comment,
             is_extension_type: r.is_extension_type,
             extension_name: r.extension_name,
@@ -515,6 +537,23 @@ fn populate_columns(
                     column_depends_on.extend(seqs.clone());
                 }
 
+                let collation = match (r.collation_schema, r.collation_name) {
+                    (Some(schema), Some(name)) => Some(CollationRef { schema, name }),
+                    _ => None,
+                };
+
+                // A user-defined collation must exist before the table that
+                // uses it; system collations (pg_catalog."C", etc.) are not
+                // managed objects.
+                if let Some(coll) = &collation
+                    && !is_system_schema(&coll.schema)
+                {
+                    column_depends_on.push(DbObjectId::Collation {
+                        schema: coll.schema.clone(),
+                        name: coll.name.clone(),
+                    });
+                }
+
                 Column {
                     name: r.column_name,
                     data_type: match (&r.type_schema, &base_type_name) {
@@ -537,6 +576,7 @@ fn populate_columns(
                         _ => None,
                     },
                     identity: IdentityKind::from_attidentity(r.attidentity.as_deref()),
+                    collation,
                     default: if r.attgenerated.as_deref() == Some("s") {
                         None
                     } else {
@@ -649,6 +689,7 @@ mod tests {
                 default: None,
                 generated: None,
                 identity: None,
+                collation: None,
                 comment: None,
                 depends_on: vec![],
                 not_null,

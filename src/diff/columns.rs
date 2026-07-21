@@ -17,10 +17,15 @@ pub fn diff(old: Option<&Column>, new: Option<&Column>) -> Vec<ColumnAction> {
         // 3) existed in both →  type, default, or not null changed?
         (Some(o), Some(n)) => {
             let mut changes = Vec::new();
-            if o.data_type != n.data_type {
+            // Collation is structural and rides the TYPE clause: ALTER TYPE
+            // recomputes the column's collation, so a collation-only change
+            // (add, change, or remove back to the type default) re-states the
+            // existing type with the new COLLATE clause.
+            if o.data_type != n.data_type || o.collation != n.collation {
                 changes.push(ColumnAction::AlterType {
                     name: n.name.clone(),
                     new_type: n.data_type.clone(),
+                    new_collation: n.collation.clone(),
                 });
             }
 

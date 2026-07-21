@@ -4,6 +4,7 @@
 //! and migration operations to ensure identical SQL output.
 
 use crate::catalog::table::Table;
+use crate::render::collation::collate_clause;
 use crate::render::quote_ident;
 
 /// Render a complete CREATE TABLE statement for the given table.
@@ -33,11 +34,13 @@ pub fn render_create_table(table: &Table) -> String {
     for column in &table.columns {
         let mut col_def = String::new();
 
-        // Column name and data type
+        // Column name and data type (format_type() never includes COLLATE, so
+        // any explicit collation is appended here)
         col_def.push_str(&format!(
-            "    {} {}",
+            "    {} {}{}",
             quote_ident(&column.name),
-            column.data_type
+            column.data_type,
+            collate_clause(column.collation.as_ref())
         ));
 
         // Generated column expression (must come before default and not null)
@@ -105,6 +108,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -115,6 +119,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -144,6 +149,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -154,6 +160,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -187,6 +194,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -197,6 +205,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -230,6 +239,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -240,6 +250,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -250,6 +261,7 @@ mod tests {
                     not_null: false,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -260,6 +272,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -293,6 +306,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -303,6 +317,7 @@ mod tests {
                     not_null: true,
                     generated: None,
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -313,6 +328,7 @@ mod tests {
                     not_null: false,
                     generated: Some("first_name || ' ' || last_name".to_string()),
                     identity: None,
+                    collation: None,
                     comment: None,
                     depends_on: vec![],
                 },
@@ -341,6 +357,7 @@ mod tests {
                 not_null: false,
                 generated: None,
                 identity: None,
+                collation: None,
                 comment: None,
                 depends_on: vec![],
             }],
