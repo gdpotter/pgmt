@@ -1,5 +1,6 @@
 use crate::catalog::custom_type::{CustomType, TypeKind};
 use crate::diff::operations::{MigrationStep, TypeOperation};
+use crate::render::collation::collate_clause;
 
 /// Build the `CREATE TYPE` step for a custom type. Comments (on the type and its
 /// composite attributes) are handled centrally by [`crate::diff::comments`].
@@ -17,7 +18,14 @@ fn create_step(n: &CustomType) -> MigrationStep {
             let attributes: Vec<String> = n
                 .composite_attributes
                 .iter()
-                .map(|attr| format!("{} {}", attr.name, attr.type_name))
+                .map(|attr| {
+                    format!(
+                        "{} {}{}",
+                        attr.name,
+                        attr.type_name,
+                        collate_clause(attr.collation.as_ref())
+                    )
+                })
                 .collect();
             (
                 "COMPOSITE".to_string(),
@@ -119,18 +127,21 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                     }
                 }
                 TypeKind::Composite => {
-                    // Compare attribute structure (name + type); comments are diffed
-                    // centrally, so a comment-only change never lands here.
-                    let old_attrs: Vec<(&String, &String)> = o
-                        .composite_attributes
-                        .iter()
-                        .map(|attr| (&attr.name, &attr.type_name))
-                        .collect();
-                    let new_attrs: Vec<(&String, &String)> = n
-                        .composite_attributes
-                        .iter()
-                        .map(|attr| (&attr.name, &attr.type_name))
-                        .collect();
+                    // Compare attribute structure (name + type + collation); comments
+                    // are diffed centrally, so a comment-only change never lands here.
+                    // Collation changes take the drop/recreate path: ALTER TYPE ...
+                    // ALTER ATTRIBUTE ... TYPE resets the collation to the type's
+                    // default unless COLLATE is restated, so recreating is the
+                    // simplest correct move for this rare change.
+                    let attr_key = |attr: &'_ crate::catalog::custom_type::CompositeAttribute| {
+                        (
+                            attr.name.clone(),
+                            attr.type_name.clone(),
+                            attr.collation.clone(),
+                        )
+                    };
+                    let old_attrs: Vec<_> = o.composite_attributes.iter().map(attr_key).collect();
+                    let new_attrs: Vec<_> = n.composite_attributes.iter().map(attr_key).collect();
 
                     if old_attrs != new_attrs {
                         vec![drop_step(o), create_step(n)]

@@ -4,9 +4,12 @@ use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
 
 use pgmt::catalog::Catalog;
+use pgmt::catalog::collation::CollationRef;
 use pgmt::catalog::custom_type::{TypeKind, fetch};
 use pgmt::diff::custom_types::diff;
-use pgmt::diff::operations::{CommentOperation, MigrationStep, SqlRenderer, TypeOperation};
+use pgmt::diff::operations::{
+    CollationOperation, CommentOperation, MigrationStep, SqlRenderer, TableOperation, TypeOperation,
+};
 use pgmt::diff::plan;
 
 #[tokio::test]
@@ -810,5 +813,210 @@ async fn test_drop_composite_attribute_comment_migration() -> Result<()> {
         )
         .await?;
 
+    Ok(())
+}
+
+/// Index of the first step matching a predicate, for ordering assertions.
+fn position(steps: &[MigrationStep], pred: impl Fn(&MigrationStep) -> bool) -> usize {
+    steps
+        .iter()
+        .position(pred)
+        .expect("expected step not found in plan")
+}
+
+/// A composite type with a collated attribute must round-trip: the COLLATE
+/// clause used to be silently dropped from the desired state (attcollation was
+/// never fetched), so the generated CREATE TYPE lost the collation. The plan
+/// must also order CREATE COLLATION before the CREATE TYPE that uses it.
+#[tokio::test]
+async fn test_create_composite_with_collated_attribute_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+                "CREATE TYPE tagged AS (label text COLLATE ci, note text)",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                let create_collation = position(steps, |s| {
+                    matches!(s, MigrationStep::Collation(CollationOperation::Create { collation })
+                        if collation.name == "ci")
+                });
+                let create_type = position(steps, |s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                        if name == "tagged")
+                });
+                assert!(
+                    create_collation < create_type,
+                    "CREATE COLLATION must come before the composite type that uses it"
+                );
+
+                let sql = &steps[create_type].to_sql()[0].sql;
+                assert!(
+                    sql.contains("label text COLLATE \"public\".\"ci\""),
+                    "CREATE TYPE must include the COLLATE clause, got: {sql}"
+                );
+
+                let ty = final_catalog
+                    .types
+                    .iter()
+                    .find(|t| t.name == "tagged")
+                    .expect("tagged type should exist");
+                assert_eq!(
+                    ty.composite_attributes[0].collation,
+                    Some(CollationRef {
+                        schema: "public".to_string(),
+                        name: "ci".to_string(),
+                    })
+                );
+                assert_eq!(ty.composite_attributes[1].collation, None);
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Changing an attribute's collation is a structural change: the composite
+/// type is drop/recreated (ALTER ATTRIBUTE ... TYPE would reset the collation
+/// to the type default unless restated), and the result round-trips.
+#[tokio::test]
+async fn test_composite_attribute_collation_change_migration() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+            ],
+            &["CREATE TYPE tagged AS (label text)"],
+            &["CREATE TYPE tagged AS (label text COLLATE ci)"],
+            |steps, final_catalog| -> Result<()> {
+                let drop_type = position(steps, |s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. })
+                        if name == "tagged")
+                });
+                let create_type = position(steps, |s| {
+                    matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. })
+                        if name == "tagged")
+                });
+                assert!(
+                    drop_type < create_type,
+                    "collation change must drop/recreate the composite type"
+                );
+
+                let ty = final_catalog
+                    .types
+                    .iter()
+                    .find(|t| t.name == "tagged")
+                    .expect("tagged type should exist");
+                assert_eq!(
+                    ty.composite_attributes[0].collation,
+                    Some(CollationRef {
+                        schema: "public".to_string(),
+                        name: "ci".to_string(),
+                    })
+                );
+
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Changing a collation's attributes must cascade through the generic
+/// reverse-dependency walk: the composite type using it (and transitively the
+/// table using the composite type) is drop/recreated around the collation,
+/// the plan applies cleanly, and a re-diff is empty.
+#[tokio::test]
+async fn test_collation_change_cascades_composite_type_and_table() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+    let (initial_db, target_db) = helper.setup_migration_test().await;
+
+    initial_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)")
+        .await;
+    initial_db
+        .execute("CREATE TYPE tagged AS (label text COLLATE ci)")
+        .await;
+    initial_db
+        .execute("CREATE TABLE items (id integer PRIMARY KEY, tag tagged)")
+        .await;
+
+    target_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level1', deterministic = false)")
+        .await;
+    target_db
+        .execute("CREATE TYPE tagged AS (label text COLLATE ci)")
+        .await;
+    target_db
+        .execute("CREATE TABLE items (id integer PRIMARY KEY, tag tagged)")
+        .await;
+
+    let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
+    let steps = helper
+        .run_migration_pipeline(&initial_catalog, &target_catalog)
+        .await?;
+
+    let drop_table = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Table(TableOperation::Drop { name, .. }) if name == "items"),
+    );
+    let drop_type = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Type(TypeOperation::Drop { name, .. }) if name == "tagged"),
+    );
+    let drop_collation = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Collation(CollationOperation::Drop { name, .. }) if name == "ci"),
+    );
+    let create_collation = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Collation(CollationOperation::Create { collation }) if collation.name == "ci"),
+    );
+    let create_type = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Type(TypeOperation::Create { name, .. }) if name == "tagged"),
+    );
+    let create_table = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Table(TableOperation::Create { name, .. }) if name == "items"),
+    );
+    assert!(drop_table < drop_type, "table drops before its type");
+    assert!(drop_type < drop_collation, "type drops before collation");
+    assert!(
+        drop_collation < create_collation,
+        "collation drop precedes its recreate"
+    );
+    assert!(
+        create_collation < create_type,
+        "collation recreated before the type"
+    );
+    assert!(create_type < create_table, "table recreated last");
+
+    helper.execute_migration(&initial_db, &steps).await?;
+    let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    assert_eq!(
+        final_catalog.collations[0].locale.as_deref(),
+        Some("und-u-ks-level1")
+    );
+    let rediff = helper
+        .run_migration_pipeline(&final_catalog, &target_catalog)
+        .await?;
+    assert!(
+        rediff.is_empty(),
+        "re-diff after applying the cascade must be empty, got: {rediff:?}"
+    );
+
+    initial_db.cleanup().await;
+    target_db.cleanup().await;
     Ok(())
 }

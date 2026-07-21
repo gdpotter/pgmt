@@ -4,8 +4,9 @@ use anyhow::Result;
 use sqlx::postgres::PgConnection;
 use tracing::info;
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
-use super::utils::DependencyBuilder;
+use super::utils::{DependencyBuilder, is_system_schema};
 
 /* ---------- Data structures ---------- */
 
@@ -42,6 +43,11 @@ pub struct CompositeAttribute {
     pub raw_type_name: Option<String>,
     #[allow(dead_code)] // Used in SQL query but not in rendering; kept for potential future use
     pub attndims: i32,
+    /// Explicit collation, schema-qualified. `None` when the attribute uses its
+    /// type's default collation, so plain `text` attributes never carry a
+    /// `COLLATE` clause. System collations (pg_catalog."C", etc.) are stored
+    /// and rendered but add no managed dependency.
+    pub collation: Option<CollationRef>,
     pub comment: Option<String>,
 }
 
@@ -159,6 +165,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                 WHEN attr_t.typelem != 0 THEN elem_t.typtype::text
                 ELSE attr_t.typtype::text
             END AS "attr_type_typtype?",
+            -- Explicit collation, schema-qualified. Compared by OID against the
+            -- attribute type's default collation (pg_type.typcollation), so plain
+            -- text attributes stay NULL and a user collation that happens to be
+            -- named "default" is still detected.
+            colln.nspname AS "collation_schema?",
+            coll.collname AS "collation_name?",
             -- Per-attribute comment (objsubid = attnum). Composite types live in pg_type;
             -- per-attribute comments are recorded against the row type's relfilenode entry in pg_class.
             d.description AS "attr_comment?"
@@ -178,6 +190,12 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
             JOIN pg_extension e ON dep.refobjid = e.oid
             WHERE dep.deptype = 'e'
         ) ext_types ON ext_types.type_oid = COALESCE(NULLIF(attr_t.typelem, 0::oid), attr_t.oid)
+        -- Only a collation that differs from the attribute type's default is meaningful
+        LEFT JOIN pg_collation coll
+          ON coll.oid = a.attcollation
+         AND a.attcollation != 0
+         AND a.attcollation != attr_t.typcollation
+        LEFT JOIN pg_namespace colln ON colln.oid = coll.collnamespace
         -- Per-attribute comment lives on the type's pg_class entry (c.oid) with objsubid = attnum
         LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = a.attnum
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
@@ -220,6 +238,10 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                     type_schema: attr.attr_type_schema,
                     raw_type_name: attr.attr_type_name,
                     attndims: attr.attr_attndims,
+                    collation: match (attr.collation_schema, attr.collation_name) {
+                        (Some(schema), Some(name)) => Some(CollationRef { schema, name }),
+                        _ => None,
+                    },
                     comment: attr.attr_comment,
                 },
                 attr.is_extension_type,
@@ -259,6 +281,15 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
                     *is_extension,
                     extension_name.clone(),
                 );
+
+                // A user-defined collation must exist before the composite type
+                // that uses it; system collations (pg_catalog."C", etc.) are
+                // not managed objects.
+                if let Some(coll) = &attr.collation
+                    && !is_system_schema(&coll.schema)
+                {
+                    builder.add_collation(coll.schema.clone(), coll.name.clone());
+                }
             }
         }
 
@@ -314,6 +345,7 @@ mod tests {
                 type_schema: None,
                 raw_type_name: None,
                 attndims: 0,
+                collation: None,
                 comment: None,
             })
             .collect();
