@@ -746,3 +746,69 @@ async fn test_fetch_view_with_table_composite_type_dependency() {
     })
     .await;
 }
+
+/// A view whose body uses a custom collation (in an ORDER BY COLLATE clause)
+/// must depend on that collation so CREATE COLLATION is ordered first.
+#[tokio::test]
+async fn test_fetch_view_with_collation_dependency() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TABLE people (id SERIAL PRIMARY KEY, name TEXT)")
+            .await;
+        db.execute(
+            "CREATE VIEW sorted_people AS
+             SELECT id, name FROM people ORDER BY name COLLATE case_insensitive",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+        let view = views
+            .iter()
+            .find(|v| v.name == "sorted_people")
+            .expect("sorted_people view should exist");
+
+        assert!(
+            view.depends_on().contains(&DbObjectId::Collation {
+                schema: "public".to_string(),
+                name: "case_insensitive".to_string()
+            }),
+            "view should depend on the collation it references. Deps: {:?}",
+            view.depends_on()
+        );
+    })
+    .await;
+}
+
+/// System collations (pg_catalog's "C", "POSIX", the default) are not managed
+/// objects; a view that only uses them must not grow a collation dependency.
+#[tokio::test]
+async fn test_fetch_view_with_system_collation_has_no_collation_dependency() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE people (id SERIAL PRIMARY KEY, name TEXT)")
+            .await;
+        db.execute(
+            "CREATE VIEW sorted_people AS
+             SELECT id, name FROM people ORDER BY name COLLATE \"C\"",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+        let view = views
+            .iter()
+            .find(|v| v.name == "sorted_people")
+            .expect("sorted_people view should exist");
+
+        assert!(
+            !view
+                .depends_on()
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Collation { .. })),
+            "system collations must not appear as dependencies. Deps: {:?}",
+            view.depends_on()
+        );
+    })
+    .await;
+}

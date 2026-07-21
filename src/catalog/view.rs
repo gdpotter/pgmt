@@ -288,7 +288,11 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
           op_n.nspname                  AS "op_schema?",
           CASE WHEN op.oprleft = 0 THEN NULL ELSE format_type(op.oprleft, NULL) END AS "op_left_type?",
           CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS "op_right_type?",
-          ext_ops.extname AS "op_extension_name?"
+          ext_ops.extname AS "op_extension_name?",
+
+          -- Collation reference (COLLATE clauses in the view body)
+          coll.collname                 AS "coll_name?",
+          coll_n.nspname                AS "coll_schema?"
 
         FROM pg_rewrite r
         JOIN pg_depend d
@@ -363,6 +367,14 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
             JOIN pg_extension e ON dep.refobjid = e.oid
             WHERE dep.deptype = 'e'
         ) ext_ops ON ext_ops.op_oid = op.oid
+
+        -- Collation reference (COLLATE clauses in the view body)
+        LEFT JOIN pg_collation coll
+          ON d.refclassid = 'pg_collation'::regclass::oid
+         AND d.refobjid   = coll.oid
+
+        LEFT JOIN pg_namespace coll_n
+          ON coll.collnamespace = coll_n.oid
 
         WHERE r.ev_class = ANY($1)
         "#,
@@ -451,6 +463,19 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<View>> {
                         arguments,
                     });
                 }
+                continue;
+            }
+
+            // Collation used in a COLLATE clause in the view body? System
+            // collations (pg_catalog's "default", "C", "POSIX", …) are not
+            // managed objects and are skipped.
+            if let (Some(name), Some(ns)) = (&d.coll_name, &d.coll_schema)
+                && !is_system_schema(ns)
+            {
+                v.push(DbObjectId::Collation {
+                    schema: ns.to_string(),
+                    name: name.to_string(),
+                });
             }
         }
     }
