@@ -180,7 +180,7 @@ pub async fn prompt_shadow_mode_with_explanation(
     let existing_url = existing.and_then(|s| s.url.as_ref());
 
     if !docker_available {
-        println!("   ⚠️  Docker not available - manual mode required");
+        println!("   ⚠️  No container runtime available - manual mode required");
         tracing::debug!("Docker availability details: {}", debug_info);
 
         let mut url_input = Input::new().with_prompt("   Shadow database URL");
@@ -197,7 +197,7 @@ pub async fn prompt_shadow_mode_with_explanation(
             nonstandard_extensions.join(", ")
         );
         println!("      You'll likely need a shadow image that includes them.");
-        println!("      See https://docs.pgmt.dev/docs/reference/configuration");
+        println!("      See https://pgmt.dev/docs/reference/configuration");
     }
 
     let choices = vec![

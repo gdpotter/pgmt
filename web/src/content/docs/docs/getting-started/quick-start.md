@@ -12,8 +12,11 @@ curl -fsSL https://pgmt.dev/install.sh | sh
 ```
 
 Other methods (npm, cargo) and prerequisites are on the
-[installation page](/docs/getting-started/installation). You'll need Docker
-running — pgmt uses it for the shadow database.
+[installation page](/docs/getting-started/installation). You'll need a
+container runtime running — Docker, or anything Docker-API-compatible like
+Podman — which pgmt uses to spin up its
+[shadow database](/docs/concepts/shadow-database). This is separate from
+wherever your dev database runs.
 
 ## Setup Database
 

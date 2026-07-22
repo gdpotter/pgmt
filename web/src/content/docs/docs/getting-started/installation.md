@@ -34,11 +34,14 @@ goes](https://github.com/gdpotter/pgmt/issues).
 ## Prerequisites
 
 - **PostgreSQL 13+** — a development database you can connect to.
-- **Docker** — pgmt validates every change against a disposable
-  [shadow database](/docs/concepts/shadow-database) it runs in Docker. If you
-  can't run Docker, point `databases.shadow.url` at a dedicated empty database
-  instead — pgmt resets it on every run, so never use a database with data you
-  care about.
+- **A container runtime** — pgmt validates every change against a disposable
+  [shadow database](/docs/concepts/shadow-database) it runs in a container.
+  Docker works out of the box; Podman and other Docker-API-compatible runtimes
+  work too (see [runtime
+  requirements](/docs/concepts/shadow-database#container-runtime-requirements)).
+  If you can't run containers at all, point `databases.shadow.url` at a
+  dedicated empty database instead — pgmt resets it on every run, so never use
+  a database with data you care about.
 
 ## Upgrading
 

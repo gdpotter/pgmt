@@ -125,7 +125,7 @@ impl DockerManager {
     pub async fn is_available_verbose() -> (bool, String) {
         match Self::try_connect_verbose().await {
             Ok((_, debug_info)) => (true, debug_info),
-            Err(e) => (false, format!("Docker not available: {}", e)),
+            Err(e) => (false, e.to_string()),
         }
     }
 
@@ -139,7 +139,7 @@ impl DockerManager {
                 Ok(docker_manager) => {
                     if attempt > 0 {
                         println!(
-                            "✅ Connected to Docker (after {} retry{})",
+                            "✅ Connected to container runtime (after {} retry{})",
                             attempt,
                             if attempt == 1 { "" } else { "ies" }
                         );
@@ -149,7 +149,7 @@ impl DockerManager {
                 Err(_e) => {
                     if attempt < MAX_RETRIES {
                         if attempt == 0 {
-                            println!("🔄 Docker not ready, retrying...");
+                            println!("🔄 Container runtime not ready, retrying...");
                         }
                         tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                     }
@@ -161,7 +161,19 @@ impl DockerManager {
         let (_, debug_info) = Self::is_available_verbose().await;
 
         Err(anyhow!(
-            "Failed to connect to Docker after {} attempts.\n\n{}\n💡 Troubleshooting:\n   • Make sure Docker is running\n   • On macOS: Try 'export DOCKER_HOST=unix:///Users/$USER/.docker/run/docker.sock'\n   • Check Docker Desktop settings",
+            "Could not connect to a container runtime after {} attempts.\n\n\
+             {}\n\
+             pgmt uses a temporary container for the shadow database — an ephemeral\n\
+             PostgreSQL instance where your schema files are built and inspected.\n\
+             This is separate from your dev database, which pgmt connects to directly.\n\n\
+             💡 To fix:\n\
+                • Docker: make sure the daemon is running\n\
+                • Podman: enable the Docker-compatible API socket:\n\
+                  systemctl --user enable --now podman.socket\n\
+                • Other runtimes: point DOCKER_HOST at a Docker-compatible socket\n\
+                • No container runtime available? Set shadow.url in pgmt.yaml to use\n\
+                  a dedicated database server instead:\n\
+                  https://pgmt.dev/docs/concepts/shadow-database",
             MAX_RETRIES + 1,
             debug_info
         ))
@@ -198,7 +210,7 @@ impl DockerManager {
     /// Single attempt to connect to Docker with verbose debug information
     async fn try_connect_verbose() -> Result<(Self, String)> {
         let mut debug_info = String::new();
-        debug_info.push_str("Docker socket detection:\n");
+        debug_info.push_str("Container runtime socket detection:\n");
 
         // Try multiple socket locations in priority order
         let socket_candidates = Self::get_docker_socket_candidates();
@@ -234,7 +246,7 @@ impl DockerManager {
         }
 
         Err(anyhow!(
-            "Failed to connect to Docker daemon after trying all methods:\n{}",
+            "No container runtime found. Sockets tried:\n{}",
             debug_info
         ))
     }
@@ -269,6 +281,19 @@ impl DockerManager {
         candidates.push((
             "Standard Linux location".to_string(),
             "unix:///var/run/docker.sock".to_string(),
+        ));
+
+        // 4. Podman's Docker-compatible API socket (after the Docker socket,
+        //    so Docker wins when both runtimes are present)
+        if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+            candidates.push((
+                "Podman (rootless)".to_string(),
+                format!("unix://{}/podman/podman.sock", runtime_dir),
+            ));
+        }
+        candidates.push((
+            "Podman (rootful)".to_string(),
+            "unix:///run/podman/podman.sock".to_string(),
         ));
 
         candidates
@@ -1276,9 +1301,24 @@ mod tests {
             "Should have at least one socket candidate"
         );
 
-        // Last candidate should always be the standard Linux location
-        let last_candidate = candidates.last().unwrap();
-        assert_eq!(last_candidate.1, "unix:///var/run/docker.sock");
+        // The standard Docker socket must come before the Podman sockets, so
+        // Docker wins when both runtimes are present.
+        let docker_pos = candidates
+            .iter()
+            .position(|(_, path)| path == "unix:///var/run/docker.sock")
+            .expect("standard Docker socket should be a candidate");
+        let podman_pos = candidates
+            .iter()
+            .position(|(_, path)| path == "unix:///run/podman/podman.sock")
+            .expect("rootful Podman socket should be a candidate");
+        assert!(docker_pos < podman_pos);
+
+        // Rootless Podman socket follows XDG_RUNTIME_DIR when set.
+        if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+            assert!(candidates
+                .iter()
+                .any(|(_, path)| *path == format!("unix://{}/podman/podman.sock", runtime_dir)));
+        }
 
         // On macOS, should include Docker Desktop, Colima, and OrbStack
         #[cfg(target_os = "macos")]
@@ -1307,7 +1347,7 @@ mod tests {
         let (_is_available, debug_info) = DockerManager::is_available_verbose().await;
 
         // Debug info should contain socket detection information
-        assert!(debug_info.contains("Docker socket detection"));
+        assert!(debug_info.contains("Container runtime socket detection"));
 
         // Should show attempts for different socket types
         assert!(debug_info.contains("•"));

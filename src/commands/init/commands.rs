@@ -830,7 +830,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
         }
     }
 
-    println!("  📚 Visit https://docs.pgmt.dev for more information");
+    println!("  📚 Visit https://pgmt.dev for more information");
 }
 
 /// Validate generated schema files by applying them to a shadow database

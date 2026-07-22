@@ -95,7 +95,7 @@ pub async fn gather_init_options_with_args(
             println!(
                 "   The auto shadow database will likely fail; set databases.shadow.docker.image in pgmt.yaml."
             );
-            println!("   See https://docs.pgmt.dev/docs/reference/configuration");
+            println!("   See https://pgmt.dev/docs/reference/configuration");
         }
         crate::prompts::ShadowDatabaseInput::Auto
     } else {
