@@ -260,7 +260,12 @@ async fn provision_inner(
         if let Some(named) = selection.named() {
             runtime.record_adopted(named).await?;
         }
-        return apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await;
+        let applied_any =
+            apply_pending_migrations(pool, config, &migrations, &selection, &mut runtime).await?;
+        if !applied_any {
+            println!("Nothing to apply — up to date.");
+        }
+        return Ok(());
     }
 
     match latest_baseline {
@@ -289,6 +294,16 @@ async fn provision_inner(
             }
 
             println!("Applying baseline {}...", baseline.version);
+            // Parity with apply's per-module skip line: a subset provision drops
+            // the baseline sections of modules it wasn't asked for. Name them so
+            // the run isn't silent about what it left out — those modules are
+            // genuinely not established on this fresh target.
+            report_unselected_baseline_modules(
+                &baseline_sql,
+                &baseline.path,
+                &selection,
+                baseline.version,
+            )?;
             register_and_apply_baseline(
                 pool,
                 config,
@@ -337,6 +352,34 @@ async fn provision_inner(
         }
     }
 
+    Ok(())
+}
+
+/// Announce the baseline sections a subset provision is skipping, one line per
+/// module, in the same shape as `apply`'s "not established here" notice. Only
+/// module sections the selection excludes are reported; the unmoduled base
+/// always provisions and is never named.
+fn report_unselected_baseline_modules(
+    baseline_sql: &str,
+    baseline_path: &Path,
+    selection: &ModuleSelection,
+    version: u64,
+) -> Result<()> {
+    let sections = crate::migration::parse_migration_sections(baseline_path, baseline_sql)?;
+    let mut skipped: BTreeSet<String> = BTreeSet::new();
+    for section in &sections {
+        if let Some(module) = section.module.as_deref()
+            && !selection.selects(Some(module))
+        {
+            skipped.insert(module.to_string());
+        }
+    }
+    for module in skipped {
+        println!(
+            "Skipping module '{}' sections in baseline {} (not established here)",
+            module, version
+        );
+    }
     Ok(())
 }
 

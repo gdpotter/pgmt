@@ -17,7 +17,11 @@
 use crate::config::types::TrackingTable;
 use crate::migration_tracking::format_tracking_table_name;
 use anyhow::{Context, Result};
-use sqlx::{Connection, PgConnection};
+use sqlx::postgres::PgConnectOptions;
+use sqlx::{ConnectOptions, Connection, PgConnection};
+use std::str::FromStr;
+use std::time::Duration;
+use tracing::log::LevelFilter;
 
 /// Derive the advisory-lock key for a tracking table.
 ///
@@ -67,7 +71,15 @@ impl MigrationLock {
     pub async fn acquire(url: &str, tracking_table: &TrackingTable) -> Result<Self> {
         let key = advisory_lock_key(tracking_table)?;
 
-        let mut conn = PgConnection::connect(url)
+        // Blocking on `pg_advisory_lock` is the whole point of this connection,
+        // so exempt it from sqlx's slow-statement instrumentation — otherwise a
+        // normal lock wait surfaces a WARN ("slow statement ... pg_advisory_lock")
+        // that interleaves with the reporter's clean output. Genuinely slow user
+        // DDL still warns: that runs on the pooled connections, not this one.
+        let mut conn = PgConnectOptions::from_str(url)
+            .context("Invalid database URL for the migration advisory lock")?
+            .log_slow_statements(LevelFilter::Off, Duration::from_secs(0))
+            .connect()
             .await
             .context("Failed to open dedicated connection for the migration advisory lock")?;
 

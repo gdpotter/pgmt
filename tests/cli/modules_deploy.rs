@@ -41,6 +41,11 @@ async fn test_subset_provision_and_late_adoption() -> Result<()> {
             .success()
             .stdout(predicate::str::contains(
                 "Including module 'core' (required by 'billing')",
+            ))
+            // Parity with apply: the unselected module's baseline sections are
+            // announced, not silently dropped.
+            .stdout(predicate::str::contains(
+                "Skipping module 'analytics' sections in baseline",
             ));
 
         assert!(helper.table_exists_in_dev("public", "users").await?);

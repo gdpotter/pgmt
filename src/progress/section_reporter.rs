@@ -19,19 +19,24 @@ impl SectionReporter {
     pub fn start_section(&mut self, name: &str, _description: Option<&str>) {
         self.current_section += 1;
 
-        // Only print section header if there are multiple sections
-        if self.total_sections > 1 {
-            println!(
-                "  Section {}/{}: {}",
-                self.current_section, self.total_sections, name
-            );
-        }
+        // Every executed section announces itself. The start line is marked
+        // with an arrow and a trailing ellipsis so it reads distinctly from the
+        // check-marked completion line that follows.
+        println!(
+            "  {} Section {}/{}: {} ...",
+            style("→").cyan(),
+            self.current_section,
+            self.total_sections,
+            name
+        );
     }
 
     pub fn skip_section(&self, name: &str) {
-        if self.total_sections > 1 {
-            println!("  Section '{}' already completed (skipping)", name);
-        }
+        println!(
+            "  {} Section '{}' already completed (skipping)",
+            style("•").dim(),
+            name
+        );
     }
 
     pub fn attempt(&self, current: u32, total: u32) {
@@ -58,13 +63,15 @@ impl SectionReporter {
         let duration_str = format_duration(duration);
         let rows_str = rows.map(|r| format!(", {} rows", r)).unwrap_or_default();
 
-        // Only print section completion if there are multiple sections
-        if self.total_sections > 1 {
-            println!(
-                "  Section {}/{}: {} ({}{})",
-                self.current_section, self.total_sections, name, duration_str, rows_str
-            );
-        }
+        println!(
+            "  {} Section {}/{}: {} ({}{})",
+            style("✓").green(),
+            self.current_section,
+            self.total_sections,
+            name,
+            duration_str,
+            rows_str
+        );
     }
 
     pub fn complete_section_with_retry(
@@ -83,18 +90,16 @@ impl SectionReporter {
             String::new()
         };
 
-        // Only print section completion if there are multiple sections
-        if self.total_sections > 1 {
-            println!(
-                "  Section {}/{}: {} ({}{}{})",
-                self.current_section,
-                self.total_sections,
-                name,
-                duration_str,
-                rows_str,
-                attempts_str
-            );
-        }
+        println!(
+            "  {} Section {}/{}: {} ({}{}{})",
+            style("✓").green(),
+            self.current_section,
+            self.total_sections,
+            name,
+            duration_str,
+            rows_str,
+            attempts_str
+        );
     }
 
     pub fn fail_section(&self, _name: &str, error: &anyhow::Error) {

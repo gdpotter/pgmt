@@ -208,7 +208,12 @@ async fn apply_with_module_guard(
         runtime.record_adopted(named).await?;
     }
 
-    apply_pending_migrations(pool, config, migrations, selection, &mut runtime).await
+    let applied_any =
+        apply_pending_migrations(pool, config, migrations, selection, &mut runtime).await?;
+    if !applied_any {
+        println!("Nothing to apply — up to date.");
+    }
+    Ok(())
 }
 
 /// Apply migration files to a database, skipping any already recorded in the
@@ -233,14 +238,19 @@ async fn apply_with_module_guard(
 /// fully-up-to-date target). A wholeness failure at V errors out here, which
 /// is the strong membrane: nothing at or beyond V — base sections included —
 /// executes.
+///
+/// Returns `true` if at least one migration actually ran or resumed here, so
+/// the caller can emit a "nothing to apply" closing line when the target was
+/// already up to date.
 pub(crate) async fn apply_pending_migrations(
     pool: &PgPool,
     config: &Config,
     migrations: &[ParsedMigration],
     selection: &ModuleSelection,
     runtime: &mut ModuleRuntime,
-) -> Result<()> {
+) -> Result<bool> {
     let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
+    let mut applied_any = false;
 
     // All tracking rows: version + checksum + is_baseline.
     let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
@@ -524,8 +534,9 @@ pub(crate) async fn apply_pending_migrations(
                 .iter()
                 .filter(|(_, s)| statuses.get(&s.name).is_some_and(|st| st.is_covered()))
                 .count();
+            applied_any = true;
             println!(
-                "\nResuming migration {} - {} ({}/{} sections already complete)",
+                "\nResuming migration {} - {} ({}/{} selected sections already complete)",
                 migration.version,
                 migration.description,
                 done,
@@ -578,6 +589,7 @@ pub(crate) async fn apply_pending_migrations(
                 commit_pending!();
                 continue;
             }
+            applied_any = true;
             println!(
                 "\nApplying migration {} - {}",
                 migration.version, migration.description
@@ -665,5 +677,5 @@ pub(crate) async fn apply_pending_migrations(
     // pending migrations.
     runtime.cross_re_anchors_through(None).await?;
 
-    Ok(())
+    Ok(applied_any)
 }

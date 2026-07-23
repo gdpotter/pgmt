@@ -171,13 +171,15 @@ CREATE TABLE posts (id SERIAL, title TEXT);
                 .assert()
                 .success();
 
-            // Apply migrations to dev database
+            // Apply migrations to dev database. Even a single-section migration
+            // prints its section line now (no multi-section gating).
             helper
                 .command()
                 .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
                 .assert()
                 .success()
                 .stdout(predicate::str::contains("Applying migration"))
+                .stdout(predicate::str::contains("Section 1/1:"))
                 .stdout(predicate::str::contains("Completed in"));
 
             // Verify tables exist in dev database
@@ -190,6 +192,14 @@ CREATE TABLE posts (id SERIAL, title TEXT);
                     .table_exists_in_dev("public", "pgmt_migrations")
                     .await?
             );
+
+            // Re-applying an up-to-date target runs nothing and says so.
+            helper
+                .command()
+                .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Nothing to apply — up to date."));
 
             Ok(())
         })
