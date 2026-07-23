@@ -49,14 +49,11 @@ pub async fn create_branch(admin: &PgPool, source_db: &str) -> Result<String> {
     let branch = new_branch_name();
     let create_start = std::time::Instant::now();
     admin
-        .execute(
-            format!(
-                "CREATE DATABASE {} TEMPLATE {}",
-                quote_ident(&branch),
-                quote_ident(source_db)
-            )
-            .as_str(),
-        )
+        .execute(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE {} TEMPLATE {}",
+            quote_ident(&branch),
+            quote_ident(source_db)
+        )))
         .await
         .map_err(|e| {
             anyhow!(
@@ -135,13 +132,10 @@ pub async fn drop_branch(pool: PgPool) -> Result<()> {
 
     let admin = admin_pool(options.database(admin_db_name(&database))).await?;
     let result = admin
-        .execute(
-            format!(
-                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                quote_ident(&database)
-            )
-            .as_str(),
-        )
+        .execute(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(&database)
+        )))
         .await;
     admin.close().await;
     result.map_err(|e| anyhow!("Failed to drop shadow branch {}: {}", database, e))?;
@@ -201,13 +195,10 @@ pub async fn cleanup_all_branches() -> Result<()> {
         match admin_pool(admin_options).await {
             Ok(admin) => {
                 if let Err(e) = admin
-                    .execute(
-                        format!(
-                            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                            quote_ident(&branch)
-                        )
-                        .as_str(),
-                    )
+                    .execute(sqlx::AssertSqlSafe(format!(
+                        "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                        quote_ident(&branch)
+                    )))
                     .await
                 {
                     warn!("Failed to drop shadow branch {}: {}", branch, e);

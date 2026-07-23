@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "table_schema",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "table_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "column_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "sequence_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "sequence_schema",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       }
     ],
     "parameters": {

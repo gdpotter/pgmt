@@ -33,13 +33,16 @@ pub async fn apply_roles_file(pool: &PgPool, roles_file: &Path) -> Result<()> {
     // This allows for complex scripts with CREATE ROLE, DO blocks, etc.
     debug!("Executing roles file: {}", truncate_for_log(&content));
 
-    sqlx::raw_sql(&content).execute(pool).await.map_err(|e| {
-        let ctx = SqlErrorContext::from_sqlx_error(&e, &content);
-        anyhow::anyhow!(
-            "{}",
-            ctx.format(&roles_file.display().to_string(), &content)
-        )
-    })?;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(content.clone()))
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            let ctx = SqlErrorContext::from_sqlx_error(&e, &content);
+            anyhow::anyhow!(
+                "{}",
+                ctx.format(&roles_file.display().to_string(), &content)
+            )
+        })?;
 
     info!("Roles applied successfully");
     Ok(())

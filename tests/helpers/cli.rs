@@ -38,14 +38,20 @@ impl CliTestHelper {
             .await
             .expect("Failed to connect to postgres");
 
-        sqlx::query(&format!("CREATE DATABASE \"{}\"", dev_db_name))
-            .execute(&base_pool)
-            .await
-            .expect("Failed to create dev database");
-        sqlx::query(&format!("CREATE DATABASE \"{}\"", shadow_db_name))
-            .execute(&base_pool)
-            .await
-            .expect("Failed to create shadow database");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{}\"",
+            dev_db_name
+        )))
+        .execute(&base_pool)
+        .await
+        .expect("Failed to create dev database");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{}\"",
+            shadow_db_name
+        )))
+        .execute(&base_pool)
+        .await
+        .expect("Failed to create shadow database");
 
         base_pool.close().await;
 
@@ -80,16 +86,16 @@ impl CliTestHelper {
         // Best-effort cleanup with timeout
         let cleanup_future = async move {
             if let Ok(pool) = sqlx::PgPool::connect(&base_url).await {
-                let _ = sqlx::query(&format!(
+                let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
                     "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
                     dev_db_name
-                ))
+                )))
                 .execute(&pool)
                 .await;
-                let _ = sqlx::query(&format!(
+                let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
                     "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
                     shadow_db_name
-                ))
+                )))
                 .execute(&pool)
                 .await;
                 pool.close().await;
@@ -270,7 +276,7 @@ docker:
     pub async fn create_extra_database(&self) -> Result<String> {
         let name = format!("test_target_{}", Uuid::new_v4().simple());
         let base_pool = sqlx::PgPool::connect(&self.pg_instance.base_url).await?;
-        sqlx::query(&format!("CREATE DATABASE \"{}\"", name))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{}\"", name)))
             .execute(&base_pool)
             .await?;
         base_pool.close().await;

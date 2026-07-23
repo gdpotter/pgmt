@@ -53,7 +53,10 @@ pub async fn execute_sql_content(
     if config.initialize_session {
         initialize_database_session(pool).await?;
     }
-    match sqlx::raw_sql(content).execute(pool).await {
+    match sqlx::raw_sql(sqlx::AssertSqlSafe(content.to_string()))
+        .execute(pool)
+        .await
+    {
         Ok(result) => {
             if config.verbose {
                 println!(

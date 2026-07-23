@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extname"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "schema",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "version",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extversion"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "relocatable",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extrelocatable"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "comment?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
       }
     ],
     "parameters": {

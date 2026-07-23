@@ -6,102 +6,172 @@
       {
         "ordinal": 0,
         "name": "schema",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "func_oid!",
-        "type_info": "Oid"
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "kind!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "return_type",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "arguments!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "definition!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "language",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_language",
+            "name": "lanname"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "volatility!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "is_strict",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proisstrict"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "security_definer",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "prosecdef"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "returns_set",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proretset"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "num_args",
-        "type_info": "Int2"
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronargs"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "return_type_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 14,
         "name": "return_type_schema?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 15,
         "name": "return_type_typtype?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 16,
         "name": "return_type_relkind?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 17,
         "name": "comment?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
       },
       {
         "ordinal": 18,
         "name": "is_return_type_extension!: bool",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": "Expression"
       },
       {
         "ordinal": 19,
         "name": "return_type_extension_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extname"
+          }
+        }
       }
     ],
     "parameters": {

@@ -1142,14 +1142,11 @@ async fn mark_source_pristine(info: &ContainerInfo) -> Result<()> {
     use sqlx::Executor;
     let admin = admin_pool(info).await?;
     let result = admin
-        .execute(
-            format!(
-                "COMMENT ON DATABASE {} IS '{}'",
-                crate::render::quote_ident(&info.database),
-                PRISTINE_MARKER
-            )
-            .as_str(),
-        )
+        .execute(sqlx::AssertSqlSafe(format!(
+            "COMMENT ON DATABASE {} IS '{}'",
+            crate::render::quote_ident(&info.database),
+            PRISTINE_MARKER
+        )))
         .await;
     admin.close().await;
     result.map_err(|e| anyhow!("Failed to mark shadow source as pristine: {}", e))?;

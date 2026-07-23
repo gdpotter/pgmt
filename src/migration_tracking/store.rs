@@ -120,7 +120,7 @@ impl TrackingStore {
     /// against a populated database.
     pub async fn target_is_established(&self) -> Result<bool> {
         let covered = |alias: &str| Self::covered_predicate(alias);
-        let established: bool = sqlx::query_scalar(&format!(
+        let established: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT EXISTS(SELECT 1 FROM {sections} WHERE {cov} AND NOT is_baseline)
                  OR EXISTS(SELECT 1 FROM {sections} s1
                      WHERE s1.is_baseline AND {cov_s1}
@@ -132,7 +132,7 @@ impl TrackingStore {
             cov = covered("status"),
             cov_s1 = covered("s1.status"),
             cov_s2 = covered("s2.status"),
-        ))
+        )))
         .fetch_one(&self.pool)
         .await?;
         Ok(established)
@@ -144,11 +144,13 @@ impl TrackingStore {
     /// crashed first provision leaves a baseline row here yet establishes
     /// nothing. Used by the apply first-contact guard.
     pub async fn main_table_is_empty(&self) -> Result<bool> {
-        let has_row: bool =
-            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {})", self.main))
-                .fetch_one(&self.pool)
-                .await
-                .context("Failed to check whether the tracking table is empty")?;
+        let has_row: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS(SELECT 1 FROM {})",
+            self.main
+        )))
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to check whether the tracking table is empty")?;
         Ok(!has_row)
     }
 
@@ -156,10 +158,10 @@ impl TrackingStore {
     /// The fallback immutability guard for legacy baseline rows with no
     /// per-section checksums.
     pub async fn baseline_stored_checksum(&self, version: u64) -> Result<Option<String>> {
-        let checksum: Option<String> = sqlx::query_scalar(&format!(
+        let checksum: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT checksum FROM {} WHERE version = $1 AND is_baseline = TRUE",
             self.main
-        ))
+        )))
         .bind(version_to_db(version)?)
         .fetch_optional(&self.pool)
         .await?;
@@ -182,7 +184,7 @@ impl TrackingStore {
     /// Used as the coverage floor adoption consults to decide whether the
     /// established modules are caught up.
     pub async fn applied_baseline_watermark(&self) -> Result<Option<u64>> {
-        let watermark: Option<i64> = sqlx::query_scalar(&format!(
+        let watermark: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT MAX(m.version) FROM {main} m
              WHERE m.is_baseline
                AND EXISTS (
@@ -195,7 +197,7 @@ impl TrackingStore {
             main = self.main,
             sections = self.sections,
             cov = Self::covered_predicate("s.status"),
-        ))
+        )))
         .fetch_one(&self.pool)
         .await?;
         Ok(watermark.map(version_from_db))
@@ -211,11 +213,11 @@ impl TrackingStore {
     /// crossing they legitimately diverge from the subscription. Never feed
     /// this into enforcement decisions.
     pub async fn established_module_literals(&self) -> Result<std::collections::BTreeSet<String>> {
-        let modules: Vec<String> = sqlx::query_scalar(&format!(
+        let modules: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT DISTINCT module FROM {} WHERE {} AND module IS NOT NULL",
             self.sections,
             Self::covered_predicate("status"),
-        ))
+        )))
         .fetch_all(&self.pool)
         .await?;
         Ok(modules.into_iter().collect())
@@ -228,12 +230,12 @@ impl TrackingStore {
         &self,
         version: u64,
     ) -> Result<std::collections::BTreeSet<String>> {
-        let names: Vec<String> = sqlx::query_scalar(&format!(
+        let names: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT section_name FROM {sections}
              WHERE is_baseline AND migration_version = $1 AND {cov}",
             sections = self.sections,
             cov = Self::covered_predicate("status"),
-        ))
+        )))
         .bind(version_to_db(version)?)
         .fetch_all(&self.pool)
         .await?;
@@ -245,11 +247,11 @@ impl TrackingStore {
     pub async fn completed_migration_sections(
         &self,
     ) -> Result<std::collections::BTreeSet<(u64, String)>> {
-        let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+        let rows: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT migration_version, section_name FROM {} \
              WHERE NOT is_baseline AND status = 'completed'",
             self.sections,
-        ))
+        )))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(v, n)| (v as u64, n)).collect())
@@ -265,7 +267,7 @@ impl TrackingStore {
     /// target holds). Status renders it as consumed, not applied, so a
     /// zero-trace re-tag crossing doesn't masquerade as provisioned content.
     pub async fn migration_listing(&self) -> Result<Vec<(i64, String, String, i64, bool, bool)>> {
-        let rows = sqlx::query_as(&format!(
+        let rows = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT m.version, m.description, m.applied_at::TEXT,
                     COUNT(s.section_name) FILTER (WHERE NOT ({cov})) AS incomplete,
                     m.is_baseline,
@@ -278,7 +280,7 @@ impl TrackingStore {
             main = self.main,
             sections = self.sections,
             cov = Self::covered_predicate("s.status"),
-        ))
+        )))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -292,10 +294,10 @@ impl TrackingStore {
     pub async fn migration_listing_legacy(
         &self,
     ) -> Result<Vec<(i64, String, String, i64, bool, bool)>> {
-        let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(&format!(
+        let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT version, description, applied_at::TEXT, is_baseline FROM {} ORDER BY version",
             self.main
-        ))
+        )))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -310,9 +312,8 @@ impl TrackingStore {
     pub async fn section_module_statuses(
         &self,
     ) -> Result<Vec<(Option<String>, bool, SectionStatus)>> {
-        let rows: Vec<(Option<String>, bool, String)> = sqlx::query_as(&format!(
-            "SELECT module, is_baseline, status FROM {}",
-            self.sections
+        let rows: Vec<(Option<String>, bool, String)> = sqlx::query_as(sqlx::AssertSqlSafe(
+            format!("SELECT module, is_baseline, status FROM {}", self.sections),
         ))
         .fetch_all(&self.pool)
         .await?;
@@ -327,14 +328,15 @@ impl TrackingStore {
     /// otherwise incomplete provision, resolved to `(version, section_name,
     /// module)` so the caller can scope its response by module.
     pub async fn incomplete_baseline_sections(&self) -> Result<Vec<(u64, String, Option<String>)>> {
-        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(&format!(
-            "SELECT migration_version, section_name, module FROM {} \
+        let rows: Vec<(i64, String, Option<String>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT migration_version, section_name, module FROM {} \
              WHERE is_baseline AND NOT ({})",
-            self.sections,
-            Self::covered_predicate("status"),
-        ))
-        .fetch_all(&self.pool)
-        .await?;
+                self.sections,
+                Self::covered_predicate("status"),
+            )))
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows
             .into_iter()
             .map(|(v, name, module)| (v as u64, name, module))
@@ -362,7 +364,7 @@ impl TrackingStore {
     /// fresh-minimal one; no legacy heuristic). The base is never listed — it
     /// is established on every target.
     pub async fn ensure_subscription_tables(&self) -> Result<()> {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"CREATE TABLE IF NOT EXISTS {modules} (
                 module TEXT PRIMARY KEY,
                 adopted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -370,7 +372,7 @@ impl TrackingStore {
                 source TEXT NOT NULL
             )"#,
             modules = self.modules
-        ))
+        )))
         .execute(&self.pool)
         .await
         .with_context(|| format!("Failed to create subscription table {}", self.modules))?;
@@ -387,10 +389,10 @@ impl TrackingStore {
     /// not stored, so provision seeding it is just another baseline row, not a
     /// special rule.
     pub async fn consumed_through_cursor(&self) -> Result<Option<u64>> {
-        let cursor: Option<i64> = sqlx::query_scalar(&format!(
+        let cursor: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT MAX(version) FROM {} WHERE is_baseline = TRUE",
             self.main
-        ))
+        )))
         .fetch_one(&self.pool)
         .await
         .context("Failed to read the consumed-through cursor")?;
@@ -417,14 +419,14 @@ impl TrackingStore {
         // The upsert returns the row's resulting checksum: our own on a fresh
         // insert, the pre-existing one on conflict (the self-assignment leaves
         // it untouched but still returns the row).
-        let stored: String = sqlx::query_scalar(&format!(
+        let stored: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {main} (version, description, checksum, is_baseline)
              VALUES ($1, 'baseline', $2, TRUE)
              ON CONFLICT (version, is_baseline)
              DO UPDATE SET checksum = {main}.checksum
              RETURNING checksum",
             main = self.main
-        ))
+        )))
         .bind(version_to_db(version)?)
         .bind(checksum)
         .fetch_one(executor)
@@ -488,11 +490,13 @@ impl TrackingStore {
     /// first. The consumed-through cursor is not part of this — it is derived
     /// via [`Self::consumed_through_cursor`].
     pub async fn load_subscription(&self) -> Result<Subscription> {
-        let modules: Vec<String> =
-            sqlx::query_scalar(&format!("SELECT module FROM {}", self.modules))
-                .fetch_all(&self.pool)
-                .await
-                .context("Failed to read the module subscription")?;
+        let modules: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT module FROM {}",
+            self.modules
+        )))
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to read the module subscription")?;
 
         Ok(Subscription {
             modules: modules.into_iter().collect(),
@@ -508,11 +512,11 @@ impl TrackingStore {
         module: &str,
         source: &SubscriptionSource,
     ) -> Result<()> {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {} (module, source) VALUES ($1, $2)
              ON CONFLICT (module) DO NOTHING",
             self.modules
-        ))
+        )))
         .bind(module)
         .bind(source.as_db_string())
         .execute(executor)
@@ -527,11 +531,14 @@ impl TrackingStore {
         executor: impl sqlx::PgExecutor<'e>,
         module: &str,
     ) -> Result<()> {
-        sqlx::query(&format!("DELETE FROM {} WHERE module = $1", self.modules))
-            .bind(module)
-            .execute(executor)
-            .await
-            .with_context(|| format!("Failed to unsubscribe module '{module}'"))?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM {} WHERE module = $1",
+            self.modules
+        )))
+        .bind(module)
+        .execute(executor)
+        .await
+        .with_context(|| format!("Failed to unsubscribe module '{module}'"))?;
         Ok(())
     }
 }

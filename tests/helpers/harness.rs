@@ -38,7 +38,7 @@ impl TestDatabase {
     pub async fn execute(&self, sql: &str) {
         use sqlx::Executor;
         self.pool
-            .execute(sql)
+            .execute(sqlx::AssertSqlSafe(sql.to_string()))
             .await
             .unwrap_or_else(|e| panic!("Failed to execute SQL: {}\nError: {}", sql, e));
     }
@@ -56,7 +56,9 @@ impl TestDatabase {
         let cleanup_future = async move {
             if let Ok(pool) = PgPool::connect(&base_url).await {
                 let drop_sql = format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)", db_name);
-                let _ = sqlx::query(&drop_sql).execute(&pool).await;
+                let _ = sqlx::query(sqlx::AssertSqlSafe(drop_sql))
+                    .execute(&pool)
+                    .await;
                 pool.close().await;
             }
         };
@@ -144,10 +146,13 @@ impl PgTestInstance {
             .expect("Failed to connect to PostgreSQL for database creation");
 
         // Create new database
-        sqlx::query(&format!("CREATE DATABASE \"{}\"", db_name))
-            .execute(&base_pool)
-            .await
-            .expect("Failed to create test database");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{}\"",
+            db_name
+        )))
+        .execute(&base_pool)
+        .await
+        .expect("Failed to create test database");
 
         base_pool.close().await;
 

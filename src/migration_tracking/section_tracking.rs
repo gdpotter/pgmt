@@ -99,7 +99,7 @@ pub async fn ensure_section_tracking_table(
         // Introducing path: CREATE TABLE + backfill, atomic. CREATE TABLE is
         // transactional in Postgres, so either both land or neither does.
         let mut tx = pool.begin().await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
             CREATE TABLE IF NOT EXISTS {} (
                 migration_version BIGINT NOT NULL,
@@ -122,7 +122,7 @@ pub async fn ensure_section_tracking_table(
             )
             "#,
             sections_table
-        ))
+        )))
         .execute(&mut *tx)
         .await
         .context("Failed to create section tracking table")?;
@@ -148,11 +148,11 @@ pub async fn ensure_section_tracking_table(
         .await?;
 
     // Create index for querying by status
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE INDEX IF NOT EXISTS idx_{}_status ON {}(migration_version, status)",
         sections_table.replace("\"", "").replace(".", "_"),
         sections_table
-    ))
+    )))
     .execute(pool)
     .await
     .context("Failed to create section tracking table index")?;
@@ -181,22 +181,22 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
     // so the column is never observed half-migrated.
     if !has("is_baseline") {
         let mut tx = pool.begin().await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ADD COLUMN is_baseline BOOLEAN",
             sections_table
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {} SET is_baseline = FALSE",
             sections_table
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
             sections_table
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
         tx.commit()
@@ -209,10 +209,10 @@ async fn migrate_section_table_schema(pool: &PgPool, sections_table: &str) -> Re
     // validation), and `module` NULL means the base (unmoduled) section.
     for column in ["checksum", "mode", "module", "applied_by", "pgmt_version"] {
         if !has(column) {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "ALTER TABLE {} ADD COLUMN {} TEXT",
                 sections_table, column
-            ))
+            )))
             .execute(pool)
             .await
             .with_context(|| format!("Failed to add {} to {}", column, sections_table))?;
@@ -268,7 +268,7 @@ async fn backfill_synthetic_legacy_sections(
         return Ok(());
     }
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {sections}
              (migration_version, is_baseline, section_name, section_order,
               status, completed_at, attempts)
@@ -279,7 +279,7 @@ async fn backfill_synthetic_legacy_sections(
              WHERE s.migration_version = m.version AND s.is_baseline = m.is_baseline)",
         sections = sections_table,
         main = main_table,
-    ))
+    )))
     .execute(&mut *conn)
     .await
     .with_context(|| {
@@ -305,13 +305,13 @@ pub(crate) async fn insert_pending_section<'e>(
     order: i32,
     section: &MigrationSection,
 ) -> Result<()> {
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {} (migration_version, is_baseline, section_name, section_order,
                          status, attempts, checksum, mode, module, pgmt_version)
          VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9)
          ON CONFLICT (migration_version, is_baseline, section_name) DO NOTHING",
         sections_table
-    ))
+    )))
     .bind(version_to_db(version)?)
     .bind(is_baseline)
     .bind(&section.name)
@@ -351,12 +351,12 @@ pub(crate) async fn insert_satisfied_section(
         section,
     )
     .await?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
          WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
            AND status = 'pending'",
         sections_table
-    ))
+    )))
     .bind(SectionStatus::Satisfied.as_str())
     .bind(version_to_db(version)?)
     .bind(is_baseline)
@@ -422,11 +422,11 @@ pub async fn validate_and_sync_section_checksums(
         i32,
         Option<String>,
     );
-    let rows: Vec<StoredSectionRow> = sqlx::query_as(&format!(
+    let rows: Vec<StoredSectionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT section_name, status, checksum, mode, section_order, module
              FROM {} WHERE migration_version = $1 AND is_baseline = $2",
         sections_table
-    ))
+    )))
     .bind(version_to_db(version)?)
     .bind(is_baseline)
     .fetch_all(pool)
@@ -497,11 +497,11 @@ pub async fn validate_and_sync_section_checksums(
             // Fix-in-repo recovery: an unapplied section may be edited and
             // re-run. Bring the row up to date before it executes.
             println!("section '{name}' changed since registration; updating");
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE {} SET checksum = $1, mode = $2, module = $3
                  WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
                 sections_table
-            ))
+            )))
             .bind(checksum)
             .bind(*mode)
             .bind(*module)
@@ -595,10 +595,10 @@ pub async fn section_statuses(
 ) -> Result<std::collections::BTreeMap<String, SectionStatus>> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    let rows: Vec<(String, String)> = sqlx::query_as(&format!(
+    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT section_name, status FROM {} WHERE migration_version = $1 AND is_baseline = $2",
         sections_table
-    ))
+    )))
     .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .fetch_all(pool)
@@ -619,10 +619,10 @@ pub async fn get_section_status(
 ) -> Result<Option<SectionStatus>> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    let row: Option<(String,)> = sqlx::query_as(&format!(
+    let row: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT status FROM {} WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
         sections_table
-    ))
+    )))
     .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
     .bind(section_name)
@@ -643,13 +643,13 @@ pub async fn record_section_start(
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {}
          SET status = $1, started_at = NOW(), attempts = attempts + 1,
              applied_by = CURRENT_USER
          WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4",
         sections_table
-    ))
+    )))
     .bind(SectionStatus::Running.as_str())
     .bind(version_to_db(migration_version)?)
     .bind(is_baseline)
@@ -678,12 +678,12 @@ pub async fn record_section_complete<'e>(
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {}
          SET status = $1, completed_at = NOW(), rows_affected = $2, duration_ms = $3
          WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
         sections_table
-    ))
+    )))
     .bind(SectionStatus::Completed.as_str())
     .bind(rows_affected)
     .bind(duration_ms)
@@ -707,12 +707,12 @@ pub async fn record_section_failed(
 ) -> Result<()> {
     let sections_table = format_sections_table_name(tracking_table);
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {}
          SET status = $1, last_error = $2
          WHERE migration_version = $3 AND is_baseline = $4 AND section_name = $5",
         sections_table
-    ))
+    )))
     .bind(SectionStatus::Failed.as_str())
     .bind(error)
     .bind(version_to_db(migration_version)?)

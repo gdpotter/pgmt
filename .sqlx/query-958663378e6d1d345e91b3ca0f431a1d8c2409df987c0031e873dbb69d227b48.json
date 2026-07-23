@@ -6,37 +6,44 @@
       {
         "ordinal": 0,
         "name": "table_schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "table_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "column_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "function_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "function_schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "function_args!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "extension_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       }
     ],
     "parameters": {

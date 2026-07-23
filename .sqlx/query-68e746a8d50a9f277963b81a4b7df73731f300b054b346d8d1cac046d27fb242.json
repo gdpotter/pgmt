@@ -6,52 +6,92 @@
       {
         "ordinal": 0,
         "name": "policy_oid!",
-        "type_info": "Oid"
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "oid"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "schema_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "table_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "policy_name",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "polname"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "command!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "permissive!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "polpermissive"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "roles!: Vec<String>",
-        "type_info": "NameArray"
+        "type_info": "NameArray",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "using_expr?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 8,
         "name": "with_check_expr?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "comment?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
       }
     ],
     "parameters": {

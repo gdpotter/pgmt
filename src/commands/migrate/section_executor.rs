@@ -183,20 +183,26 @@ impl SectionExecutor {
 
         // Set timeouts for this transaction
         let timeout_ms = section.timeout.as_millis();
-        sqlx::query(&format!("SET LOCAL statement_timeout = '{}'", timeout_ms))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SET LOCAL statement_timeout = '{}'",
+            timeout_ms
+        )))
+        .execute(&mut *tx)
+        .await?;
 
         if let Some(lock_timeout) = section.lock_timeout {
             let lock_timeout_ms = lock_timeout.as_millis();
-            sqlx::query(&format!("SET LOCAL lock_timeout = '{}'", lock_timeout_ms))
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET LOCAL lock_timeout = '{}'",
+                lock_timeout_ms
+            )))
+            .execute(&mut *tx)
+            .await?;
         }
 
         // Execute SQL - use raw execute to support multiple statements
         use sqlx::Executor;
-        let result = match tx.execute(section.sql.as_str()).await {
+        let result = match tx.execute(sqlx::AssertSqlSafe(section.sql.clone())).await {
             Ok(result) => result,
             Err(e) => {
                 tx.rollback().await?;
@@ -272,20 +278,30 @@ impl SectionExecutor {
 
             // Set timeouts for this attempt
             let timeout_ms = section.timeout.as_millis();
-            sqlx::query(&format!("SET statement_timeout = '{}'", timeout_ms))
-                .execute(&self.pool)
-                .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET statement_timeout = '{}'",
+                timeout_ms
+            )))
+            .execute(&self.pool)
+            .await?;
 
             if let Some(lock_timeout) = section.lock_timeout {
                 let lock_timeout_ms = lock_timeout.as_millis();
-                sqlx::query(&format!("SET lock_timeout = '{}'", lock_timeout_ms))
-                    .execute(&self.pool)
-                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SET lock_timeout = '{}'",
+                    lock_timeout_ms
+                )))
+                .execute(&self.pool)
+                .await?;
             }
 
             // Execute SQL - use raw execute to support multiple statements
             use sqlx::Executor;
-            match self.pool.execute(section.sql.as_str()).await {
+            match self
+                .pool
+                .execute(sqlx::AssertSqlSafe(section.sql.clone()))
+                .await
+            {
                 Ok(result) => {
                     let duration = start.elapsed();
                     let rows = result.rows_affected() as i64;
@@ -380,18 +396,24 @@ impl SectionExecutor {
 
         // Set timeouts
         let timeout_ms = section.timeout.as_millis();
-        sqlx::query(&format!("SET statement_timeout = '{}'", timeout_ms))
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SET statement_timeout = '{}'",
+            timeout_ms
+        )))
+        .execute(&self.pool)
+        .await?;
 
         if let Some(lock_timeout) = section.lock_timeout {
             let lock_timeout_ms = lock_timeout.as_millis();
-            sqlx::query(&format!("SET lock_timeout = '{}'", lock_timeout_ms))
-                .execute(&self.pool)
-                .await?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET lock_timeout = '{}'",
+                lock_timeout_ms
+            )))
+            .execute(&self.pool)
+            .await?;
         }
 
-        let result = sqlx::query(&section.sql)
+        let result = sqlx::query(sqlx::AssertSqlSafe(section.sql.clone()))
             .execute(&self.pool)
             .await
             .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
@@ -422,14 +444,14 @@ impl SectionExecutor {
         match section.mode {
             TransactionMode::Transactional => {
                 let mut tx = self.pool.begin().await?;
-                tx.execute(section.sql.as_str())
+                tx.execute(sqlx::AssertSqlSafe(section.sql.clone()))
                     .await
                     .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
                 tx.commit().await?;
             }
             TransactionMode::NonTransactional | TransactionMode::Autocommit => {
                 self.pool
-                    .execute(section.sql.as_str())
+                    .execute(sqlx::AssertSqlSafe(section.sql.clone()))
                     .await
                     .map_err(|e| format_section_error(e, &section.sql, &section.name))?;
             }

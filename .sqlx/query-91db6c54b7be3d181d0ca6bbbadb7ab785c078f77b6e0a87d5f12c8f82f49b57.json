@@ -6,27 +6,52 @@
       {
         "ordinal": 0,
         "name": "policy_oid!",
-        "type_info": "Oid"
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "oid"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "column_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "table_schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "table_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "relkind!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

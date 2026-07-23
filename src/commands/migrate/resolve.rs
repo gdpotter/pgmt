@@ -142,12 +142,12 @@ async fn mark_completed(
         .and_then(|(sections, _checksum)| sections.into_iter().find(|s| s.name == section));
 
     if let Some(fs) = &file_section {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {} SET status = 'completed', completed_at = NOW(), last_error = NULL, \
                  checksum = $1, mode = $2, module = $3 \
              WHERE migration_version = $4 AND is_baseline = $5 AND section_name = $6",
             sections_table
-        ))
+        )))
         .bind(calculate_checksum(&fs.checksum_content()))
         .bind(fs.mode.as_str())
         .bind(fs.module.as_deref())
@@ -157,11 +157,11 @@ async fn mark_completed(
         .execute(pool)
         .await?;
     } else {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {} SET status = 'completed', completed_at = NOW(), last_error = NULL \
              WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
             sections_table
-        ))
+        )))
         .bind(version_to_db(version)?)
         .bind(is_baseline)
         .bind(section)
@@ -215,15 +215,16 @@ async fn restamp(
 
     // All recorded section rows for this version:
     // (name, status, stored checksum, stored section_order).
-    let rows: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(&format!(
-        "SELECT section_name, status, checksum, section_order FROM {} \
+    let rows: Vec<(String, String, Option<String>, i32)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT section_name, status, checksum, section_order FROM {} \
          WHERE migration_version = $1 AND is_baseline = $2 ORDER BY section_order",
-        sections_table
-    ))
-    .bind(version_to_db(version)?)
-    .bind(is_baseline)
-    .fetch_all(pool)
-    .await?;
+            sections_table
+        )))
+        .bind(version_to_db(version)?)
+        .bind(is_baseline)
+        .fetch_all(pool)
+        .await?;
 
     // Which sections to re-stamp: the named one (must exist + be covered), or
     // every covered section of the version. A `satisfied` row is covered and
@@ -295,11 +296,11 @@ async fn restamp(
         let new_order = new_order as i32;
 
         let new_checksum = calculate_checksum(&fs.checksum_content());
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {} SET checksum = $1, mode = $2, module = $3, section_order = $4 \
              WHERE migration_version = $5 AND is_baseline = $6 AND section_name = $7",
             sections_table
-        ))
+        )))
         .bind(&new_checksum)
         .bind(fs.mode.as_str())
         .bind(fs.module.as_deref())
@@ -347,11 +348,11 @@ async fn fetch_section_status(
     section: &str,
     is_baseline: bool,
 ) -> Result<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as(&format!(
+    let row: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT status FROM {} \
          WHERE migration_version = $1 AND is_baseline = $2 AND section_name = $3",
         sections_table
-    ))
+    )))
     .bind(version_to_db(version)?)
     .bind(is_baseline)
     .bind(section)

@@ -85,8 +85,8 @@ pub async fn clean_shadow_db(pool: &PgPool, objects: &Objects) -> anyhow::Result
             let quoted = quote_ident(schema_name);
             let reassign = format!("ALTER SCHEMA {} OWNER TO CURRENT_USER", quoted);
             let drop_stmt = format!("DROP SCHEMA IF EXISTS {} CASCADE", quoted);
-            pool.execute(reassign.as_str()).await?;
-            pool.execute(drop_stmt.as_str()).await?;
+            pool.execute(sqlx::AssertSqlSafe(reassign)).await?;
+            pool.execute(sqlx::AssertSqlSafe(drop_stmt)).await?;
         } else {
             debug!("Preserving non-managed schema: {}", schema_name);
         }

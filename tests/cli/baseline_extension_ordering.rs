@@ -62,7 +62,7 @@ async fn test_baseline_extension_first() -> Result<()> {
         cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
         // Execute baseline as raw SQL (it may contain multiple statements)
-        sqlx::raw_sql(&baseline_content)
+        sqlx::raw_sql(sqlx::AssertSqlSafe(baseline_content))
             .execute(&shadow_pool)
             .await
             .expect("Baseline should apply cleanly to empty database");
@@ -158,7 +158,7 @@ async fn test_baseline_multiple_extensions_ordering() -> Result<()> {
         // Clean shadow database to ensure it's empty before applying baseline
         cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
-        sqlx::raw_sql(&baseline_content)
+        sqlx::raw_sql(sqlx::AssertSqlSafe(baseline_content))
             .execute(&shadow_pool)
             .await
             .expect("Baseline with multiple extensions should apply cleanly");
@@ -314,7 +314,7 @@ async fn test_extension_with_schema_ordering() -> Result<()> {
         // Clean shadow database to ensure it's empty before applying baseline
         cleaner::clean_shadow_db(&shadow_pool, &pgmt::config::types::Objects::default()).await?;
 
-        sqlx::raw_sql(&baseline_content)
+        sqlx::raw_sql(sqlx::AssertSqlSafe(baseline_content))
             .execute(&shadow_pool)
             .await
             .expect("Baseline with schema and extension should apply cleanly");

@@ -6,57 +6,118 @@
       {
         "ordinal": 0,
         "name": "schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "table_schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "table_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "index_type!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_am",
+            "name": "amname"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "is_unique!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisunique"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "is_clustered!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisclustered"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "is_valid!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "predicate?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "tablespace?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_tablespace",
+            "name": "spcname"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "comment?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
       }
     ],
     "parameters": {

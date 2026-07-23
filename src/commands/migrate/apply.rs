@@ -278,10 +278,10 @@ pub(crate) async fn apply_pending_migrations(
     let mut applied_any = false;
 
     // All tracking rows: version + checksum + is_baseline.
-    let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
+    let rows: Vec<(i64, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT version, checksum, is_baseline FROM {}",
         tracking_table_name
-    ))
+    )))
     .fetch_all(pool)
     .await?;
 

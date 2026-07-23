@@ -16,7 +16,7 @@ include = ["/src/", "/.sqlx/", "/LICENSE", "/README.md"]
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 tokio = { version = "1.36", features = ["full", "signal"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "chrono", "tls-rustls"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "tls-rustls"] }
 dotenv = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

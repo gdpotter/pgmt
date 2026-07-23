@@ -6,62 +6,104 @@
       {
         "ordinal": 0,
         "name": "schema!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "type_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typname"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "attr_name!",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "attr_type!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "ordinal_position!",
-        "type_info": "Int2"
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnum"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "attr_type_schema?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "attr_type_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "attr_attndims!: i32",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 8,
         "name": "is_extension_type!: bool",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "extension_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extname"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "attr_type_typtype?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 11,
         "name": "attr_comment?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
       }
     ],
     "parameters": {

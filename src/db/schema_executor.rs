@@ -260,7 +260,10 @@ impl SqlContentExecutor {
         }
 
         // Execute the SQL content using raw_sql (properly supports multiple statements)
-        match sqlx::raw_sql(content).execute(&self.pool).await {
+        match sqlx::raw_sql(sqlx::AssertSqlSafe(content.to_string()))
+            .execute(&self.pool)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(sqlx_error) => {
                 // Use shared utility to extract rich error context from PostgreSQL

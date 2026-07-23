@@ -92,7 +92,7 @@ pub async fn ensure_tracking_table_exists(
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         r#"
         CREATE TABLE IF NOT EXISTS {} (
             version BIGINT NOT NULL,
@@ -105,7 +105,7 @@ pub async fn ensure_tracking_table_exists(
         )
         "#,
         tracking_table_name
-    ))
+    )))
     .execute(pool)
     .await
     .with_context(|| format!("Failed to create tracking table {}", tracking_table_name))?;
@@ -161,19 +161,19 @@ pub(crate) async fn ensure_primary_key(
 
     let mut tx = pool.begin().await?;
     if let Some(pk_name) = pk_name {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"ALTER TABLE {} DROP CONSTRAINT "{}""#,
             qualified_name,
             pk_name.replace('"', "")
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE {} ADD PRIMARY KEY ({})",
         qualified_name,
         expected_columns.join(", ")
-    ))
+    )))
     .execute(&mut *tx)
     .await?;
     tx.commit().await.with_context(|| {
@@ -213,10 +213,10 @@ async fn migrate_tracking_table_schema(
 
     // Tracking tables created before `applied_by` existed lack the column.
     if !has("applied_by") {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ADD COLUMN applied_by TEXT DEFAULT CURRENT_USER",
             tracking_table_name
-        ))
+        )))
         .execute(pool)
         .await
         .with_context(|| format!("Failed to add applied_by to {}", tracking_table_name))?;
@@ -228,22 +228,22 @@ async fn migrate_tracking_table_schema(
     // observed in a half-migrated, NULL-permitting state.
     if !has("is_baseline") {
         let mut tx = pool.begin().await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ADD COLUMN is_baseline BOOLEAN",
             tracking_table_name
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {} SET is_baseline = FALSE",
             tracking_table_name
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ALTER COLUMN is_baseline SET NOT NULL",
             tracking_table_name
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
         tx.commit()
@@ -321,10 +321,10 @@ async fn register_start(
     };
 
     let mut tx = pool.begin().await?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {} (version, description, checksum, is_baseline) VALUES ($1, $2, $3, $4){}",
         tracking_table_name, conflict
-    ))
+    )))
     .bind(version_to_db(version)?)
     .bind(description)
     .bind(checksum)
@@ -443,10 +443,10 @@ pub async fn update_stored_file_checksum(
     checksum: &str,
 ) -> Result<()> {
     let tracking_table_name = format_tracking_table_name(tracking_table)?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {} SET checksum = $1 WHERE version = $2 AND is_baseline = $3",
         tracking_table_name
-    ))
+    )))
     .bind(checksum)
     .bind(version_to_db(version)?)
     .bind(is_baseline)
