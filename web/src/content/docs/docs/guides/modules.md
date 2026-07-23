@@ -170,31 +170,74 @@ Adoption works because pgmt can always replay a module's history from committed 
 1. **Moving files between modules** — including the first-time case: declaring `modules:` over an existing project. There's no DDL change, but replaying the old history would reproduce the old ownership.
 2. **Dropping an object another module's history references** — core drops a table that billing's old FK pointed at, so replaying billing alone would fail on the missing table.
 
-Modularizing an existing project looks like this:
+Splitting a new module out of an existing one shows the full mechanism. Say `collections` is carved out of `billing`, moving `public.debts` from billing to collections. `migrate new` refuses first, naming what moved:
 
 ```console
-$ pgmt migrate new "modularize"
+$ pgmt migrate new "split collections out of billing"
 error: partition re-anchor required:
-  - public.users moved from '(unmoduled)' to 'core'
+  - public.debts moved from 'billing' to 'collections'
 
 Replaying module history would reproduce the old ownership;
 re-run with --create-baseline to emit a re-anchoring baseline.
-
-$ pgmt migrate new "modularize" --create-baseline
-No schema changes - emitting re-anchoring baseline only.
-Created baseline: schema_baselines/baseline_1734567890.sql
 ```
 
-The emitted baseline records where each section's objects came from via `remaps`:
+Re-run with `--create-baseline` and pgmt emits **two paired files at the same version** — the re-anchoring baseline and an _acquisition migration_:
+
+```console
+$ pgmt migrate new "split collections out of billing" --create-baseline
+Re-anchoring the module partition:
+  - public.debts moved from 'billing' to 'collections'
+Created baseline: schema_baselines/baseline_1734567890.sql
+Created migration: schema_migrations/1734567890_split_collections_out_of_billing.sql
+Migration generation complete!
+```
+
+Both record where each moved object came from via `remaps`. The baseline section:
 
 ```sql
--- pgmt:section name="core" module="core" remaps="(unmoduled)"
-CREATE TABLE public.users (...);
+-- pgmt:section name="collections" module="collections" remaps="billing"
+CREATE TABLE public.debts (...);
 ```
 
-`(unmoduled)` means the base. The remap records that objects previously owned by the base now belong to `core` — module ownership is always derived from the checksummed files, never stored in the database. After the re-anchor, `migrate new` is quiet again.
+The acquisition migration carries the same objects' DDL under a header spelling out who runs it:
 
-The cross-module-drop case works the same way. `migrate new` refuses ("dropping public.accounts (owned by 'core') breaks replay of module 'billing', whose history references it"); with `--create-baseline` it emits the migration — sections ordered drops-first, so billing's FK drop precedes core's table drop — together with the re-anchoring baseline at the same version.
+```sql
+-- objects moved from module 'billing'; runs only on targets without
+-- it — targets holding 'billing' already have them (satisfied).
+-- pgmt:section name="collections" module="collections" remaps="billing"
+CREATE TABLE public.debts (...);
+```
+
+`remaps="billing"` records that objects previously owned by billing now belong to collections (`remaps="(unmoduled)"` would mean they came from the base). Three surfaces then carry the split to each target on its next apply:
+
+**The acquisition migration** exists for targets that never ran billing's history — a fresh database, or one adopting `collections` later. They never created `public.debts`, so its section carries the DDL to acquire it; the header marks that it runs _only_ on such targets.
+
+**Satisfied** is what a target that already holds `billing` sees. The objects are present under billing's history, so pgmt records the acquisition section as satisfied and runs no DDL:
+
+```console
+Section 'collections' of migration 1734567890: source 'billing' is
+established here — recorded satisfied (objects already present; nothing to run)
+```
+
+**Crossing** is the subscription bookkeeping that same apply performs — it consumes the re-anchor once and grows the target's stored subscription so it now tracks collections as its own:
+
+```console
+Crossed re-anchor 1734567890: subscription billing -> billing,collections
+```
+
+After the re-anchor, `migrate new` is quiet again. Ownership of the _current_ partition is derived from your config and files, but the database is not oblivious to history: each applied section stores its module literal (in `pgmt_migrations_sections`) and each target stores its module subscription (`pgmt_migrations_modules`). That per-target record is what lets one re-anchor resolve differently on a held-source target (satisfied) than on a fresh one (acquire), and what keeps adoption and pruned history working per target.
+
+Modularizing an existing project for the first time — declaring `modules:` where everything was previously the base — is the degenerate case: every move is base-sourced (`remaps="(unmoduled)"`), and the base is present on every target, so no acquisition migration is needed and `migrate new --create-baseline` emits the baseline alone:
+
+```console
+$ pgmt migrate new "modularize" --create-baseline
+Re-anchoring the module partition:
+  - public.users moved from '(unmoduled)' to 'core'
+Created baseline: schema_baselines/baseline_1734567890.sql
+No schema changes - emitting re-anchoring baseline only.
+```
+
+The cross-module-drop case works like the split. `migrate new` refuses ("dropping public.accounts (owned by 'core') breaks replay of module 'billing', whose history references it"); with `--create-baseline` it emits the migration — sections ordered drops-first, so billing's FK drop precedes core's table drop — together with the re-anchoring baseline at the same version.
 
 ## Coupled Migrations
 
@@ -214,5 +257,4 @@ Deploy the coupled modules in one command: `--modules core,billing`.
 
 ## Not Yet Implemented
 
-- **Re-tag awareness on pre-existing targets** — a database deployed *before* you modularized doesn't yet read the re-anchor's `remaps` to learn that it already owns the re-tagged modules. Until that lands, treat modularization as safe for **new** targets, and keep deploying pre-existing targets with `--modules all`.
 - **`conflicts_with`** — mutually exclusive modules (regional variants like `billing_us` / `billing_eu` that define the same objects, with only one side ever on a target) are planned but not yet available.

@@ -113,7 +113,7 @@ pgmt migrate resolve --mark-completed 1734567890/add_index --target-url "$DATABA
 
 ### `--restamp <version>[/<section>]`
 
-You consciously edited an already-applied section and accept that the change won't re-run — you just need pgmt to stop failing the checksum comparison. Re-stamps the stored checksum(s) from the current file for a completed section (or every completed section of the version if you omit the section). This is the sanctioned path for editing an applied migration; it prints each section's old and new checksum. The file must be present.
+You consciously edited an already-applied section and accept that the change won't re-run — you just need pgmt to stop failing the checksum comparison. Re-stamps the stored checksum(s) from the current file for a completed section (or every completed section of the version if you omit the section). This is the sanctioned path for editing an applied migration; it prints each section's old and new checksum. The file must be present. Checksums are recorded per target, so a conscious edit needs its own `--restamp` in **each** environment that has applied the section — every other target's next deploy bails on the same checksum mismatch until you restamp it there too.
 
 ```bash
 pgmt migrate resolve --restamp 1734567890 --target-url "$DATABASE_URL"
