@@ -1360,7 +1360,7 @@ mod tests {
             .mounts
             .unwrap_or_default()
             .into_iter()
-            .find(|m| m.typ == Some(bollard::models::MountPointTypeEnum::VOLUME))
+            .find(|m| m.typ.as_deref() == Some("volume"))
             .and_then(|m| m.name)
             .expect("shadow container should have an anonymous data volume");
 
