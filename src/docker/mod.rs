@@ -658,11 +658,11 @@ impl DockerManager {
             // Supabase image) must round-trip through reuse.
             if let Some(ports) = &container.ports {
                 for port in ports {
-                    if port.private_port == 5432 && port.public_port.is_some() {
+                    if let (5432, Some(public_port)) = (port.private_port, port.public_port) {
                         return Ok(Some(ContainerInfo {
                             id: id.clone(),
                             host: "127.0.0.1".to_string(),
-                            port: port.public_port.unwrap(),
+                            port: public_port,
                             database: config
                                 .environment
                                 .get("POSTGRES_DB")

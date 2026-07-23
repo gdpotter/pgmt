@@ -7,7 +7,8 @@
 //! the next apply re-runs it.)
 
 use crate::helpers::cli::{
-    THREE_MODULES_YAML, enable_modules, section_checksum, with_cli_helper, write_three_module_schema,
+    THREE_MODULES_YAML, enable_modules, section_checksum, with_cli_helper,
+    write_three_module_schema,
 };
 use anyhow::Result;
 use predicates::prelude::*;
@@ -233,7 +234,9 @@ CREATE TABLE rso_one (id INT);
             .args(["migrate", "apply", "--target-url", &helper.dev_database_url])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("was reordered after it was applied"))
+            .stderr(predicate::str::contains(
+                "was reordered after it was applied",
+            ))
             .stderr(predicate::str::contains("resolve --restamp"));
 
         // Restamp syncs section_order and reports the change.
@@ -438,7 +441,10 @@ fn edit_baseline_section(baseline: &str, module: &str) -> String {
             edited = true;
         }
     }
-    assert!(edited, "section for module '{module}' not found in baseline");
+    assert!(
+        edited,
+        "section for module '{module}' not found in baseline"
+    );
     out.join("\n")
 }
 
@@ -502,7 +508,9 @@ async fn test_restamp_baseline_flow() -> Result<()> {
             ])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("was modified after it was applied"))
+            .stderr(predicate::str::contains(
+                "was modified after it was applied",
+            ))
             // The recovery hint must carry --baseline: the drifted row is a
             // baseline section, and the bare coordinate would find no row.
             .stderr(predicate::str::contains("--baseline"));
@@ -644,7 +652,10 @@ async fn test_mark_completed_baseline_flow() -> Result<()> {
         .fetch_one(&pool)
         .await?;
         pool.close().await;
-        assert_eq!(status, "completed", "resolve marked the baseline section done");
+        assert_eq!(
+            status, "completed",
+            "resolve marked the baseline section done"
+        );
 
         // The guard no longer fires: `apply --modules billing` runs clean.
         helper

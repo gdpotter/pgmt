@@ -168,7 +168,7 @@ fn prompt_schema_selection(catalog: &Catalog) -> Result<Vec<String>> {
     }
 
     // Sort by total object count (most active schemas first)
-    schema_info.sort_by(|a, b| b.1.cmp(&a.1));
+    schema_info.sort_by_key(|s| std::cmp::Reverse(s.1));
 
     display_schema_table(&schema_info);
 

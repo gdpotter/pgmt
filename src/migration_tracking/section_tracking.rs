@@ -342,8 +342,15 @@ pub(crate) async fn insert_satisfied_section(
     order: i32,
     section: &MigrationSection,
 ) -> Result<()> {
-    insert_pending_section(&mut *conn, sections_table, version, is_baseline, order, section)
-        .await?;
+    insert_pending_section(
+        &mut *conn,
+        sections_table,
+        version,
+        is_baseline,
+        order,
+        section,
+    )
+    .await?;
     sqlx::query(&format!(
         "UPDATE {} SET status = $1, completed_at = NOW(), applied_by = CURRENT_USER
          WHERE migration_version = $2 AND is_baseline = $3 AND section_name = $4
@@ -562,8 +569,15 @@ pub async fn record_sections_satisfied(
     let sections_table = format_sections_table_name(tracking_table);
     let mut tx = pool.begin().await?;
     for (order, section) in sections {
-        insert_satisfied_section(&mut tx, &sections_table, version, is_baseline, *order, section)
-            .await?;
+        insert_satisfied_section(
+            &mut tx,
+            &sections_table,
+            version,
+            is_baseline,
+            *order,
+            section,
+        )
+        .await?;
     }
     tx.commit()
         .await
