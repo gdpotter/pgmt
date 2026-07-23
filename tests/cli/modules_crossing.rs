@@ -1964,3 +1964,542 @@ async fn test_bare_apply_from_empty_without_baselines_still_works() -> Result<()
     })
     .await
 }
+
+/// Count public base tables that aren't pgmt tracking tables — the physical
+/// surface, so a crossing that only relabels ownership (no DDL) leaves it
+/// unchanged.
+async fn user_table_count(pool: &sqlx::PgPool) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables \
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
+         AND table_name NOT LIKE 'pgmt_%'",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+/// THE fix: `--modules all` rides the crossing at a split instead of refusing
+/// toward provision. A target holds `billing` whole (provisioned pre-split).
+/// The repo then splits `collections` out of `billing` (a re-anchor whose only
+/// `collections` content is a `remaps="billing"` section — brand-new module).
+/// `apply --modules all` expands to `{billing, collections}`; the adoption
+/// guard used to see `collections` not-established with baseline content and
+/// refuse ("provision --modules collections"), even though the very apply would
+/// subscribe it at the crossing. Now the guard forecasts the sweep, waives the
+/// refusal, and the crossing relabels the objects (no DDL) — the docs-blessed
+/// `--modules all` CI config survives the split, exactly as merely not naming
+/// the module already did.
+#[tokio::test]
+async fn test_modules_all_rides_the_crossing_at_a_split() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "CREATE TABLE invoices (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "billing/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Target holds billing whole.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["billing".to_string()]
+        );
+        let tables_before = user_table_count(&pool).await?;
+
+        // Split line_items into a brand-new `collections` module (pure re-tag).
+        std::fs::remove_file(helper.project_root.join("schema/billing/line_items.sql"))?;
+        helper.write_schema_file(
+            "collections/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n  collections:\n    paths: [\"schema/collections/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+        let baseline_sql =
+            helper.read_baseline_file(&format!("baseline_{re_anchor_version}.sql"))?;
+        assert!(
+            baseline_sql.contains(r#"module="collections" remaps="billing""#),
+            "brand-new collections stamps only the source:\n{baseline_sql}"
+        );
+
+        // The fix: --modules all succeeds and rides the crossing.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Crossed re-anchor"));
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["billing".to_string(), "collections".to_string()],
+            "the crossing subscribed collections"
+        );
+        assert_eq!(consumed_cursor(&pool).await?, Some(re_anchor_version as i64));
+        assert_eq!(
+            user_table_count(&pool).await?,
+            tables_before,
+            "the crossing only relabels ownership — no DDL, no duplicate object"
+        );
+
+        // Idempotent: the re-anchor is consumed, so a repeat is a clean no-op.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Nothing to apply — up to date."))
+            .stdout(predicate::str::contains("Crossed re-anchor").not());
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Same split, but the split module is named explicitly
+/// (`--modules billing,collections`) rather than via `all`. Explicit naming
+/// rides the crossing identically — the guard's crossing-awareness keys off the
+/// stored subscription and the re-anchor, never off how the request was spelled.
+#[tokio::test]
+async fn test_explicitly_naming_split_module_also_rides_crossing() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "CREATE TABLE invoices (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "billing/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+
+        std::fs::remove_file(helper.project_root.join("schema/billing/line_items.sql"))?;
+        helper.write_schema_file(
+            "collections/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n  collections:\n    paths: [\"schema/collections/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "billing,collections",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Crossed re-anchor"));
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["billing".to_string(), "collections".to_string()]
+        );
+        assert_eq!(consumed_cursor(&pool).await?, Some(re_anchor_version as i64));
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// A base-only target (never held `billing`) is still routed to provision: the
+/// crossing forecast finds nothing to relabel into `collections` (its source
+/// `billing` is absent here), so the module genuinely needs baseline content.
+/// The refusal names `provision --modules collections`.
+#[tokio::test]
+async fn test_fresh_subset_target_still_routed_to_provision() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        // An unmoduled base object so a base-only provision has real content
+        // and establishes the target.
+        helper.write_schema_file("base.sql", "CREATE TABLE app_meta (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n",
+        )?;
+        helper.write_schema_file(
+            "billing/invoices.sql",
+            "CREATE TABLE invoices (id SERIAL PRIMARY KEY);",
+        )?;
+        helper.write_schema_file(
+            "billing/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        // Establish the target with the base only — billing never deployed here.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        assert!(subscription_modules(&pool).await?.is_empty());
+        assert!(table_exists(&pool, "app_meta").await?);
+        assert!(!table_exists(&pool, "invoices").await?);
+
+        // Split collections out of billing.
+        std::fs::remove_file(helper.project_root.join("schema/billing/line_items.sql"))?;
+        helper.write_schema_file(
+            "collections/line_items.sql",
+            "CREATE TABLE line_items (id SERIAL PRIMARY KEY);",
+        )?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  billing:\n    paths: [\"schema/billing/**\"]\n  collections:\n    paths: [\"schema/collections/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split", "--create-baseline"])
+            .assert()
+            .success();
+
+        // collections' objects live under billing, which this target lacks —
+        // no crossing can relabel them here, so adoption needs baseline content.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "collections",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("requires baseline content"))
+            .stderr(predicate::str::contains(
+                "provision --modules collections",
+            ));
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// Multi-hop: two chained re-anchors — V1 splits `b` out of `a`, V2 splits `c`
+/// out of `b` — crossed in ONE `apply --modules all`. The guard forecast
+/// threads the simulated subscription through both crossings: `b` is subscribed
+/// at V1 (source `a` held), which makes `c` satisfiable at V2 (source `b` now
+/// held). Both `b` (a plain section in V2's snapshot) and `c` are waived from
+/// the baseline-content refusal, and the apply rides both crossings with no DDL.
+#[tokio::test]
+async fn test_modules_all_rides_two_chained_crossings() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(helper, &base, "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n")?;
+        helper.write_schema_file("a/t1.sql", "CREATE TABLE t1 (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("a/t2.sql", "CREATE TABLE t2 (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("a/t3.sql", "CREATE TABLE t3 (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial", "--create-baseline"])
+            .assert()
+            .success();
+
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+        let tables_before = user_table_count(&pool).await?;
+
+        // V1: t2, t3 move a -> b.
+        std::fs::remove_file(helper.project_root.join("schema/a/t2.sql"))?;
+        std::fs::remove_file(helper.project_root.join("schema/a/t3.sql"))?;
+        helper.write_schema_file("b/t2.sql", "CREATE TABLE t2 (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("b/t3.sql", "CREATE TABLE t3 (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split_b", "--create-baseline"])
+            .assert()
+            .success();
+
+        // V2: t3 moves b -> c.
+        std::fs::remove_file(helper.project_root.join("schema/b/t3.sql"))?;
+        helper.write_schema_file("c/t3.sql", "CREATE TABLE t3 (id SERIAL PRIMARY KEY);")?;
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n  c:\n    paths: [\"schema/c/**\"]\n",
+        )?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "split_c", "--create-baseline"])
+            .assert()
+            .success();
+        let v2 = latest_baseline_version(helper)?;
+        let baseline_v2 = helper.read_baseline_file(&format!("baseline_{v2}.sql"))?;
+        assert!(
+            baseline_v2.contains(r#"module="c" remaps="b""#),
+            "V2 splits c out of b:\n{baseline_v2}"
+        );
+
+        // One apply crosses both re-anchors.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "all",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Crossed re-anchor"));
+
+        assert_eq!(
+            subscription_modules(&pool).await?,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            "both crossings subscribed b then c"
+        );
+        assert_eq!(consumed_cursor(&pool).await?, Some(v2 as i64));
+        assert_eq!(
+            user_table_count(&pool).await?,
+            tables_before,
+            "chained relabels touch no physical objects"
+        );
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}
+
+/// The crossing-aware guard keeps BOTH informative errors at a needed-modules
+/// block, choosing by whether the blocking destination is named. `y` moves
+/// `a` → pre-existing `b`; the target holds `a` but not `b`, so the crossing
+/// would relabel `y` into unsubscribed pre-existing `b`.
+/// - `apply --modules a` (destination NOT named): nothing to refuse toward
+///   provision (a is established), so the guard proceeds and the real apply
+///   loop's STRONG MEMBRANE surfaces unpreempted — adopt-b guidance — and
+///   `b`'s plain content (`z`) is never created (so `provision --modules b`
+///   stays collision-free).
+/// - `apply --modules a,b` (destination named): `b` genuinely needs baseline
+///   content (its plain `z` section lives in the re-anchor), and the block
+///   coincides with that, so the guard gives the clean baseline-content
+///   refusal BEFORE running anything — no half-adopted `z`.
+#[tokio::test]
+async fn test_membrane_and_baseline_refusal_coexist_at_a_block() -> Result<()> {
+    with_cli_helper(async |helper| {
+        helper.init_project()?;
+        let base = base_config(helper)?;
+
+        set_modules(
+            helper,
+            &base,
+            "\nmodules:\n  a:\n    paths: [\"schema/a/**\"]\n  b:\n    paths: [\"schema/b/**\"]\n",
+        )?;
+        helper.write_schema_file("a/x.sql", "CREATE TABLE x (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("a/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        helper.write_schema_file("b/z.sql", "CREATE TABLE z (id SERIAL PRIMARY KEY);")?;
+        helper
+            .command()
+            .args(["migrate", "new", "initial"])
+            .assert()
+            .success();
+
+        // Target holds a only (b never deployed here).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "provision",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a",
+            ])
+            .assert()
+            .success();
+        let pool = helper.connect_to_dev_db().await?;
+
+        // y moves a -> pre-existing b (plain b=z retained, remap b_2 remaps="a").
+        std::fs::remove_file(helper.project_root.join("schema/a/y.sql"))?;
+        helper.write_schema_file("b/y.sql", "CREATE TABLE y (id SERIAL PRIMARY KEY);")?;
+        next_version_tick();
+        helper
+            .command()
+            .args(["migrate", "new", "move_y", "--create-baseline"])
+            .assert()
+            .success();
+        let re_anchor_version = latest_baseline_version(helper)?;
+
+        // Destination NOT named: the real loop's membrane surfaces unpreempted
+        // (adopt-b guidance), and b's plain z is never created.
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "Adopt b before applying past {re_anchor_version}"
+            )))
+            .stderr(predicate::str::contains(
+                "would relabel objects this target holds",
+            ))
+            .stderr(predicate::str::contains("requires baseline content").not());
+        assert_eq!(subscription_modules(&pool).await?, vec!["a".to_string()]);
+        assert!(
+            !table_exists(&pool, "z").await?,
+            "the membrane blocked before b's plain z ran"
+        );
+
+        // Destination NAMED: b genuinely needs baseline content, so the guard
+        // refuses toward provision BEFORE running anything (no half-adopted z).
+        helper
+            .command()
+            .args([
+                "migrate",
+                "apply",
+                "--target-url",
+                &helper.dev_database_url,
+                "--modules",
+                "a,b",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("requires baseline content"))
+            .stderr(predicate::str::contains("provision --modules b"));
+        assert_eq!(subscription_modules(&pool).await?, vec!["a".to_string()]);
+        assert!(!table_exists(&pool, "z").await?, "clean refusal ran no DDL");
+
+        pool.close().await;
+        Ok(())
+    })
+    .await
+}

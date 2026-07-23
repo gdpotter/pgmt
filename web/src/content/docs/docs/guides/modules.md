@@ -225,6 +225,8 @@ established here — recorded satisfied (objects already present; nothing to run
 Crossed re-anchor 1734567890: subscription billing -> billing,collections
 ```
 
+This holds however the apply is invoked. On a target that holds the source module whole, naming the new module — including via the recommended `--modules all` — **rides the crossing** exactly as bare apply does: the acquisition section records satisfied, the subscription grows, and nothing is created. pgmt does not refuse `--modules all` at a split, because a module introduced by a re-anchor whose sources the target already holds needs nothing from the baseline. (The `requires baseline content` refusal above is only for adopting a module whose source this target never held — there the objects genuinely must come from `provision`.)
+
 After the re-anchor, `migrate new` is quiet again. Ownership of the _current_ partition is derived from your config and files, but the database is not oblivious to history: each applied section stores its module literal (in `pgmt_migrations_sections`) and each target stores its module subscription (`pgmt_migrations_modules`). That per-target record is what lets one re-anchor resolve differently on a held-source target (satisfied) than on a fresh one (acquire), and what keeps adoption and pruned history working per target.
 
 Modularizing an existing project for the first time — declaring `modules:` where everything was previously the base — is the degenerate case: every move is base-sourced (`remaps="(unmoduled)"`), and the base is present on every target, so no acquisition migration is needed and `migrate new --create-baseline` emits the baseline alone:

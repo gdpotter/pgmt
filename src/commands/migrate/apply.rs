@@ -190,22 +190,47 @@ async fn apply_with_module_guard(
     .await?;
 
     if let Some(named) = selection.named() {
-        // The adoption guard: `apply` only ever replays sections; a
-        // module whose pre-baseline state lives in a committed baseline must
-        // be adopted via `provision --modules`.
-        let needs_baseline = runtime.needing_baseline_content(named.iter());
-        if !needs_baseline.is_empty() {
+        // The adoption guard, crossing-aware. `apply` only ever replays
+        // sections, so a never-established module whose pre-baseline state
+        // lives in a committed baseline normally must be adopted via
+        // `provision --modules`. BUT a brand-new module introduced by a
+        // committed re-anchor whose sources this target holds whole is
+        // subscribed by THIS apply's own crossing sweep — it needs nothing
+        // from the baseline, because the crossing relabels objects the target
+        // already holds. Forecast the sweep (read-only) and waive the refusal
+        // for exactly those modules: whether a crossing subscribes a module
+        // cannot depend on whether the deploy command happened to name it
+        // (`--modules all` names every declared module, including one born at
+        // a split this target is about to cross).
+        // A module that would BLOCK the crossing is never in this set, and
+        // (a needed-modules block implies the module carries baseline content)
+        // still gets the clean baseline-content refusal below when named; when
+        // NOT named, the real apply loop's membrane surfaces unpreempted.
+        let would_subscribe = runtime.forecast_crossings(migrations).await?;
+        let still_needs: Vec<String> = runtime
+            .needing_baseline_content(named.iter())
+            .into_iter()
+            .filter(|m| !would_subscribe.contains(m))
+            .collect();
+        if !still_needs.is_empty() {
             anyhow::bail!(
                 "adopting module(s) {} here requires baseline content — their pre-baseline \
                  state lives in the committed baseline, not the migrations.\n\
                  Adopt via: pgmt migrate provision --modules {}",
-                needs_baseline.join(", "),
-                needs_baseline.join(",")
+                still_needs.join(", "),
+                still_needs.join(",")
             );
         }
-        // Explicitly requesting a module IS its adoption: subscribe
-        // any newly requested modules before replaying their sections.
-        runtime.record_adopted(named).await?;
+        // Explicitly requesting a module IS its adoption — but a module the
+        // crossing sweep will subscribe is subscribed by the crossing loop
+        // itself (with crossing provenance and the "Crossed re-anchor"
+        // message), so subscribe only the pure-replay adoptions here.
+        let to_adopt: BTreeSet<String> = named
+            .iter()
+            .filter(|m| !would_subscribe.contains(*m))
+            .cloned()
+            .collect();
+        runtime.record_adopted(&to_adopt).await?;
     }
 
     let applied_any =
@@ -367,18 +392,7 @@ pub(crate) async fn apply_pending_migrations(
         // membrane refusal must abort before `update_stored_file_checksum`
         // mutates the stored fingerprint, and both need only the parsed
         // sections — no work is lost by deciding the refusal first.
-        let acquirable: BTreeSet<(Option<String>, Option<String>)> = sections
-            .iter()
-            .filter_map(|s| {
-                let remap = s.remaps.as_deref()?;
-                let source = if remap == crate::modules::UNMODULED_DISPLAY {
-                    None
-                } else {
-                    Some(remap.to_string())
-                };
-                Some((s.module.clone(), source))
-            })
-            .collect();
+        let acquirable = crate::modules::acquisition_pairs(&sections);
         let mut pending_crossing = runtime
             .gate_re_anchor_at(migration.version, &acquirable)
             .await?;

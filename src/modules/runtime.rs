@@ -4,10 +4,15 @@
 //! [`crate::migration_tracking::TrackingStore`].
 
 use super::crossing::{
-    CrossingCheck, PendingCrossing, ReAnchor, discover_re_anchors, evaluate_crossing, run_eligible,
+    CrossingCheck, PendingCrossing, ReAnchor, acquisition_pairs, discover_re_anchors,
+    evaluate_crossing, run_eligible,
 };
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// A set of `(module, source)` remap pairs — the acquisition deltas a
+/// migration or baseline carries, `None` on either side for the base.
+type AcquisitionPairs = BTreeSet<(Option<String>, Option<String>)>;
 
 /// How a module came to be in the subscription — recorded on the
 /// `{name}_modules` row's `source` column for audit.
@@ -175,6 +180,80 @@ impl ModuleRuntime {
             })
             .cloned()
             .collect()
+    }
+
+    /// The never-established modules this apply's crossing sweep would
+    /// SUBSCRIBE — a read-only forecast the `apply` adoption guard consults so
+    /// it can ride a crossing instead of refusing toward provision. Thread a
+    /// *simulated* subscription through every committed re-anchor above the
+    /// derived cursor, in version order, using the exact wholeness evaluation
+    /// the real loop uses ([`evaluate_crossing`] fed by [`run_eligible`]-
+    /// filtered acquisition pairs). There is no second ordering or derivation
+    /// path: this is a pure read-only replay of the same predicates the sweep
+    /// applies, so its prediction cannot drift from what the sweep then does.
+    ///
+    /// A module in the result (a brand-new module whose sources this target
+    /// holds whole, at a split / modularization / merge crossing) needs
+    /// NOTHING from the baseline — the crossing relabels objects already
+    /// present. Modules NOT in the result the guard treats as before:
+    /// baseline-content refusal if they need it, ordinary replay adoption
+    /// otherwise. A wholeness membrane stops the walk (its own crossing and
+    /// everything after are not forecast as subscribing); the real apply loop
+    /// then surfaces that membrane — a needed-modules block always coincides
+    /// with the blocked module having baseline content, so a named blocked
+    /// module still gets the clean baseline-content refusal here, while an
+    /// unnamed one (bare-source apply) reaches the membrane unpreempted.
+    ///
+    /// No circularity: the evaluation reads only the stored subscription, the
+    /// committed re-anchors, and the migration files' acquisition sections —
+    /// never the requested `--modules` selection.
+    pub async fn forecast_crossings(
+        &self,
+        migrations: &[crate::migration::ParsedMigration],
+    ) -> Result<BTreeSet<String>> {
+        let cursor = self.store.consumed_through_cursor().await?;
+
+        // Acquisition pairs per re-anchor version, read from the paired
+        // migration (if any). A re-anchor with no accompanying DDL (a pure
+        // re-tag) has none. Only re-anchor versions are parsed.
+        let re_anchor_versions: BTreeSet<u64> =
+            self.re_anchors.iter().map(|ra| ra.version).collect();
+        let mut acquirable_by_version: BTreeMap<u64, AcquisitionPairs> = BTreeMap::new();
+        for migration in migrations {
+            if re_anchor_versions.contains(&migration.version) {
+                let sql = std::fs::read_to_string(&migration.path)?;
+                let sections = crate::migration::parse_migration_sections(&migration.path, &sql)?;
+                acquirable_by_version.insert(migration.version, acquisition_pairs(&sections));
+            }
+        }
+
+        let empty = BTreeSet::new();
+        let mut simulated = self.established.clone();
+        for re_anchor in &self.re_anchors {
+            if cursor.is_some_and(|w| re_anchor.version <= w) {
+                continue;
+            }
+            let applied_sections = self
+                .store
+                .covered_baseline_section_names(re_anchor.version)
+                .await?;
+            let acquirable = acquirable_by_version
+                .get(&re_anchor.version)
+                .unwrap_or(&empty);
+            let will_run: BTreeSet<(Option<String>, Option<String>)> = acquirable
+                .iter()
+                .filter(|(module, _)| run_eligible(module, &simulated, &re_anchor.plain_modules))
+                .cloned()
+                .collect();
+            match evaluate_crossing(re_anchor, &simulated, &applied_sections, &will_run) {
+                CrossingCheck::Whole { rewritten } => simulated = rewritten,
+                // A membrane blocks here: don't forecast this crossing or any
+                // after it as subscribing. The real apply loop reaches the same
+                // block and reports it.
+                CrossingCheck::Blocked { .. } => break,
+            }
+        }
+        Ok(simulated.difference(&self.established).cloned().collect())
     }
 
     /// **The crossing loop.** Consume, in version order, every

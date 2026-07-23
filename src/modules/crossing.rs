@@ -158,6 +158,29 @@ pub(crate) fn run_eligible(
     }
 }
 
+/// The `(module, source)` remap pairs a set of sections carries — the
+/// acquisition deltas whose "will it run in this apply" the crossing gate
+/// needs. `(unmoduled)` maps to `None` on either side. Shared by the apply
+/// loop (per-migration, feeding the two-phase gate) and the read-only crossing
+/// forecast the adoption guard consults, so both derive acquisition the same
+/// way.
+pub(crate) fn acquisition_pairs(
+    sections: &[crate::migration::section_parser::MigrationSection],
+) -> BTreeSet<(Option<String>, Option<String>)> {
+    sections
+        .iter()
+        .filter_map(|s| {
+            let remap = s.remaps.as_deref()?;
+            let source = if remap == UNMODULED_DISPLAY {
+                None
+            } else {
+                Some(remap.to_string())
+            };
+            Some((s.module.clone(), source))
+        })
+        .collect()
+}
+
 /// The extended wholeness rule. A remap section is **satisfied** iff its
 /// source is established (objects present under the source's name → the
 /// crossing relabels) OR the target has already applied the section (a

@@ -94,6 +94,8 @@ pub use crossing::PendingCrossing;
 // crate-level re-export is for the latter and is otherwise unnamed here.
 #[allow(unused_imports)]
 pub(crate) use crossing::run_eligible;
+// Shared by the apply loop's two-phase gate and the guard's crossing forecast.
+pub(crate) use crossing::acquisition_pairs;
 #[allow(unused_imports)]
 pub use partition::{ModuleReferenceReport, validate_module_references};
 #[allow(unused_imports)]
