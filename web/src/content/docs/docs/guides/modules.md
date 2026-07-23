@@ -21,14 +21,14 @@ directories:
 
 modules:
   core:
-    paths: ["schema/core/**"]
+    paths: ['schema/core/**']
 
   billing:
-    paths: ["schema/billing/**"]
+    paths: ['schema/billing/**']
     depends_on: [core]
 
   analytics:
-    paths: ["schema/analytics/**"]
+    paths: ['schema/analytics/**']
     depends_on: [core]
 ```
 
