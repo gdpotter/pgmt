@@ -2,6 +2,7 @@
 name = "pgmt"
 version = "0.5.1"
 edition = "2024"
+rust-version = "1.97"
 description = "PostgreSQL migration tool that keeps your schema files as the source of truth"
 license = "MIT"
 repository = "https://github.com/gdpotter/pgmt"
