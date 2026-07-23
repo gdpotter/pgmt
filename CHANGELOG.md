@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.6.0 - 2026-07-23
+
 ### Features
 
 - **Modules**: partition a schema into named modules (`modules:` in pgmt.yaml, path globs over schema files) and deploy subsets per target with `--modules` on `migrate apply`/`provision`. Migrations and baselines are generated with module-tagged sections; targets track which modules they hold, skip the rest without a trace, and warn when an established module is left out of a deploy. Modules can be adopted late onto an established database, and re-partitioning (splitting a module, modularizing an existing project) is handled by re-anchoring baselines — existing targets pick up the new partition on their next apply without running any DDL. Fully opt-in: projects without a `modules:` block behave exactly as before.
