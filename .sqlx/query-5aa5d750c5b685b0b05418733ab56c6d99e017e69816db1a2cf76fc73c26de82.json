@@ -1,0 +1,97 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            i.relname AS \"name!\",\n            pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true) AS \"expression!\",\n            cn.nspname AS \"collation_schema?\",\n            c.collname AS \"collation_name?\",\n            CASE\n                WHEN op.opcname IS NOT NULL\n                THEN quote_ident(opn.nspname) || '.' || quote_ident(op.opcname)\n                ELSE NULL\n            END AS \"opclass?\",\n            CASE\n                WHEN idx.indoption[col_pos-1] & 1 = 1 THEN 'DESC'\n                ELSE 'ASC'\n            END AS \"ordering!\",\n            CASE\n                WHEN idx.indoption[col_pos-1] & 2 = 2 THEN 'NULLS FIRST'\n                ELSE 'NULLS LAST'\n            END AS \"nulls_ordering!\",\n            col_pos > idx.indnkeyatts AS \"is_included!\"\n        FROM pg_index idx\n        JOIN pg_class i ON idx.indexrelid = i.oid\n        JOIN pg_namespace n ON i.relnamespace = n.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_namespace tn ON t.relnamespace = tn.oid\n        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos\n        LEFT JOIN pg_attribute a ON a.attrelid = t.oid\n                                 AND a.attnum = idx.indkey[col_pos-1]\n                                 AND idx.indkey[col_pos-1] > 0\n        -- Per-key collation lives in pg_index.indcollation (oidvector,\n        -- 0-indexed), NOT in the underlying column's attcollation — an explicit\n        -- `CREATE INDEX ... (col COLLATE \"x\")` override only shows up there.\n        -- Record it only when it differs from what the key would inherit:\n        -- the column's own collation for plain column keys, the database\n        -- default collation for expression keys (an expression's true derived\n        -- collation is not reachable from SQL; recording any non-default\n        -- collation is round-trip stable because re-fetching the applied index\n        -- yields the same value).\n        LEFT JOIN pg_collation c\n            ON c.oid = idx.indcollation[col_pos-1]\n            AND idx.indcollation[col_pos-1] != 0\n            AND (\n                CASE\n                    WHEN idx.indkey[col_pos-1] > 0\n                        THEN idx.indcollation[col_pos-1] IS DISTINCT FROM a.attcollation\n                    ELSE idx.indcollation[col_pos-1] != 'pg_catalog.\"default\"'::regcollation\n                END\n            )\n        LEFT JOIN pg_namespace cn ON c.collnamespace = cn.oid\n        LEFT JOIN pg_opclass op ON col_pos <= array_length(idx.indclass, 1)\n                                AND idx.indclass[col_pos-1] = op.oid\n        LEFT JOIN pg_namespace opn ON op.opcnamespace = opn.oid\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          AND NOT idx.indisprimary\n        ORDER BY n.nspname, i.relname, col_pos\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expression!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "collation_schema?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "collation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "opclass?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "ordering!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "nulls_ordering!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_included!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5aa5d750c5b685b0b05418733ab56c6d99e017e69816db1a2cf76fc73c26de82"
+}

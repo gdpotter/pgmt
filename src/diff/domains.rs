@@ -2,6 +2,7 @@
 
 use crate::catalog::domain::Domain;
 use crate::diff::operations::{DomainOperation, MigrationStep};
+use crate::render::quote_ident;
 
 /// Build the CREATE DOMAIN definition string
 fn build_domain_definition(domain: &Domain) -> String {
@@ -16,7 +17,11 @@ fn build_domain_definition(domain: &Domain) -> String {
     }
 
     if let Some(collation) = &domain.collation {
-        parts.push(format!("COLLATE \"{}\"", collation));
+        parts.push(format!(
+            "COLLATE {}.{}",
+            quote_ident(&collation.schema),
+            quote_ident(&collation.name)
+        ));
     }
 
     for constraint in &domain.check_constraints {

@@ -4,8 +4,8 @@ use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::catalog::id::DependsOn;
 use pgmt::diff::operations::{
-    CommentOperation, MigrationStep, SchemaOperation, SqlRenderer, TableOperation, TypeOperation,
-    ViewOperation,
+    CollationOperation, CommentOperation, MigrationStep, SchemaOperation, SqlRenderer,
+    TableOperation, TypeOperation, ViewOperation,
 };
 use pgmt::diff::plan;
 
@@ -1007,5 +1007,156 @@ async fn test_create_view_with_column_comments_migration() -> Result<()> {
         )
         .await?;
 
+    Ok(())
+}
+
+/// A view whose body uses a custom collation must be created after the
+/// collation: the plan orders CREATE COLLATION before CREATE VIEW, applies to
+/// a fresh database, and the round-tripped view keeps the dependency.
+#[tokio::test]
+async fn test_view_using_collation_orders_collation_first() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &[
+                "CREATE COLLATION case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+                "CREATE TABLE people (id INTEGER, name TEXT)",
+                "CREATE VIEW sorted_people AS SELECT id, name FROM people ORDER BY name COLLATE case_insensitive",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                let collation_idx = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::Collation(CollationOperation::Create { .. }))
+                    })
+                    .expect("plan should create the collation");
+                let view_idx = steps
+                    .iter()
+                    .position(|s| {
+                        matches!(s, MigrationStep::View(ViewOperation::Create { name, .. })
+                            if name == "sorted_people")
+                    })
+                    .expect("plan should create the view");
+                assert!(
+                    collation_idx < view_idx,
+                    "CREATE COLLATION must come before the view that uses it"
+                );
+
+                // The fresh-database apply inside run_migration_test proves the
+                // plan is complete; verify the round-tripped state too.
+                assert_eq!(final_catalog.collations.len(), 1);
+                let view = final_catalog
+                    .views
+                    .iter()
+                    .find(|v| v.name == "sorted_people")
+                    .expect("view should round-trip");
+                assert!(
+                    view.depends_on().iter().any(|d| matches!(
+                        d,
+                        pgmt::catalog::id::DbObjectId::Collation { name, .. }
+                            if name == "case_insensitive"
+                    )),
+                    "round-tripped view keeps its collation dependency"
+                );
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Changing a collation's attributes forces a drop/recreate of the collation;
+/// a view referencing it in its body must cascade through the recreate:
+/// drop view -> drop collation -> create collation -> create view, the plan
+/// applies cleanly, and a re-diff is empty.
+#[tokio::test]
+async fn test_collation_change_cascades_dependent_view() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+    let (initial_db, target_db) = helper.setup_migration_test().await;
+
+    initial_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)")
+        .await;
+    initial_db
+        .execute("CREATE TABLE people (id INTEGER, name TEXT)")
+        .await;
+    initial_db
+        .execute(
+            "CREATE VIEW sorted_people AS SELECT id, name FROM people ORDER BY name COLLATE ci",
+        )
+        .await;
+
+    target_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = true)")
+        .await;
+    target_db
+        .execute("CREATE TABLE people (id INTEGER, name TEXT)")
+        .await;
+    target_db
+        .execute(
+            "CREATE VIEW sorted_people AS SELECT id, name FROM people ORDER BY name COLLATE ci",
+        )
+        .await;
+
+    let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
+    let steps = helper
+        .run_migration_pipeline(&initial_catalog, &target_catalog)
+        .await?;
+
+    let drop_view = steps
+        .iter()
+        .position(|s| {
+            matches!(s, MigrationStep::View(ViewOperation::Drop { name, .. }) if name == "sorted_people")
+        })
+        .expect("dependent view must be dropped");
+    let drop_collation = steps
+        .iter()
+        .position(|s| {
+            matches!(s, MigrationStep::Collation(CollationOperation::Drop { name, .. }) if name == "ci")
+        })
+        .expect("collation must be dropped");
+    let create_collation = steps
+        .iter()
+        .position(|s| {
+            matches!(s, MigrationStep::Collation(CollationOperation::Create { collation }) if collation.name == "ci")
+        })
+        .expect("collation must be recreated");
+    let create_view = steps
+        .iter()
+        .position(|s| {
+            matches!(s, MigrationStep::View(ViewOperation::Create { name, .. }) if name == "sorted_people")
+        })
+        .expect("view must be recreated");
+    assert!(
+        drop_view < drop_collation,
+        "dependent view must be dropped before the collation"
+    );
+    assert!(
+        drop_collation < create_collation,
+        "collation drop must precede its recreate"
+    );
+    assert!(
+        create_collation < create_view,
+        "view must be recreated after the collation"
+    );
+
+    // Apply to the real initial database, then re-diff: must be empty.
+    helper.execute_migration(&initial_db, &steps).await?;
+    let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    assert!(final_catalog.collations[0].deterministic);
+    let rediff = helper
+        .run_migration_pipeline(&final_catalog, &target_catalog)
+        .await?;
+    assert!(
+        rediff.is_empty(),
+        "re-diff after applying the cascade must be empty, got: {rediff:?}"
+    );
+
+    initial_db.cleanup().await;
+    target_db.cleanup().await;
     Ok(())
 }

@@ -1,5 +1,6 @@
 use crate::helpers::harness::with_test_db;
 
+use pgmt::catalog::collation::CollationRef;
 use pgmt::catalog::custom_type::{TypeKind, fetch};
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 
@@ -621,6 +622,79 @@ async fn test_composite_type_multilevel_dependency() {
         assert!(priority_type.depends_on().contains(&DbObjectId::Schema {
             name: "public".to_string()
         }));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_composite_attribute_with_explicit_collation() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TYPE tagged AS (label text COLLATE ci, note text)")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        assert_eq!(types.len(), 1);
+        let type_ = &types[0];
+
+        // The explicitly collated attribute carries a qualified CollationRef.
+        assert_eq!(type_.composite_attributes[0].name, "label");
+        assert_eq!(
+            type_.composite_attributes[0].collation,
+            Some(CollationRef {
+                schema: "public".to_string(),
+                name: "ci".to_string(),
+            })
+        );
+
+        // A plain text attribute uses its type's default collation: no ref.
+        assert_eq!(type_.composite_attributes[1].name, "note");
+        assert_eq!(type_.composite_attributes[1].collation, None);
+
+        // The user-defined collation is a managed dependency of the type.
+        assert!(
+            type_.depends_on().contains(&DbObjectId::Collation {
+                schema: "public".to_string(),
+                name: "ci".to_string(),
+            }),
+            "composite type should depend on the collation, got: {:?}",
+            type_.depends_on()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_composite_attribute_with_system_collation() {
+    with_test_db(async |db| {
+        db.execute("CREATE TYPE tagged AS (label text COLLATE \"C\", note text)")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        let type_ = &types[0];
+
+        // A system collation is stored (so it renders) ...
+        assert_eq!(
+            type_.composite_attributes[0].collation,
+            Some(CollationRef {
+                schema: "pg_catalog".to_string(),
+                name: "C".to_string(),
+            })
+        );
+
+        // ... but adds no managed dependency: pg_catalog collations are not
+        // pgmt-managed objects.
+        assert!(
+            !type_
+                .depends_on()
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Collation { .. })),
+            "system collation must not add a managed dependency, got: {:?}",
+            type_.depends_on()
+        );
     })
     .await;
 }

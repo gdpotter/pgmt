@@ -499,3 +499,147 @@ async fn test_index_extension_function_dependency() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn test_fetch_index_with_explicit_collation_override() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION german_ci (provider = icu, locale = 'de-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TABLE users (name text)").await;
+        db.execute("CREATE INDEX idx_users_name_ci ON users (name COLLATE german_ci)")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_users_name_ci")
+            .expect("index with collation override should be in catalog");
+        assert_eq!(
+            idx.columns[0].collation,
+            Some(pgmt::catalog::collation::CollationRef {
+                schema: "public".to_string(),
+                name: "german_ci".to_string(),
+            }),
+            "explicit per-key COLLATE override must be fetched from indcollation"
+        );
+        assert!(
+            idx.depends_on()
+                .contains(&pgmt::catalog::id::DbObjectId::Collation {
+                    schema: "public".to_string(),
+                    name: "german_ci".to_string(),
+                }),
+            "index with custom key collation should depend on the collation, got: {:?}",
+            idx.depends_on()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_index_inheriting_column_collation_records_none() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION german_ci (provider = icu, locale = 'de-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TABLE users (name text COLLATE german_ci)")
+            .await;
+        db.execute("CREATE INDEX idx_users_name ON users (name)")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_users_name")
+            .expect("index should be in catalog");
+        assert_eq!(
+            idx.columns[0].collation, None,
+            "a key that merely inherits its column's collation must not record one"
+        );
+        assert!(
+            !idx.depends_on()
+                .iter()
+                .any(|d| matches!(d, pgmt::catalog::id::DbObjectId::Collation { .. })),
+            "inherited collation orders via the table dependency, not a direct edge"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_expression_index_with_collation_override() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION german_ci (provider = icu, locale = 'de-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TABLE users (name text)").await;
+        db.execute("CREATE INDEX idx_users_lower_name ON users ((lower(name)) COLLATE german_ci)")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_users_lower_name")
+            .expect("expression index should be in catalog");
+        assert_eq!(
+            idx.columns[0].collation,
+            Some(pgmt::catalog::collation::CollationRef {
+                schema: "public".to_string(),
+                name: "german_ci".to_string(),
+            })
+        );
+        assert!(
+            idx.depends_on()
+                .contains(&pgmt::catalog::id::DbObjectId::Collation {
+                    schema: "public".to_string(),
+                    name: "german_ci".to_string(),
+                })
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_fetch_index_with_system_collation_override() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE users (name text)").await;
+        db.execute("CREATE INDEX idx_users_name_c ON users (name COLLATE \"C\")")
+            .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_users_name_c")
+            .expect("index should be in catalog");
+        // The override is recorded (it differs from the column's collation)...
+        assert_eq!(
+            idx.columns[0].collation,
+            Some(pgmt::catalog::collation::CollationRef {
+                schema: "pg_catalog".to_string(),
+                name: "C".to_string(),
+            })
+        );
+        // ...but a pg_catalog collation is not a managed object, so no edge.
+        assert!(
+            !idx.depends_on()
+                .iter()
+                .any(|d| matches!(d, pgmt::catalog::id::DbObjectId::Collation { .. }))
+        );
+    })
+    .await;
+}

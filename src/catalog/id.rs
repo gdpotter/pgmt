@@ -25,6 +25,10 @@ pub enum DbObjectId {
         schema: String,
         name: String,
     },
+    Collation {
+        schema: String,
+        name: String,
+    },
     Function {
         schema: String,
         name: String,
@@ -107,6 +111,7 @@ impl DbObjectId {
             | DbObjectId::View { schema, .. }
             | DbObjectId::Type { schema, .. }
             | DbObjectId::Domain { schema, .. }
+            | DbObjectId::Collation { schema, .. }
             | DbObjectId::Function { schema, .. }
             | DbObjectId::Procedure { schema, .. }
             | DbObjectId::Sequence { schema, .. }
@@ -133,6 +138,7 @@ impl fmt::Display for DbObjectId {
             Self::View { schema, name } => write!(f, "view {schema}.{name}"),
             Self::Type { schema, name } => write!(f, "type {schema}.{name}"),
             Self::Domain { schema, name } => write!(f, "domain {schema}.{name}"),
+            Self::Collation { schema, name } => write!(f, "collation {schema}.{name}"),
             Self::Function {
                 schema,
                 name,

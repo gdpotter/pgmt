@@ -173,6 +173,19 @@ impl CatalogIdentity {
 
             UNION ALL
 
+            -- Collations (excluding extension-owned; collations are first-class
+            -- objects with their own pg_depend 'e' entry)
+            SELECT 'collation', n.nspname, c.collname, NULL, NULL
+            FROM pg_collation c
+            JOIN pg_namespace n ON c.collnamespace = n.oid
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
+
+            UNION ALL
+
             -- Constraints (unique, foreign key, check, exclusion - primary keys
             -- handled by table). Constraints on extension-owned tables are
             -- excluded via the parent table — they have no 'e' entry of their own.
@@ -250,6 +263,10 @@ impl CatalogIdentity {
                     name: row.name.clone(),
                 },
                 "domain" => DbObjectId::Domain {
+                    schema: row.schema.clone().unwrap_or_default(),
+                    name: row.name.clone(),
+                },
+                "collation" => DbObjectId::Collation {
                     schema: row.schema.clone().unwrap_or_default(),
                     name: row.name.clone(),
                 },

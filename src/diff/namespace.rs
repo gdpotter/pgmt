@@ -116,6 +116,10 @@ pub fn namespace_slots(id: &DbObjectId) -> Vec<NamespaceSlot> {
         // Casts are keyed by (source, target) and share no name-space with any
         // other object kind.
         | DbObjectId::Cast { .. }
+        // Collations live in the `pg_collation` namespace, keyed by
+        // (schema, name, encoding); they do not collide with any other object
+        // kind, so same-name conflicts are covered by the exact-identity rule.
+        | DbObjectId::Collation { .. }
         | DbObjectId::Column { .. } => vec![],
     }
 }

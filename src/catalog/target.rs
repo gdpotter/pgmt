@@ -92,6 +92,7 @@ impl AttrTarget {
             | DbObjectId::View { schema, name }
             | DbObjectId::Type { schema, name }
             | DbObjectId::Domain { schema, name }
+            | DbObjectId::Collation { schema, name }
             | DbObjectId::Sequence { schema, name }
             | DbObjectId::Index { schema, name } => (schema.clone(), name.clone()),
             DbObjectId::Function { schema, name, .. }

@@ -3,6 +3,7 @@
 
 pub mod aggregates;
 pub mod casts;
+pub mod collations;
 pub mod constraints;
 pub mod custom_types;
 pub mod domains;

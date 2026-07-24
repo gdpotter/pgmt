@@ -26,6 +26,7 @@ Requires PostgreSQL 13 or later.
 | Composite types        | 🚧     | Create/drop and attribute comments; `ALTER TYPE ADD/DROP/ALTER ATTRIBUTE` not supported                                                                        |
 | Domains                | 🚧     | Create/drop; some `ALTER DOMAIN` constraint operations missing                                                                                                 |
 | Range types            | ✅     |                                                                                                                                                                |
+| Collations             | ✅     | libc, ICU, and builtin (PG17+) providers; `deterministic`, ICU `rules` (PG16+); `collversion` is ignored by design (it varies by machine)                      |
 | Functions & procedures | ✅     | Overloading; volatility, `STRICT`, `SECURITY`, `PARALLEL` attributes. `OUT`/`INOUT`/`VARIADIC` parameters and parameter defaults not supported                 |
 | Aggregates             | ✅     |                                                                                                                                                                |
 | Operators              | ✅     | All clauses (`COMMUTATOR`, `NEGATOR`, `RESTRICT`, `JOIN`, `HASHES`, `MERGES`), prefix operators                                                                |
@@ -44,9 +45,11 @@ Requires PostgreSQL 13 or later.
 
 Dependencies come from the PostgreSQL catalogs, not from parsing your SQL:
 objects are created, altered, and dropped in dependency order, including
-function signatures, view references, foreign keys, sequence ownership, and
-extension-provided types, functions, and operator classes (an index using
-`gin_trgm_ops` is ordered after `CREATE EXTENSION pg_trgm`).
+function signatures, view references, foreign keys, sequence ownership,
+collations (a domain, table column, composite attribute, index key, or view
+using a custom collation is ordered after it), and extension-provided types,
+functions, and operator classes (an index using `gin_trgm_ops` is ordered
+after `CREATE EXTENSION pg_trgm`).
 
 The one gap PostgreSQL itself has: it records no dependencies for the _bodies_
 of SQL functions. When a function body references another object, add an
@@ -55,8 +58,19 @@ file.
 
 ## Known Issues and Sharp Edges
 
-- **Function body dependencies** — PostgreSQL doesn't track them; use
-  `-- require:` (see above).
+- **Function body dependencies** — PostgreSQL doesn't track them (including
+  `COLLATE` clauses inside a body); use `-- require:` (see above).
+- **Collation changes are drop + recreate** — PostgreSQL can't alter a
+  collation's provider, locale, determinism, or rules, so any attribute change
+  recreates the collation and cascades to its dependents. When the cascade
+  reaches a table column, the table recreate is a destructive operation that
+  loses data — flagged for review like any other destructive recreate.
+- **libc collations name OS locales** — the locale must also exist inside the
+  [shadow database](/docs/concepts/shadow-database) image, or validation fails
+  with `could not create locale`. Point `shadow` at an image (or connection)
+  with matching locales, or prefer ICU collations: their locale strings are
+  self-contained, and ICU is what you want for case-insensitive collations
+  anyway.
 - **Enum values** — append-only; reordering or removing a value requires a
   manual table rewrite, as in PostgreSQL itself.
 - **I/O and binary casts in views** — casts created `WITH INOUT` or

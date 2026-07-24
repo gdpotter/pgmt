@@ -1,0 +1,97 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            n.nspname AS \"schema!\",\n            c.collname AS \"name!\",\n            c.collprovider::text AS \"provider!\",\n            c.collisdeterministic AS \"deterministic!\",\n            CASE WHEN c.collprovider = 'c' THEN to_jsonb(c)->>'collcollate' END AS \"lc_collate?\",\n            CASE WHEN c.collprovider = 'c' THEN to_jsonb(c)->>'collctype' END AS \"lc_ctype?\",\n            CASE WHEN c.collprovider IN ('i', 'b') THEN\n                COALESCE(\n                    to_jsonb(c)->>'colllocale',\n                    to_jsonb(c)->>'colliculocale',\n                    to_jsonb(c)->>'collcollate'\n                )\n            END AS \"locale?\",\n            CASE WHEN c.collprovider = 'i' THEN to_jsonb(c)->>'collicurules' END AS \"rules?\",\n            d.description AS \"comment?\"\n        FROM pg_collation c\n        JOIN pg_namespace n ON c.collnamespace = n.oid\n        LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0\n        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n          -- Exclude collations that belong to extensions (collations are\n          -- first-class objects with their own pg_depend 'e' entry)\n          AND NOT EXISTS (\n              SELECT 1 FROM pg_depend dep\n              WHERE dep.objid = c.oid\n              AND dep.deptype = 'e'\n          )\n        ORDER BY n.nspname, c.collname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "deterministic!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collisdeterministic"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "lc_collate?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "lc_ctype?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "locale?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "rules?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "comment?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_description",
+            "name": "description"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "62f2d3a531a07e02afcb80b0f3277bbc234dc51995e8bd30c4991fd81170d4d1"
+}

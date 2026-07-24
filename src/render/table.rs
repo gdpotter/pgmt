@@ -2,6 +2,7 @@
 
 use crate::catalog::id::DbObjectId;
 use crate::diff::operations::{ColumnAction, TableOperation};
+use crate::render::collation::collate_clause;
 use crate::render::{RenderedSql, Safety, SqlRenderer, quote_ident};
 
 impl SqlRenderer for TableOperation {
@@ -77,11 +78,12 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
 
             RenderedSql {
                 sql: format!(
-                    "ALTER TABLE {}.{} ADD COLUMN {} {}{}{}{}{};",
+                    "ALTER TABLE {}.{} ADD COLUMN {} {}{}{}{}{}{};",
                     quote_ident(schema),
                     quote_ident(table),
                     quote_ident(&column.name),
                     column.data_type,
+                    collate_clause(column.collation.as_ref()),
                     generated_clause,
                     identity_clause,
                     default_clause,
@@ -176,13 +178,21 @@ fn render_column_action(action: &ColumnAction, schema: &str, table: &str) -> Ren
             ),
             safety: Safety::Destructive,
         },
-        ColumnAction::AlterType { name, new_type } => RenderedSql {
+        // Omitting COLLATE deliberately resets the column to its type's
+        // default collation — PostgreSQL recomputes collation from the TYPE
+        // clause on every ALTER TYPE.
+        ColumnAction::AlterType {
+            name,
+            new_type,
+            new_collation,
+        } => RenderedSql {
             sql: format!(
-                "ALTER TABLE {}.{} ALTER COLUMN {} TYPE {};",
+                "ALTER TABLE {}.{} ALTER COLUMN {} TYPE {}{};",
                 quote_ident(schema),
                 quote_ident(table),
                 quote_ident(name),
-                new_type
+                new_type,
+                collate_clause(new_collation.as_ref())
             ),
             safety: Safety::Destructive,
         },
@@ -264,6 +274,7 @@ mod tests {
             not_null: true,
             generated: None,
             identity: None,
+            collation: None,
             comment: None,
             depends_on: vec![],
         }
@@ -279,6 +290,7 @@ mod tests {
                 not_null: true,
                 generated: None,
                 identity: None,
+                collation: None,
                 comment: None,
                 depends_on: vec![],
             },
@@ -340,6 +352,7 @@ mod tests {
             not_null: false,
             generated: None,
             identity: None,
+            collation: None,
             comment: None,
             depends_on: vec![],
         };
@@ -430,6 +443,7 @@ mod tests {
             actions: vec![ColumnAction::AlterType {
                 name: "count".to_string(),
                 new_type: "bigint".to_string(),
+                new_collation: None,
             }],
         };
         let rendered = op.to_sql();
