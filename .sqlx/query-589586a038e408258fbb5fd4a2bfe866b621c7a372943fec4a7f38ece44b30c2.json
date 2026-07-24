@@ -97,12 +97,24 @@
       {
         "ordinal": 11,
         "name": "collation_schema?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_namespace",
+            "name": "nspname"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "collation_name?",
-        "type_info": "Name"
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
       },
       {
         "ordinal": 13,
