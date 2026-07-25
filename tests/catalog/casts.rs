@@ -265,3 +265,38 @@ async fn test_view_using_cast_records_function_not_cast() {
     })
     .await;
 }
+
+/// The lightweight identity snapshot must produce the same `DbObjectId` the
+/// full fetcher does, and must skip built-in casts the same way — otherwise
+/// casts are invisible to file-to-object attribution.
+#[tokio::test]
+async fn test_identity_snapshot_matches_fetcher() {
+    with_test_db(async |db| {
+        db.execute(TEMP_TYPES).await;
+        db.execute(C_TO_F_FN).await;
+        db.execute(C_TO_F_CAST).await;
+
+        let expected: Vec<DbObjectId> = fetch(&mut *db.conn().await)
+            .await
+            .unwrap()
+            .iter()
+            .map(|c| c.id())
+            .collect();
+        assert_eq!(expected.len(), 1);
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        let casts: Vec<&DbObjectId> = identity
+            .objects
+            .iter()
+            .filter(|o| matches!(o, DbObjectId::Cast { .. }))
+            .collect();
+        assert_eq!(
+            casts,
+            expected.iter().collect::<Vec<_>>(),
+            "identity snapshot must carry exactly the user cast"
+        );
+    })
+    .await;
+}

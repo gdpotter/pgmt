@@ -198,3 +198,40 @@ async fn test_skip_builtin_operators() {
     })
     .await;
 }
+
+/// The lightweight identity snapshot must produce the same `DbObjectId` the
+/// full fetcher does, including the prefix-operator `NONE` operand form —
+/// otherwise operators are invisible to file-to-object attribution.
+#[tokio::test]
+async fn test_identity_snapshot_matches_fetcher() {
+    with_test_db(async |db| {
+        db.execute(INT_EQ_FN).await;
+        db.execute(
+            "CREATE OPERATOR === (LEFTARG = integer, RIGHTARG = integer, FUNCTION = my_int_eq)",
+        )
+        .await;
+        db.execute("CREATE FUNCTION my_neg(integer) RETURNS integer AS $$ SELECT -$1 $$ LANGUAGE sql IMMUTABLE")
+            .await;
+        db.execute("CREATE OPERATOR !!! (RIGHTARG = integer, FUNCTION = my_neg)")
+            .await;
+
+        let expected: Vec<DbObjectId> = fetch(&mut *db.conn().await)
+            .await
+            .unwrap()
+            .iter()
+            .map(|op| op.id())
+            .collect();
+        assert_eq!(expected.len(), 2);
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        for id in &expected {
+            assert!(
+                identity.objects.contains(id),
+                "identity snapshot missing {id}"
+            );
+        }
+    })
+    .await;
+}

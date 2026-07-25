@@ -217,6 +217,53 @@ impl CatalogIdentity {
 
             UNION ALL
 
+            -- Operators (excluding extension-owned). "args" is the canonical
+            -- "left, right" operand string DROP/COMMENT ON OPERATOR require,
+            -- with NONE for an absent operand.
+            SELECT 'operator', n.nspname, o.oprname,
+                   NULL,
+                   CASE WHEN o.oprleft = 0 THEN 'NONE' ELSE format_type(o.oprleft, NULL) END
+                     || ', '
+                     || CASE WHEN o.oprright = 0 THEN 'NONE' ELSE format_type(o.oprright, NULL) END
+            FROM pg_operator o
+            JOIN pg_namespace n ON o.oprnamespace = n.oid
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = o.oid
+                  AND dep.classid = 'pg_operator'::regclass
+                  AND dep.deptype = 'e'
+              )
+
+            UNION ALL
+
+            -- Casts (excluding extension-owned). Casts are not schema-scoped;
+            -- their identity is the (source, target) type pair, carried in the
+            -- "name" and "tbl" columns. Only user casts qualify: creating one
+            -- requires owning the source or target type, so at least one side
+            -- is outside the system schemas.
+            SELECT 'cast', NULL,
+                   format_type(c.castsource, NULL),
+                   format_type(c.casttarget, NULL),
+                   NULL
+            FROM pg_cast c
+            JOIN pg_type st ON c.castsource = st.oid
+            JOIN pg_namespace st_n ON st.typnamespace = st_n.oid
+            JOIN pg_type tt ON c.casttarget = tt.oid
+            JOIN pg_namespace tt_n ON tt.typnamespace = tt_n.oid
+            WHERE (
+                st_n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                OR tt_n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid
+                  AND dep.classid = 'pg_cast'::regclass
+                  AND dep.deptype = 'e'
+              )
+
+            UNION ALL
+
             -- Extensions
             SELECT 'extension', NULL, extname, NULL, NULL
             FROM pg_extension
@@ -281,6 +328,15 @@ impl CatalogIdentity {
                     schema: row.schema.clone().unwrap_or_default(),
                     table: row.tbl.clone().unwrap_or_default(),
                     name: row.name.clone(),
+                },
+                "operator" => DbObjectId::Operator {
+                    schema: row.schema.clone().unwrap_or_default(),
+                    name: row.name.clone(),
+                    arguments: row.args.clone().unwrap_or_default(),
+                },
+                "cast" => DbObjectId::Cast {
+                    source: row.name.clone(),
+                    target: row.tbl.clone().unwrap_or_default(),
                 },
                 "extension" => DbObjectId::Extension {
                     name: row.name.clone(),

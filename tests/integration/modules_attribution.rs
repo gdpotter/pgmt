@@ -68,7 +68,7 @@ async fn process(
             objects: config.objects.clone(),
         },
     );
-    Ok(processor.process_schema_directory(&root.join("schema")).await?)
+    processor.process_schema_directory(&root.join("schema")).await
 }
 
 #[tokio::test]
@@ -88,7 +88,7 @@ modules:
 "#,
         )?;
 
-        let processed = process(&db, &config, project.path()).await?;
+        let processed = process(db, &config, project.path()).await?;
 
         let partition = ModulePartition::from_config(&config)?;
 
@@ -151,7 +151,7 @@ modules:
 "#,
         )?;
 
-        let processed = process(&db, &config, project.path()).await?;
+        let processed = process(db, &config, project.path()).await?;
 
         let partition = ModulePartition::from_config(&config)?;
         let report = validate_module_references(
@@ -207,7 +207,7 @@ modules:
     paths: ["schema/core/**"]
 "#,
         )?;
-        let processed = process(&db, &config, project.path()).await?;
+        let processed = process(db, &config, project.path()).await?;
         let partition = ModulePartition::from_config(&config)?;
 
         assert_eq!(
@@ -264,7 +264,7 @@ modules:
     depends_on: [core]
 "#,
         )?;
-        let processed = process(&db, &with_dep, project.path()).await?;
+        let processed = process(db, &with_dep, project.path()).await?;
         let partition = ModulePartition::from_config(&with_dep)?;
 
         assert_eq!(

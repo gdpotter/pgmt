@@ -295,6 +295,10 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
                     table, "ext_owned",
                     "identity must exclude triggers on extension tables"
                 ),
+                DbObjectId::Policy { table, .. } => assert_ne!(
+                    table, "ext_owned",
+                    "identity must exclude policies on extension tables"
+                ),
                 _ => {}
             }
         }
