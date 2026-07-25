@@ -61,9 +61,9 @@ By default, pgmt provisions the shadow database as a throwaway container. This n
 - **Colima, OrbStack, Rancher Desktop** and similar — all speak the Docker API; pgmt checks their common socket locations, and any of them can also be selected via `DOCKER_HOST`.
 - **Remote or nonstandard setups** — set `DOCKER_HOST` to any Docker-compatible endpoint.
 
-Note this is separate from wherever your *dev database* runs. pgmt connects to your dev database directly over postgres — it doesn't need container access to it. The runtime requirement exists only so pgmt can create and destroy shadow instances on its own.
+Note this is separate from wherever your _dev database_ runs. pgmt connects to your dev database directly over postgres — it doesn't need container access to it. The runtime requirement exists only so pgmt can create and destroy shadow instances on its own.
 
-**Why a whole container, and not a database on a server you already have?** Some of what pgmt manages — roles in particular — is cluster-wide, not per-database. The shadow needs to be a pristine, disposable *cluster* so that building your schema (roles and all) can't leak state into a server you care about. A container is the cheapest way to get one.
+**Why a whole container, and not a database on a server you already have?** Some of what pgmt manages — roles in particular — is cluster-wide, not per-database. The shadow needs to be a pristine, disposable _cluster_ so that building your schema (roles and all) can't leak state into a server you care about. A container is the cheapest way to get one.
 
 **No container runtime at all?** Set `shadow.url` to a database on a **dedicated, throwaway server** (a CI service container, say) and pgmt will use it as the shadow instead. Because of the cluster-wide state above, never point it at a server that hosts anything you care about — pgmt resets the shadow on every run. See the [Configuration Reference](/docs/reference/configuration).
 

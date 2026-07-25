@@ -1315,9 +1315,11 @@ mod tests {
 
         // Rootless Podman socket follows XDG_RUNTIME_DIR when set.
         if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-            assert!(candidates
-                .iter()
-                .any(|(_, path)| *path == format!("unix://{}/podman/podman.sock", runtime_dir)));
+            assert!(
+                candidates
+                    .iter()
+                    .any(|(_, path)| *path == format!("unix://{}/podman/podman.sock", runtime_dir))
+            );
         }
 
         // On macOS, should include Docker Desktop, Colima, and OrbStack
