@@ -131,8 +131,8 @@ impl ModulePartition {
 
     /// The owning module of a catalog object, via the file that created it.
     /// Objects not attributable to a schema file belong to the base — except
-    /// attached state (a comment), which inherits the module of the object it
-    /// attaches to.
+    /// attached state (a comment, an unclaimed policy), which inherits the
+    /// module of the object it attaches to.
     pub fn module_for_object<'a>(
         &'a self,
         id: &DbObjectId,
@@ -143,6 +143,17 @@ impl ModulePartition {
             // A comment is attached state: it belongs with its target.
             None => match id {
                 DbObjectId::Comment { object_id } => self.module_for_object(object_id, mapping),
+                // A policy no file claims belongs with the table it guards.
+                // A policy written in a file keeps that file's module, so
+                // policies deliberately placed in a dependent module stay
+                // there.
+                DbObjectId::Policy { schema, table, .. } => self.module_for_object(
+                    &DbObjectId::Table {
+                        schema: schema.clone(),
+                        name: table.clone(),
+                    },
+                    mapping,
+                ),
                 _ => Ok(None),
             },
         }
@@ -182,12 +193,17 @@ impl HistoricalAttribution {
     }
 
     /// The module that historically created this object (`None` = the base).
-    /// Attached state (comments) follows the object it attaches to.
+    /// Attached state (comments, unrecorded policies) follows the object it
+    /// attaches to.
     pub fn module_of(&self, id: &DbObjectId) -> Option<&str> {
         match self.object_modules.get(id) {
             Some(module) => module.as_deref(),
             None => match id {
                 DbObjectId::Comment { object_id } => self.module_of(object_id),
+                DbObjectId::Policy { schema, table, .. } => self.module_of(&DbObjectId::Table {
+                    schema: schema.clone(),
+                    name: table.clone(),
+                }),
                 _ => None,
             },
         }
@@ -773,6 +789,46 @@ mod tests {
             partition.module_for_object(&comment, &mapping)?,
             Some("core"),
             "an unattributed comment belongs with the object it annotates"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_policy_inherits_parent_table_module() -> Result<()> {
+        let mut config = config_with_modules(&[
+            ("core", &["schema/core/**"], &[], &[]),
+            ("policies", &["schema/policies/**"], &["core"], &[]),
+        ]);
+        config.directories.schema = "schema".to_string();
+        let partition = ModulePartition::from_config(&config)?;
+
+        let users = DbObjectId::Table {
+            schema: "public".to_string(),
+            name: "users".to_string(),
+        };
+        let unclaimed = DbObjectId::Policy {
+            schema: "public".to_string(),
+            table: "users".to_string(),
+            name: "users_self".to_string(),
+        };
+        let placed = DbObjectId::Policy {
+            schema: "public".to_string(),
+            table: "users".to_string(),
+            name: "users_admin".to_string(),
+        };
+        let mut mapping = FileToObjectMapping::new();
+        mapping.add_object("core/users.sql".to_string(), users.clone());
+        mapping.add_object("policies/users_admin.sql".to_string(), placed.clone());
+
+        assert_eq!(
+            partition.module_for_object(&unclaimed, &mapping)?,
+            Some("core"),
+            "a policy no file claims belongs with the table it guards"
+        );
+        assert_eq!(
+            partition.module_for_object(&placed, &mapping)?,
+            Some("policies"),
+            "a policy written in a file keeps that file's module"
         );
         Ok(())
     }

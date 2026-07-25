@@ -201,6 +201,20 @@ pub fn sectionize_steps(
         if historical.object_modules.contains_key(id) {
             return Ok(historical.module_of(id).map(str::to_string));
         }
+        // A policy neither claimed by a file nor recorded in history is
+        // attached state: it belongs with the table it guards.
+        if let DbObjectId::Policy { schema, table, .. } = id {
+            return resolve_module(
+                &DbObjectId::Table {
+                    schema: schema.clone(),
+                    name: table.clone(),
+                },
+                partition,
+                desired_mapping,
+                historical,
+                grant_targets,
+            );
+        }
         Ok(None)
     }
 

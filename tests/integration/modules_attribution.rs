@@ -46,6 +46,31 @@ fn table(name: &str) -> DbObjectId {
     }
 }
 
+fn policy(table: &str, name: &str) -> DbObjectId {
+    DbObjectId::Policy {
+        schema: "public".to_string(),
+        table: table.to_string(),
+        name: name.to_string(),
+    }
+}
+
+/// Apply a schema directory and return the processed result.
+async fn process(
+    db: &crate::helpers::harness::TestDatabase,
+    config: &pgmt::config::Config,
+    root: &std::path::Path,
+) -> Result<pgmt::db::schema_processor::ProcessedSchema> {
+    let processor = SchemaProcessor::new(
+        db.pool().clone(),
+        SchemaProcessorConfig {
+            verbose: false,
+            clean_before_apply: false,
+            objects: config.objects.clone(),
+        },
+    );
+    Ok(processor.process_schema_directory(&root.join("schema")).await?)
+}
+
 #[tokio::test]
 async fn test_object_module_attribution_through_schema_apply() -> Result<()> {
     with_test_db(async |db| {
@@ -63,17 +88,7 @@ modules:
 "#,
         )?;
 
-        let processor = SchemaProcessor::new(
-            db.pool().clone(),
-            SchemaProcessorConfig {
-                verbose: false,
-                clean_before_apply: false,
-                objects: config.objects.clone(),
-            },
-        );
-        let processed = processor
-            .process_schema_directory(&project.path().join("schema"))
-            .await?;
+        let processed = process(&db, &config, project.path()).await?;
 
         let partition = ModulePartition::from_config(&config)?;
 
@@ -136,17 +151,7 @@ modules:
 "#,
         )?;
 
-        let processor = SchemaProcessor::new(
-            db.pool().clone(),
-            SchemaProcessorConfig {
-                verbose: false,
-                clean_before_apply: false,
-                objects: config.objects.clone(),
-            },
-        );
-        let processed = processor
-            .process_schema_directory(&project.path().join("schema"))
-            .await?;
+        let processed = process(&db, &config, project.path()).await?;
 
         let partition = ModulePartition::from_config(&config)?;
         let report = validate_module_references(
@@ -170,6 +175,145 @@ modules:
                 .iter()
                 .any(|e| e.contains("unmoduled object") && e.contains("billing")),
             "base→billing reference should be a hard error: {:?}",
+            report
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// An RLS policy created alongside its table in a module's file is attributed
+/// to that module. Regression: policies were absent from the identity snapshot,
+/// so no file claimed them; they fell to the base and their (mandatory)
+/// reference to the module's table was reported as a base→module violation.
+#[tokio::test]
+async fn test_policy_attributed_to_its_own_module() -> Result<()> {
+    with_test_db(async |db| {
+        let project = TempDir::new()?;
+        let schema = project.path().join("schema");
+        fs::create_dir_all(schema.join("core"))?;
+        fs::write(
+            schema.join("core/users.sql"),
+            "CREATE TABLE users (id SERIAL PRIMARY KEY);\n\
+             ALTER TABLE users ENABLE ROW LEVEL SECURITY;\n\
+             CREATE POLICY users_self ON users USING (true);",
+        )?;
+
+        let config = modules_config(
+            r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+"#,
+        )?;
+        let processed = process(&db, &config, project.path()).await?;
+        let partition = ModulePartition::from_config(&config)?;
+
+        assert_eq!(
+            partition.module_for_object(&policy("users", "users_self"), &processed.file_mapping)?,
+            Some("core"),
+            "a policy defined in core's file belongs to core"
+        );
+
+        let report = validate_module_references(
+            &processed.catalog,
+            &processed.file_mapping,
+            &partition,
+            &config,
+        )?;
+        assert!(
+            report.is_clean(),
+            "a policy on its own module's table is intra-module: {:?}",
+            report
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// A policy on another module's table keeps the module of the file that
+/// defines it: with `depends_on` declared the cross-module reference validates
+/// cleanly, and without it the same layout only warns.
+#[tokio::test]
+async fn test_policy_in_dependent_module_keeps_its_file_module() -> Result<()> {
+    with_test_db(async |db| {
+        let project = TempDir::new()?;
+        let schema = project.path().join("schema");
+        fs::create_dir_all(schema.join("core"))?;
+        fs::create_dir_all(schema.join("policies"))?;
+        fs::write(
+            schema.join("core/users.sql"),
+            "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+        )?;
+        fs::write(
+            schema.join("policies/users_rls.sql"),
+            "-- require: core/users.sql\n\
+             ALTER TABLE users ENABLE ROW LEVEL SECURITY;\n\
+             CREATE POLICY users_self ON users USING (true);",
+        )?;
+
+        let with_dep = modules_config(
+            r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+  policies:
+    paths: ["schema/policies/**"]
+    depends_on: [core]
+"#,
+        )?;
+        let processed = process(&db, &with_dep, project.path()).await?;
+        let partition = ModulePartition::from_config(&with_dep)?;
+
+        assert_eq!(
+            partition.module_for_object(&policy("users", "users_self"), &processed.file_mapping)?,
+            Some("policies"),
+            "explicit file placement wins over the parent-table fallback"
+        );
+        assert_eq!(
+            partition.module_for_object(&table("users"), &processed.file_mapping)?,
+            Some("core")
+        );
+
+        let report = validate_module_references(
+            &processed.catalog,
+            &processed.file_mapping,
+            &partition,
+            &with_dep,
+        )?;
+        assert!(
+            report.is_clean(),
+            "declared policies→core dep should validate cleanly: {:?}",
+            report
+        );
+
+        // The same layout without the declared dependency: a warning, not an
+        // error (both sides are modules).
+        let without_dep = modules_config(
+            r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+  policies:
+    paths: ["schema/policies/**"]
+"#,
+        )?;
+        let partition = ModulePartition::from_config(&without_dep)?;
+        let report = validate_module_references(
+            &processed.catalog,
+            &processed.file_mapping,
+            &partition,
+            &without_dep,
+        )?;
+        assert!(report.errors.is_empty(), "{:?}", report);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("policies") && w.contains("core")),
+            "undeclared policies→core reference should warn: {:?}",
             report
         );
 

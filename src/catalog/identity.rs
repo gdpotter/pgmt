@@ -203,6 +203,20 @@ impl CatalogIdentity {
 
             UNION ALL
 
+            -- RLS policies (excluding those on extension-owned relations, via
+            -- the parent — policies get no 'e' entry of their own)
+            SELECT 'policy', n.nspname, pol.polname, c.relname, NULL
+            FROM pg_policy pol
+            JOIN pg_class c ON pol.polrelid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = c.oid AND dep.deptype = 'e'
+              )
+
+            UNION ALL
+
             -- Extensions
             SELECT 'extension', NULL, extname, NULL, NULL
             FROM pg_extension
@@ -259,6 +273,11 @@ impl CatalogIdentity {
                     name: row.name.clone(),
                 },
                 "trigger" => DbObjectId::Trigger {
+                    schema: row.schema.clone().unwrap_or_default(),
+                    table: row.tbl.clone().unwrap_or_default(),
+                    name: row.name.clone(),
+                },
+                "policy" => DbObjectId::Policy {
                     schema: row.schema.clone().unwrap_or_default(),
                     table: row.tbl.clone().unwrap_or_default(),
                     name: row.name.clone(),
