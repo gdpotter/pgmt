@@ -68,7 +68,9 @@ async fn process(
             objects: config.objects.clone(),
         },
     );
-    processor.process_schema_directory(&root.join("schema")).await
+    processor
+        .process_schema_directory(&root.join("schema"))
+        .await
 }
 
 #[tokio::test]
