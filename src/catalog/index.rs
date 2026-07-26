@@ -1,3 +1,8 @@
+//! The logical index: what an index is once names are resolved and OIDs are
+//! gone.
+//!
+//! Loading lives in `catalog::raw::index`.
+
 use super::id::{DbObjectId, DependsOn};
 
 /* ---------- Data structures ---------- */

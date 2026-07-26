@@ -21,6 +21,7 @@ use crate::catalog::schema::Schema;
 
 /// Convert the shared namespace map into the logical catalog, with each schema's
 /// comment attached through the OID index.
+#[allow(dead_code)]
 pub fn load(shared: &SharedCatalog) -> Result<Vec<Schema>> {
     Ok(load_with_exclusions(shared)?.log_and_take_objects("schema"))
 }

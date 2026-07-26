@@ -71,6 +71,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawSequences> {
 
 /// Fetch sequences and convert them into the logical catalog, with each
 /// sequence's comment attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Sequence>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

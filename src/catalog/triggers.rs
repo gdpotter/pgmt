@@ -1,3 +1,8 @@
+//! The logical trigger: what a trigger is once names are resolved and OIDs are
+//! gone.
+//!
+//! Loading lives in `catalog::raw::trigger`.
+
 use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Represents a PostgreSQL trigger

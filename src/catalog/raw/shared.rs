@@ -78,6 +78,7 @@ pub struct NamespaceMap {
 
 impl NamespaceMap {
     /// A map of the given `(oid, name)` pairs.
+    #[allow(dead_code)]
     pub fn from_pairs(pairs: impl IntoIterator<Item = (Oid, String)>) -> Self {
         Self {
             by_oid: pairs.into_iter().map(|(oid, name)| (oid.0, name)).collect(),
@@ -88,10 +89,12 @@ impl NamespaceMap {
         self.by_oid.get(&oid.0).map(String::as_str)
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.by_oid.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_oid.is_empty()
     }
@@ -119,6 +122,7 @@ impl ExtensionOwnership {
         self.owners.get(&(class, oid.0)).map(String::as_str)
     }
 
+    #[allow(dead_code)]
     pub fn is_owned(&self, class: &'static str, oid: Oid) -> bool {
         self.owner(class, oid).is_some()
     }
@@ -134,16 +138,9 @@ impl ExtensionOwnership {
         self.owner(class::PG_CLASS, parent_relation)
     }
 
+    #[allow(dead_code)]
     pub fn is_relation_subobject_owned(&self, parent_relation: Oid) -> bool {
         self.owner_of_relation_subobject(parent_relation).is_some()
-    }
-
-    pub fn len(&self) -> usize {
-        self.owners.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.owners.is_empty()
     }
 }
 
@@ -174,14 +171,6 @@ impl Descriptions {
         self.by_key
             .range((class, oid.0, 1)..=(class, oid.0, i32::MAX))
             .map(|((_, _, subid), text)| (*subid, text.as_str()))
-    }
-
-    pub fn len(&self) -> usize {
-        self.by_key.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_key.is_empty()
     }
 }
 
@@ -234,14 +223,6 @@ impl TypeMap {
         }
         Some(entry)
     }
-
-    pub fn len(&self) -> usize {
-        self.by_oid.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_oid.is_empty()
-    }
 }
 
 /// A type reference resolved into everything a converter needs to name it and
@@ -249,9 +230,6 @@ impl TypeMap {
 /// their element type, and the schema and owning extension are looked up.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedType<'a> {
-    /// OID of the element type for an array reference, of the type itself
-    /// otherwise. This is the OID an extension owns.
-    pub oid: Oid,
     pub schema: Option<&'a str>,
     pub name: &'a str,
     pub typtype: &'a str,
@@ -294,7 +272,6 @@ impl SharedCatalog {
     pub fn resolve_type(&self, oid: Oid) -> Option<ResolvedType<'_>> {
         let entry = self.types.element_or_self(oid)?;
         Some(ResolvedType {
-            oid: entry.oid,
             schema: self.namespaces.name(entry.namespace),
             name: &entry.name,
             typtype: &entry.typtype,

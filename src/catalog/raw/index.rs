@@ -116,6 +116,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawIndexes> {
 
 /// Fetch indexes and convert them into the logical catalog, with each index's
 /// comment attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Index>> {
     Ok(load_with_exclusions(conn, shared)
         .await?
@@ -357,6 +358,15 @@ fn storage_parameters(reloptions: &Option<Vec<String>>) -> Vec<(String, String)>
 }
 
 async fn fetch_indexes(conn: &mut PgConnection) -> Result<Vec<RawIndex>> {
+    // The `backing_constraint` subquery names the primary-key, unique or
+    // exclusion constraint an index implements, which is what the converter
+    // excludes the index for. Only those three contypes own an index: a foreign
+    // key's `conindid` points at the *referenced* table's index, which stays a
+    // user index of its own.
+    //
+    // `sqlx::query!` needs a string literal, so this cannot be interpolated from
+    // `exclusion::sql::not_a_constraint_backing_index`, which spells the same
+    // rule for the identity snapshot; the two are bound by this comment.
     let rows = sqlx::query!(
         r#"
         SELECT

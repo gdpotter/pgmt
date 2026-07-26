@@ -92,6 +92,7 @@ pub enum ExclusionReason {
 
 impl ExclusionReason {
     /// A stable identifier for the reason, independent of its payload.
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             ExclusionReason::SystemSchema => "SystemSchema",
@@ -112,8 +113,10 @@ impl ExclusionReason {
 /// identity for an object that deliberately has none.
 #[derive(Debug, Clone)]
 pub struct Excluded {
+    #[allow(dead_code)]
     pub oid: Oid,
     /// The kind of raw row, in the singular ("table", "operator").
+    #[allow(dead_code)]
     pub kind: &'static str,
     pub schema: String,
     pub name: String,
@@ -219,6 +222,7 @@ impl<T> Converted<T> {
     }
 
     /// The excluded rows carrying one reason, by the reason's name.
+    #[allow(dead_code)]
     pub fn excluded_for(&self, reason: &str) -> impl Iterator<Item = &Excluded> {
         self.excluded
             .iter()

@@ -1,9 +1,11 @@
 //! `CatalogIdentity::load` and a full `Catalog` load must see the same objects.
 //!
-//! The identity snapshot is a hand-maintained UNION ALL that re-implements every
-//! per-kind filter. When a branch is missing or a filter drifts, objects get
-//! misattributed during incremental apply and module partitioning, silently. The
-//! symmetric difference below turns that class of drift into a test failure.
+//! The identity snapshot is one UNION ALL composed from the shared exclusion
+//! fragments the converters apply, with a branch per kind. A missing branch, or
+//! a branch whose filters do not add up to what its converter does, misattributes
+//! objects during incremental apply and module partitioning, silently — and none
+//! of it is compile-time checked. The symmetric difference below turns that class
+//! of drift into a test failure.
 
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;

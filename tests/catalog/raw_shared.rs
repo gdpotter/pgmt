@@ -241,7 +241,7 @@ async fn test_comments_attach_through_the_oid_index() -> Result<()> {
             Some("Contact address")
         );
 
-        // An uncommented object simply has no entry.
+        // An uncommented object has no entry.
         let orders_oid = relation_oid(db, "app.orders").await;
         assert!(index.contains(class::PG_CLASS, orders_oid));
         assert_eq!(

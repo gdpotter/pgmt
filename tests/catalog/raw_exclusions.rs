@@ -688,7 +688,7 @@ async fn test_conversion_yields_the_physical_catalog() -> Result<()> {
     .await
 }
 
-/// The excluded rows keep their OIDs so a future census can reconcile them
+/// The excluded rows keep their OIDs, so an excluded row can be reconciled
 /// against a catalog enumeration without inventing an identity for an object
 /// that deliberately has none.
 #[tokio::test]

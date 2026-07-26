@@ -72,7 +72,6 @@ impl DependencyBuilder {
 
     /// Add a custom type dependency if the type is not a system type.
     /// Used when objects reference user-defined types (ENUMs, DOMAINs, COMPOSITE).
-    /// Note: Prefer `add_type_dependency()` when extension and typtype information is available.
     #[allow(dead_code)] // Used in tests; kept as a simpler API when extension detection isn't needed
     pub fn add_custom_type(&mut self, type_schema: Option<String>, type_name: Option<String>) {
         if let (Some(schema), Some(name)) = (type_schema, type_name)
@@ -94,9 +93,6 @@ impl DependencyBuilder {
     /// ```sql
     /// CASE WHEN t.typelem != 0 THEN elem_t.typname ELSE t.typname END AS "type_name?"
     /// ```
-    ///
-    /// Note: Prefer `add_type_dependency()` when you have access to `typtype` information,
-    /// as it correctly distinguishes domains from other custom types.
     #[allow(dead_code)] // Used in tests; kept as a simpler API when typtype isn't available
     pub fn add_type_or_extension(
         &mut self,
@@ -114,39 +110,6 @@ impl DependencyBuilder {
         {
             // Type name should already be resolved to element type for arrays via SQL
             self.deps.push(DbObjectId::Type { schema, name });
-        }
-    }
-
-    /// Add a type dependency with proper distinction between domains, tables, views, and custom types.
-    ///
-    /// This method uses `typtype` and `relkind` from pg_type/pg_class to correctly categorize:
-    /// - 'd' = domain → `DbObjectId::Domain`
-    /// - 'c' + relkind 'r'/'p' = table composite type → `DbObjectId::Table`
-    /// - 'c' + relkind 'v'/'m' = view composite type → `DbObjectId::View`
-    /// - 'c' + no relkind = explicit composite → `DbObjectId::Type`
-    /// - 'e' = enum, 'r' = range, etc. → `DbObjectId::Type`
-    ///
-    /// Use this method when you have access to `typtype` information (e.g., for function
-    /// parameters and return types). Falls back to `DbObjectId::Type` if typtype is unknown.
-    #[allow(dead_code)] // Used in tests; converters call resolve_type_dependency directly
-    pub fn add_type_dependency(
-        &mut self,
-        type_schema: Option<String>,
-        type_name: Option<String>,
-        typtype: Option<String>,
-        relkind: Option<String>,
-        is_extension: bool,
-        extension_name: Option<String>,
-    ) {
-        if let Some(dep) = resolve_type_dependency(
-            type_schema.as_deref(),
-            type_name.as_deref(),
-            typtype.as_deref(),
-            relkind.as_deref(),
-            is_extension,
-            extension_name.as_deref(),
-        ) {
-            self.deps.push(dep);
         }
     }
 
@@ -268,143 +231,6 @@ mod tests {
             DbObjectId::Type {
                 schema: "app".to_string(),
                 name: "_internal_status".to_string() // Preserved correctly
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_domain() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("app".to_string()),
-            Some("positive_int".to_string()),
-            Some("d".to_string()), // domain
-            None,                  // relkind doesn't matter for domains
-            false,
-            None,
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::Domain {
-                schema: "app".to_string(),
-                name: "positive_int".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_enum() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("app".to_string()),
-            Some("status".to_string()),
-            Some("e".to_string()), // enum
-            None,                  // no relkind for enum types
-            false,
-            None,
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::Type {
-                schema: "app".to_string(),
-                name: "status".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_extension() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("public".to_string()),
-            Some("citext".to_string()),
-            Some("d".to_string()), // typtype doesn't matter when is_extension=true
-            None,                  // relkind doesn't matter for extensions
-            true,
-            Some("citext".to_string()),
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::Extension {
-                name: "citext".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_table_composite() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("app".to_string()),
-            Some("policies".to_string()),
-            Some("c".to_string()), // composite
-            Some("r".to_string()), // table
-            false,
-            None,
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::Table {
-                schema: "app".to_string(),
-                name: "policies".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_view_composite() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("app".to_string()),
-            Some("policy_view".to_string()),
-            Some("c".to_string()), // composite
-            Some("v".to_string()), // view
-            false,
-            None,
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::View {
-                schema: "app".to_string(),
-                name: "policy_view".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_add_type_dependency_with_explicit_composite() {
-        let mut builder = DependencyBuilder::new("test_schema".to_string());
-        builder.add_type_dependency(
-            Some("app".to_string()),
-            Some("address".to_string()),
-            Some("c".to_string()), // composite
-            None,                  // no relkind = explicit CREATE TYPE ... AS
-            false,
-            None,
-        );
-
-        let deps = builder.build();
-        assert_eq!(deps.len(), 2);
-        assert_eq!(
-            deps[1],
-            DbObjectId::Type {
-                schema: "app".to_string(),
-                name: "address".to_string()
             }
         );
     }

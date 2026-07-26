@@ -55,12 +55,13 @@ pub struct RawFunction {
     pub num_args: i16,
 }
 
-/// One input parameter of a routine, in declaration order.
+/// One input parameter of a routine.
+///
+/// Declaration order is the fetch's `ORDER BY proargtypes` ordinal rather than a
+/// field: the converter reads the rows of one routine in the order they arrive.
 #[derive(Debug, Clone)]
 pub struct RawFunctionParameter {
     pub function_oid: Oid,
-    /// 1-based position in `proargtypes`.
-    pub ordinal: i32,
     /// The parameter's type, unresolved: an array's own OID, not its element
     /// type's.
     pub type_oid: Oid,
@@ -131,6 +132,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawFunctions> {
 
 /// Fetch functions and convert them into the logical catalog, with comments
 /// attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Function>> {
     Ok(load_with_exclusions(conn, shared)
         .await?
@@ -547,7 +549,6 @@ async fn fetch_parameters(conn: &mut PgConnection) -> Result<Vec<RawFunctionPara
         .into_iter()
         .map(|row| RawFunctionParameter {
             function_oid: row.function_oid,
-            ordinal: row.ordinal as i32,
             type_oid: row.type_oid,
             formatted_type: row.formatted_type,
             name: row.name,

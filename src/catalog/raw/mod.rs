@@ -15,10 +15,11 @@
 //! A converter also accounts for what it drops: every raw row that does not
 //! become a logical object carries an [`exclusion::ExclusionReason`], so the
 //! rows a converter deliberately excludes can be told apart from rows it lost.
-
-// The layer is consumed by converters and by tests, not by the CLI binary's
-// module tree, so unused-item warnings here would be noise.
-#![allow(dead_code)]
+//!
+//! Items here marked `#[allow(dead_code)]` are reached only from the library's
+//! tests: this source is compiled twice, once as the library and once as the
+//! binary's own crate, and in the binary build a test-only caller does not
+//! exist. Anything with no caller at all belongs deleted, not annotated.
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;

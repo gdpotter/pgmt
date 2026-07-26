@@ -1,3 +1,8 @@
+//! The logical function or procedure: what a routine is once names are
+//! resolved and OIDs are gone.
+//!
+//! Loading lives in `catalog::raw::function`.
+
 use super::id::{DbObjectId, DependsOn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

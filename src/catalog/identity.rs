@@ -4,8 +4,8 @@
 //! (DbObjectId), not full object details. It's used during schema processing to track which
 //! files create which objects, where we only need to know object existence, not their details.
 //!
-//! The single UNION ALL query is ~10-25x faster than a full Catalog::load_unfiltered() because it:
-//! - Runs one query instead of 50+
+//! The single UNION ALL query is far cheaper than a full Catalog::load_unfiltered() because it:
+//! - Runs one query instead of the load's ~40
 //! - Skips columns, comments, dependencies, function bodies, etc.
 //! - Returns only the minimal info needed to construct DbObjectId
 //!
@@ -13,6 +13,12 @@
 //! definitions in [`crate::catalog::raw::snapshot`], which build their filters
 //! from the same exclusion rules the catalog converters apply. What this module
 //! owns is the decoding — turning each row back into a [`DbObjectId`].
+//!
+//! Because the query is assembled at runtime, `sqlx` cannot check it at compile
+//! time, and nothing makes a branch agree with the converter it mirrors. The
+//! gate is the consistency test (`tests/catalog/identity_consistency.rs`), which
+//! asserts this snapshot and a full catalog load report the identical set of
+//! object identities.
 
 use anyhow::Result;
 use sqlx::PgPool;

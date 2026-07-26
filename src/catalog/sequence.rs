@@ -1,3 +1,8 @@
+//! The logical sequence: what a sequence is once names are resolved and OIDs
+//! are gone.
+//!
+//! Loading lives in `catalog::raw::sequence`.
+
 use crate::catalog::id::{DbObjectId, DependsOn};
 
 #[derive(Debug, Clone)]

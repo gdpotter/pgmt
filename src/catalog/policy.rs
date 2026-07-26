@@ -1,3 +1,8 @@
+//! The logical row-level-security policy, once names are resolved and OIDs are
+//! gone.
+//!
+//! Loading lives in `catalog::raw::policy`.
+
 use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Command type for RLS policies

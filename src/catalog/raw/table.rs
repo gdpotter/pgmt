@@ -132,6 +132,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawTables> {
 /// Fetch tables and convert them into the logical catalog, with the table's own
 /// comment, its column comments and its primary key's comment attached through
 /// the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Table>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

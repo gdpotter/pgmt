@@ -90,6 +90,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawTrigger>> {
 
 /// Fetch triggers and convert them into the logical catalog, with each trigger's
 /// comment attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Trigger>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

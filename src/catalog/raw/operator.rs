@@ -147,6 +147,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
 
 /// Fetch operators and convert them into the logical catalog, with comments
 /// attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Operator>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

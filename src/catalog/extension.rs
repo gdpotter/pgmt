@@ -1,3 +1,8 @@
+//! The logical extension: what an installed extension is once names are
+//! resolved and OIDs are gone.
+//!
+//! Loading lives in `catalog::raw::extension`.
+
 use crate::catalog::{DependsOn, id::DbObjectId};
 
 /// Represents a PostgreSQL extension

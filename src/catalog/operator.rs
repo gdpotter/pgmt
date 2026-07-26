@@ -1,3 +1,8 @@
+//! The logical operator: what an operator is once names are resolved and OIDs
+//! are gone.
+//!
+//! Loading lives in `catalog::raw::operator`.
+
 use super::id::{DbObjectId, DependsOn};
 
 /// A user-defined PostgreSQL operator (`CREATE OPERATOR`).

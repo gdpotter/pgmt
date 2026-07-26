@@ -39,15 +39,6 @@ pub struct CompositeAttribute {
     /// The attribute's type as the server renders it, with modifiers and array
     /// brackets. This is what the CREATE statement emits.
     pub type_name: String,
-    // The resolved identity of the attribute's type (element type for an
-    // array), and its dimensionality. Rendering goes through `type_name`; these
-    // describe what the attribute refers to.
-    #[allow(dead_code)]
-    pub type_schema: Option<String>,
-    #[allow(dead_code)]
-    pub raw_type_name: Option<String>,
-    #[allow(dead_code)]
-    pub attndims: i32,
     pub comment: Option<String>,
 }
 
@@ -117,9 +108,6 @@ mod tests {
             .map(|(name, type_name)| CompositeAttribute {
                 name: name.to_string(),
                 type_name: type_name.to_string(),
-                type_schema: None,
-                raw_type_name: None,
-                attndims: 0,
                 comment: None,
             })
             .collect();

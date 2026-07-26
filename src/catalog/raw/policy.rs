@@ -119,6 +119,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawPolicies> {
 
 /// Fetch policies and convert them into the logical catalog, with each policy's
 /// comment attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Policy>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

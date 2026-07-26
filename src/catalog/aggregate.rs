@@ -1,3 +1,8 @@
+//! The logical aggregate: what an aggregate is once names are resolved and
+//! OIDs are gone.
+//!
+//! Loading lives in `catalog::raw::aggregate`.
+
 use super::id::{DbObjectId, DependsOn};
 
 /// Represents a PostgreSQL aggregate function

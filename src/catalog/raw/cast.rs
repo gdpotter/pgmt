@@ -89,6 +89,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawCast>> {
 
 /// Fetch casts and convert them into the logical catalog, with comments attached
 /// through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Cast>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

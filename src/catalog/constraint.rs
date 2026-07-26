@@ -1,3 +1,8 @@
+//! The logical constraint: what a unique, foreign-key, check or exclusion
+//! constraint is once names are resolved and OIDs are gone.
+//!
+//! Loading lives in `catalog::raw::constraint`.
+
 use super::id::{DbObjectId, DependsOn};
 
 /* ---------- Data structures ---------- */

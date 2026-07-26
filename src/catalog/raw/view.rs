@@ -118,6 +118,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawViews> {
 
 /// Fetch views and convert them into the logical catalog, with the view's own
 /// comment and its column comments attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<View>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

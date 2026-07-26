@@ -65,6 +65,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawExtension>> {
 
 /// Fetch extensions and convert them into the logical catalog, with each
 /// extension's comment attached through the OID index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Extension>> {
     Ok(load_with_exclusions(conn, shared)
         .await?

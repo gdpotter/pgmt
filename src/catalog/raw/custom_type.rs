@@ -56,7 +56,6 @@ pub struct RawCompositeAttribute {
     /// `format_type(atttypid, atttypmod)` — carries type modifiers and array
     /// brackets, which no Rust-side reconstruction can recover.
     pub formatted_type: String,
-    pub attndims: i32,
 }
 
 /// Everything the custom-type converter reads out of `pg_catalog`.
@@ -102,6 +101,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawCustomTypes> {
 /// Fetch types and convert them into the logical catalog, with the type's own
 /// comment and its composite attributes' comments attached through the OID
 /// index.
+#[allow(dead_code)]
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<CustomType>> {
     Ok(load_with_exclusions(conn, shared)
         .await?
@@ -262,9 +262,6 @@ pub fn convert(
             .push(CompositeAttribute {
                 name: row.name.clone(),
                 type_name: row.formatted_type.clone(),
-                type_schema: resolved.as_ref().and_then(|t| t.schema.map(String::from)),
-                raw_type_name: resolved.as_ref().map(|t| t.name.to_string()),
-                attndims: row.attndims,
                 comment: None,
             });
         entry.attribute_attnums.push(row.attnum);
@@ -289,6 +286,11 @@ async fn fetch_types(conn: &mut PgConnection) -> Result<Vec<RawCustomType>> {
     // A relation's row type is not a type pgmt manages — it exists because the
     // table, view, materialized view or sequence does, and is created and
     // dropped with it.
+    //
+    // `sqlx::query!` needs a string literal, so the rule cannot be interpolated
+    // from one place: the identity snapshot's `type` branch (`raw::snapshot`)
+    // spells the same NOT EXISTS test, and the two must be changed together or
+    // the snapshot starts reporting types the catalog does not.
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -354,8 +356,7 @@ async fn fetch_composite_attributes(conn: &mut PgConnection) -> Result<Vec<RawCo
             a.attnum AS "attnum!",
             a.attname AS "name!",
             a.atttypid AS "attribute_type_oid!",
-            pg_catalog.format_type(a.atttypid, a.atttypmod) AS "formatted_type!",
-            COALESCE(a.attndims, 0)::int AS "attndims!: i32"
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS "formatted_type!"
         FROM pg_type t
         JOIN pg_class c ON t.typrelid = c.oid
         JOIN pg_attribute a ON a.attrelid = c.oid
@@ -376,7 +377,6 @@ async fn fetch_composite_attributes(conn: &mut PgConnection) -> Result<Vec<RawCo
             name: row.name,
             attribute_type_oid: row.attribute_type_oid,
             formatted_type: row.formatted_type,
-            attndims: row.attndims,
         })
         .collect())
 }

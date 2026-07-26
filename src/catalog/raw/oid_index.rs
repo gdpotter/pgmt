@@ -72,18 +72,22 @@ impl OidIndex {
         Ok(index)
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, class: &'static str, oid: Oid) -> Option<&DbObjectId> {
         self.by_key.get(&(class, oid.0))
     }
 
+    #[allow(dead_code)]
     pub fn contains(&self, class: &'static str, oid: Oid) -> bool {
         self.by_key.contains_key(&(class, oid.0))
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.by_key.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_key.is_empty()
     }

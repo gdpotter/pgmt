@@ -1,3 +1,7 @@
+//! The logical cast: what a cast is once names are resolved and OIDs are gone.
+//!
+//! Loading lives in `catalog::raw::cast`.
+
 use super::id::{DbObjectId, DependsOn};
 
 /// A user-defined PostgreSQL cast (`CREATE CAST`).
