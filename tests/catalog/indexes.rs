@@ -1,6 +1,14 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
+use anyhow::Result;
 use pgmt::catalog::id::DependsOn;
-use pgmt::catalog::index::IndexType;
+use pgmt::catalog::index::{Index, IndexType};
+use pgmt::catalog::raw::index as raw_index;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Index>> {
+    load_converted(conn, raw_index::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_indexes() {
@@ -21,7 +29,7 @@ async fn test_fetch_basic_indexes() {
             .await;
         db.execute("CREATE INDEX idx_users_created_partial ON users (created_at) WHERE created_at > '2020-01-01'").await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await).await.unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         // 3 created indexes (excluding primary key which is filtered out)
         assert_eq!(indexes.len(), 3);
@@ -66,9 +74,7 @@ async fn test_fetch_index_with_comment() {
         db.execute("COMMENT ON INDEX idx_products_sku IS 'Index for fast SKU lookups'")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let sku_index = indexes
             .iter()
@@ -105,9 +111,7 @@ async fn test_fetch_index_with_include_columns() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let covering_index = indexes
             .iter()
@@ -141,9 +145,7 @@ async fn test_fetch_expression_index() {
         db.execute("CREATE INDEX idx_users_email_lower ON users (lower(email))")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let expr_index = indexes
             .iter()
@@ -178,9 +180,7 @@ async fn test_fetch_multicolumn_index() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let multi_index = indexes
             .iter()
@@ -213,9 +213,7 @@ async fn test_fetch_gin_index() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let gin_index = indexes
             .iter()
@@ -251,9 +249,7 @@ async fn test_fetch_index_dependencies() {
         db.execute("CREATE INDEX idx_tasks_priority ON tasks (priority_level)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let priority_index = indexes
             .iter()
@@ -290,9 +286,7 @@ async fn test_fetch_index_with_storage_parameters() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let param_index = indexes
             .iter()
@@ -329,9 +323,7 @@ async fn test_fetch_indexes_across_schemas() {
         db.execute("CREATE INDEX idx_schema ON test_schema.schema_table (name)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         // Should have indexes from both schemas
         let public_index = indexes
@@ -368,9 +360,7 @@ async fn test_primary_key_indexes_excluded() {
         db.execute("CREATE INDEX idx_users_name ON users (name)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         // Should only have 1 index: the explicit idx_users_name index.
         // The primary key index is excluded (managed as part of PRIMARY KEY constraint).
@@ -422,9 +412,7 @@ async fn test_unique_index_with_fk_reference_not_excluded() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         // The standalone unique index should NOT be excluded just because a FK references it.
         // FKs reference indexes but don't own them - only unique/exclusion constraints own their backing index.
@@ -451,9 +439,7 @@ async fn test_index_extension_opclass_dependency() {
         db.execute("CREATE INDEX idx_film_title_trgm ON film USING gin (title gin_trgm_ops)")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let idx = indexes
             .iter()
@@ -480,9 +466,7 @@ async fn test_index_extension_function_dependency() {
         db.execute("CREATE INDEX idx_people_soundex ON people (soundex(last_name))")
             .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
 
         let idx = indexes
             .iter()
@@ -517,9 +501,7 @@ async fn test_identity_snapshot_keeps_index_referenced_by_foreign_key() {
         )
         .await;
 
-        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
         assert!(
             indexes.iter().any(|i| i.name == "users_email_idx"),
             "FK-referenced unique index should be in the full catalog"

@@ -9,8 +9,8 @@
 //!
 //! What lives here is the cross-cutting state that is addressed by OID in
 //! `pg_catalog` — the namespace map, extension-ownership edges, and
-//! `pg_description` rows — plus the [`index::OidIndex`] that turns an OID back
-//! into a logical [`crate::catalog::id::DbObjectId`].
+//! `pg_description` rows — plus the [`oid_index::OidIndex`] that turns an OID
+//! back into a logical [`crate::catalog::id::DbObjectId`].
 //!
 //! A converter also accounts for what it drops: every raw row that does not
 //! become a logical object carries an [`exclusion::ExclusionReason`], so the
@@ -22,12 +22,15 @@
 
 pub mod aggregate;
 pub mod cast;
+pub mod constraint;
 pub mod custom_type;
 pub mod domain;
 pub mod exclusion;
 pub mod function;
 pub mod index;
+pub mod oid_index;
 pub mod operator;
+pub mod sequence;
 pub mod shared;
 pub mod table;
 pub mod view;

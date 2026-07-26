@@ -1,0 +1,172 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            i.oid AS \"oid!\",\n            i.relnamespace AS \"namespace!\",\n            i.relname AS \"name!\",\n            t.oid AS \"table_oid!\",\n            t.relnamespace AS \"table_namespace!\",\n            t.relname AS \"table_name!\",\n            am.amname AS \"access_method!\",\n            idx.indisunique AS \"is_unique!\",\n            idx.indisclustered AS \"is_clustered!\",\n            idx.indisvalid AS \"is_valid!\",\n            pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS \"predicate?\",\n            ts.spcname AS \"tablespace?\",\n            i.reloptions AS \"reloptions?\",\n            (\n                SELECT con.conname\n                FROM pg_constraint con\n                WHERE con.conindid = i.oid\n                  AND con.contype IN ('p', 'u', 'x')\n                LIMIT 1\n            ) AS \"backing_constraint?\"\n        FROM pg_index idx\n        JOIN pg_class i ON idx.indexrelid = i.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_am am ON i.relam = am.oid\n        LEFT JOIN pg_tablespace ts ON i.reltablespace = ts.oid\n        ORDER BY i.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "table_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "table_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "table_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "access_method!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_am",
+            "name": "amname"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "is_unique!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisunique"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "is_clustered!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisclustered"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "is_valid!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "predicate?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "tablespace?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_tablespace",
+            "name": "spcname"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "reloptions?",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "reloptions"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "backing_constraint?",
+        "type_info": "Name",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "c037a46f1ea700fa485682900044bcc0d6984b1fcdf7c19cf96cdd7b102511bb"
+}

@@ -1,0 +1,105 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT\n            d.objid AS \"index_oid!\",\n            cl.relname AS \"ref_class!\",\n            d.refobjid AS \"ref_oid!\",\n            t.typnamespace AS \"type_namespace?\",\n            t.typname AS \"type_name?\",\n            p.pronamespace AS \"function_namespace?\",\n            p.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"function_args?\"\n        FROM pg_depend d\n        JOIN pg_index idx ON idx.indexrelid = d.objid\n        JOIN pg_class cl ON cl.oid = d.refclassid\n        LEFT JOIN pg_type t ON d.refclassid = 'pg_type'::regclass AND d.refobjid = t.oid\n        LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid\n        WHERE d.classid = 'pg_class'::regclass\n          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_opclass'::regclass)\n        ORDER BY d.objid, cl.relname, d.refobjid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "index_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_depend",
+            "name": "objid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ref_class!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "ref_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_depend",
+            "name": "refobjid"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "type_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "type_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typname"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "function_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "function_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "function_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "c176928e8c480f4649657b9544d822b9921cad9dade710b742d8602bd0dd4d40"
+}

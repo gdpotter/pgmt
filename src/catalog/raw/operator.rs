@@ -13,7 +13,7 @@ use sqlx::postgres::types::Oid;
 use tracing::info;
 
 use super::exclusion::{Converted, Excluded, ExclusionReason};
-use super::index::OidIndex;
+use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::operator::Operator;

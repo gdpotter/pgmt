@@ -23,7 +23,21 @@ pub enum ExclusionReason {
     /// The object was installed by an extension, recorded as a `pg_depend` row
     /// with `deptype = 'e'`. Its lifecycle belongs to `CREATE EXTENSION`, not to
     /// a schema file.
+    ///
+    /// For a sub-object of a relation — a constraint, index, trigger or policy —
+    /// the extension is the one owning the *parent table*: such sub-objects never
+    /// get a `deptype = 'e'` row of their own.
     ExtensionOwned { extension: String },
+    /// The index implements a primary-key, unique or exclusion constraint, so
+    /// the constraint catalog reports it and `ADD CONSTRAINT` creates it. A
+    /// foreign key's `conindid` merely points at the *referenced* table's index,
+    /// which stays a user index of its own.
+    ConstraintBackingIndex { constraint: String },
+    /// The sequence backs a `GENERATED ... AS IDENTITY` column (`pg_depend`
+    /// `deptype = 'i'`): it is internal to the column and has no lifecycle of its
+    /// own. A `SERIAL` column's sequence is *not* this — it is a standalone
+    /// sequence the column merely defaults from, and it stays in the catalog.
+    IdentityOwnedSequence { table: String, column: String },
 }
 
 impl ExclusionReason {
@@ -32,6 +46,8 @@ impl ExclusionReason {
         match self {
             ExclusionReason::SystemSchema => "SystemSchema",
             ExclusionReason::ExtensionOwned { .. } => "ExtensionOwned",
+            ExclusionReason::ConstraintBackingIndex { .. } => "ConstraintBackingIndex",
+            ExclusionReason::IdentityOwnedSequence { .. } => "IdentityOwnedSequence",
         }
     }
 }

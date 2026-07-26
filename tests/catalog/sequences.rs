@@ -1,8 +1,15 @@
 //! Integration tests for sequence catalog functionality
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
-use pgmt::catalog::sequence::fetch;
+use pgmt::catalog::raw::sequence as raw_sequence;
+use pgmt::catalog::sequence::Sequence;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Sequence>> {
+    load_converted(conn, raw_sequence::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_sequence() -> Result<()> {
@@ -298,9 +305,7 @@ async fn test_identity_sequences_are_not_standalone() {
         )
         .await;
 
-        let sequences = pgmt::catalog::sequence::fetch(&mut *db.conn().await)
-            .await
-            .unwrap();
+        let sequences = fetch(&mut *db.conn().await).await.unwrap();
         let names: Vec<&str> = sequences.iter().map(|s| s.name.as_str()).collect();
         assert!(
             names.contains(&"rental_legacy_id_seq"),

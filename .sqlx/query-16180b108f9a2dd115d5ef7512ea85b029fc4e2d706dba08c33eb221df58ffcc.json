@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.relnamespace AS \"namespace!\",\n            c.relname AS \"name!\",\n            s.seqtypid AS \"type_oid?\",\n            s.seqstart AS \"start_value?\",\n            s.seqmin AS \"min_value?\",\n            s.seqmax AS \"max_value?\",\n            s.seqincrement AS \"increment?\",\n            s.seqcycle AS \"cycle?\"\n        FROM pg_class c\n        LEFT JOIN pg_sequence s ON s.seqrelid = c.oid\n        WHERE c.relkind = 'S'\n        ORDER BY c.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "type_oid?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqtypid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "start_value?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqstart"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "min_value?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqmin"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "max_value?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqmax"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "increment?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqincrement"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "cycle?",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_sequence",
+            "name": "seqcycle"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "16180b108f9a2dd115d5ef7512ea85b029fc4e2d706dba08c33eb221df58ffcc"
+}

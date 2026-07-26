@@ -2,9 +2,10 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::raw::{
-    custom_type as raw_custom_type, function as raw_function, table as raw_table, view as raw_view,
+    constraint as raw_constraint, custom_type as raw_custom_type, function as raw_function,
+    index as raw_index, sequence as raw_sequence, table as raw_table, view as raw_view,
 };
-use pgmt::catalog::{constraint, grant, index, policy, sequence, triggers};
+use pgmt::catalog::{grant, policy, triggers};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {
@@ -131,8 +132,8 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         let types_before = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_before = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_before = load_converted(&mut *db.conn().await, raw_view::load).await?;
-        let sequences_before = sequence::fetch(&mut *db.conn().await).await?;
-        let indexes_before = index::fetch(&mut *db.conn().await).await?;
+        let sequences_before = load_converted(&mut *db.conn().await, raw_sequence::load).await?;
+        let indexes_before = load_converted(&mut *db.conn().await, raw_index::load).await?;
         let grants_before = grant::fetch(&mut *db.conn().await).await?;
 
         // Create the uuid-ossp extension which may create various objects
@@ -144,8 +145,8 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         let types_after = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_after = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_after = load_converted(&mut *db.conn().await, raw_view::load).await?;
-        let sequences_after = sequence::fetch(&mut *db.conn().await).await?;
-        let indexes_after = index::fetch(&mut *db.conn().await).await?;
+        let sequences_after = load_converted(&mut *db.conn().await, raw_sequence::load).await?;
+        let indexes_after = load_converted(&mut *db.conn().await, raw_index::load).await?;
         let grants_after = grant::fetch(&mut *db.conn().await).await?;
 
         // All counts should remain the same - extension objects should be filtered out
@@ -247,7 +248,7 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
             "Extension-owned table should be filtered from table catalog"
         );
 
-        let constraints = constraint::fetch(&mut *db.conn().await).await?;
+        let constraints = load_converted(&mut *db.conn().await, raw_constraint::load).await?;
         assert!(
             !constraints.iter().any(|c| c.table_name == "ext_owned"),
             "Constraints on extension-owned tables should be filtered, found: {:?}",
@@ -258,7 +259,7 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
                 .collect::<Vec<_>>()
         );
 
-        let indexes = index::fetch(&mut *db.conn().await).await?;
+        let indexes = load_converted(&mut *db.conn().await, raw_index::load).await?;
         assert!(
             !indexes.iter().any(|i| i.name == "ext_owned_name_idx"),
             "Indexes on extension-owned tables should be filtered"

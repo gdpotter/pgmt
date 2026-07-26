@@ -9,8 +9,9 @@ use anyhow::Result;
 use pgmt::catalog::raw::exclusion::ExclusionReason;
 use pgmt::catalog::raw::shared;
 use pgmt::catalog::raw::{
-    aggregate as raw_aggregate, cast as raw_cast, custom_type as raw_custom_type,
-    domain as raw_domain, function as raw_function, operator as raw_operator, table as raw_table,
+    aggregate as raw_aggregate, cast as raw_cast, constraint as raw_constraint,
+    custom_type as raw_custom_type, domain as raw_domain, function as raw_function,
+    index as raw_index, operator as raw_operator, sequence as raw_sequence, table as raw_table,
     view as raw_view,
 };
 use sqlx::postgres::types::Oid;
@@ -709,6 +710,277 @@ async fn test_excluded_rows_keep_their_catalog_oid() -> Result<()> {
             .find(|row| row.name == "adopted")
             .expect("the adopted table should be excluded");
         assert_eq!(adopted.oid, adopted_oid.0);
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_sequence_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE SEQUENCE order_numbers").await;
+        db.execute("CREATE TABLE tickets (id serial, code integer GENERATED ALWAYS AS IDENTITY)")
+            .await;
+        db.execute("CREATE SEQUENCE adopted_counter").await;
+        db.execute("ALTER EXTENSION citext ADD SEQUENCE adopted_counter")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_sequence::fetch(&mut conn).await?;
+        let converted = raw_sequence::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.sequences.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .sequences
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw sequence rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.sequences.len(),
+            "a row was counted twice"
+        );
+
+        // A standalone sequence converts, and so does a SERIAL column's: the
+        // column merely defaults from it, and dropping the column would leave a
+        // sequence pgmt still has to manage.
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, sequence)| sequence.name == "order_numbers")
+        );
+        let serial = converted
+            .objects
+            .iter()
+            .find(|(_, sequence)| sequence.name == "tickets_id_seq")
+            .expect("a SERIAL column's sequence is a standalone sequence");
+        assert_eq!(serial.1.owned_by.as_deref(), Some("public.tickets.id"));
+
+        // The identity column's sequence is internal to the column and says so.
+        let identity = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "tickets_code_seq")
+            .expect("an identity column's sequence should be excluded");
+        assert_eq!(
+            identity.reason,
+            ExclusionReason::IdentityOwnedSequence {
+                table: "tickets".to_string(),
+                column: "code".to_string(),
+            }
+        );
+        assert_eq!(identity.kind, "sequence");
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_counter")
+            .expect("the adopted sequence should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_index_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE INDEX users_email_idx ON users (email)")
+            .await;
+        db.execute("CREATE UNIQUE INDEX users_email_key ON users (email)")
+            .await;
+        db.execute("ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE (email)")
+            .await;
+        db.execute("CREATE INDEX adopted_id_idx ON adopted (id)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_index::fetch(&mut conn).await?;
+        let converted = raw_index::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.indexes.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .indexes
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw index rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.indexes.len(),
+            "a row was counted twice"
+        );
+
+        // A plain index and a plain UNIQUE index are the user's; the indexes
+        // PostgreSQL created for the primary key and the unique constraint
+        // belong to those constraints.
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, index)| index.name == "users_email_idx")
+        );
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, index)| index.name == "users_email_key")
+        );
+
+        let primary_key = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "users_pkey")
+            .expect("a primary key's backing index should be excluded");
+        assert_eq!(
+            primary_key.reason,
+            ExclusionReason::ConstraintBackingIndex {
+                constraint: "users_pkey".to_string()
+            }
+        );
+        assert_eq!(primary_key.kind, "index");
+
+        assert!(
+            converted
+                .excluded_for("ConstraintBackingIndex")
+                .any(|row| row.name == "users_email_unique"),
+            "a unique constraint's backing index should be excluded"
+        );
+
+        // The index on the adopted table has no extension membership of its own:
+        // it is excluded through its parent table's.
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_id_idx")
+            .expect("an index on an extension-owned table should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+
+        // The catalog's own indexes are excluded as system-schema rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog"),
+            "expected pg_catalog indexes to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("ALTER TABLE users ADD CONSTRAINT users_email_not_blank CHECK (email <> '')")
+            .await;
+        db.execute("ALTER TABLE adopted ADD CONSTRAINT adopted_id_positive CHECK (id > 0)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_constraint::fetch(&mut conn).await?;
+        let converted = raw_constraint::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw constraint rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, constraint)| constraint.name == "users_email_not_blank")
+        );
+
+        // The constraint on the adopted table has no extension membership of its
+        // own: it is excluded through its parent table's.
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_id_positive")
+            .expect("a constraint on an extension-owned table should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "constraint");
+
+        // The catalog's own tables carry CHECK constraints, all system rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog"),
+            "expected pg_catalog constraints to be excluded as SystemSchema"
+        );
 
         Ok(())
     })

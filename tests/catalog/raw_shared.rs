@@ -5,7 +5,7 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::DbObjectId;
-use pgmt::catalog::raw::index::OidIndex;
+use pgmt::catalog::raw::oid_index::OidIndex;
 use pgmt::catalog::raw::shared::{self, class};
 use pgmt::catalog::raw::table as raw_table;
 use sqlx::postgres::types::Oid;

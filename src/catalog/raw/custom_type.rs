@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use tracing::info;
 
 use super::exclusion::{Converted, Excluded, ExclusionReason};
-use super::index::OidIndex;
+use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::custom_type::{CompositeAttribute, CustomType, EnumValue, TypeKind};
 use crate::catalog::id::DbObjectId;

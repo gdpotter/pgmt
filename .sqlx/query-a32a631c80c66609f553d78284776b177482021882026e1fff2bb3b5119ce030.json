@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            d.objid AS \"sequence_oid!\",\n            d.deptype::text AS \"deptype!\",\n            t.relnamespace AS \"table_namespace!\",\n            t.relname AS \"table_name!\",\n            a.attname AS \"column_name!\"\n        FROM pg_depend d\n        JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S'\n        JOIN pg_class t ON t.oid = d.refobjid\n        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid\n        WHERE d.classid = 'pg_class'::regclass\n          AND d.objsubid = 0\n          AND d.refclassid = 'pg_class'::regclass\n          AND d.refobjsubid > 0\n          AND d.deptype IN ('a', 'i')\n        ORDER BY d.objid, d.deptype\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sequence_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_depend",
+            "name": "objid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "deptype!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "table_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "table_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "column_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a32a631c80c66609f553d78284776b177482021882026e1fff2bb3b5119ce030"
+}

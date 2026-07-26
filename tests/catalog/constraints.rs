@@ -1,8 +1,15 @@
 //! Tests for constraint catalog functionality
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::constraint::{ConstraintType, fetch};
+use pgmt::catalog::constraint::{Constraint, ConstraintType};
 use pgmt::catalog::id::DependsOn;
+use pgmt::catalog::raw::constraint as raw_constraint;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Constraint>> {
+    load_converted(conn, raw_constraint::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_unique_constraint() -> Result<()> {

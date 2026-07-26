@@ -32,6 +32,7 @@ pub mod class {
     pub const PG_OPERATOR: &str = "pg_operator";
     pub const PG_CAST: &str = "pg_cast";
     pub const PG_CONSTRAINT: &str = "pg_constraint";
+    pub const PG_OPCLASS: &str = "pg_opclass";
     pub const PG_TRIGGER: &str = "pg_trigger";
     pub const PG_POLICY: &str = "pg_policy";
     pub const PG_EXTENSION: &str = "pg_extension";

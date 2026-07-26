@@ -109,9 +109,9 @@ impl Catalog {
         let aggregates = raw::aggregate::load(&mut *conn, &shared).await?;
         let operators = raw::operator::load(&mut *conn, &shared).await?;
         let casts = raw::cast::load(&mut *conn, &shared).await?;
-        let sequences = sequence::fetch(&mut *conn).await?;
-        let indexes = index::fetch(&mut *conn).await?;
-        let constraints = constraint::fetch(&mut *conn).await?;
+        let sequences = raw::sequence::load(&mut *conn, &shared).await?;
+        let indexes = raw::index::load(&mut *conn, &shared).await?;
+        let constraints = raw::constraint::load(&mut *conn, &shared).await?;
         let triggers = triggers::fetch(&mut *conn).await?;
         let policies = policy::fetch(&mut *conn).await?;
         let extensions = extension::fetch(&mut *conn).await?;

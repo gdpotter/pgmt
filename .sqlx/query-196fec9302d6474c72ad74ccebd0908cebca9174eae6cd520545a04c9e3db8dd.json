@@ -1,0 +1,199 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.conname AS \"name!\",\n            c.contype::text AS \"contype!\",\n            cl.oid AS \"table_oid!\",\n            cl.relnamespace AS \"table_namespace!\",\n            cl.relname AS \"table_name!\",\n\n            CASE\n                WHEN c.contype IN ('u', 'f') THEN\n                    ARRAY(\n                        SELECT a.attname\n                        FROM pg_attribute a\n                        WHERE a.attrelid = c.conrelid\n                          AND a.attnum = ANY(c.conkey)\n                        ORDER BY array_position(c.conkey, a.attnum)\n                    )\n                ELSE ARRAY[]::name[]\n            END AS \"columns!: Vec<String>\",\n\n            fcl.relnamespace AS \"referenced_namespace?\",\n            fcl.relname AS \"referenced_table?\",\n            CASE\n                WHEN c.contype = 'f' THEN\n                    ARRAY(\n                        SELECT a.attname\n                        FROM pg_attribute a\n                        WHERE a.attrelid = c.confrelid\n                          AND a.attnum = ANY(c.confkey)\n                        ORDER BY array_position(c.confkey, a.attnum)\n                    )\n                ELSE ARRAY[]::name[]\n            END AS \"referenced_columns!: Vec<String>\",\n\n            NULLIF(c.confdeltype, '')::text AS \"on_delete?\",\n            NULLIF(c.confupdtype, '')::text AS \"on_update?\",\n            c.condeferrable AS \"deferrable!\",\n            c.condeferred AS \"initially_deferred!\",\n\n            CASE\n                WHEN c.contype = 'c' THEN pg_catalog.pg_get_constraintdef(c.oid, true)\n                ELSE NULL\n            END AS \"check_clause?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true)\n                        FROM pg_index idx\n                        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos\n                        WHERE idx.indexrelid = c.conindid\n                        ORDER BY col_pos\n                    )\n                ELSE ARRAY[]::text[]\n            END AS \"exclusion_elements!: Vec<String>\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT opc.opcname\n                        FROM pg_index idx\n                        CROSS JOIN generate_series(1, idx.indnatts) AS col_pos\n                        -- oidvectors are 0-based\n                        LEFT JOIN pg_opclass opc ON opc.oid = idx.indclass[col_pos - 1]\n                        WHERE idx.indexrelid = c.conindid\n                        ORDER BY col_pos\n                    )\n                ELSE ARRAY[]::name[]\n            END AS \"exclusion_opcnames!: Vec<String>\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    ARRAY(\n                        SELECT po.oprname\n                        FROM generate_series(1, cardinality(c.conexclop)) AS col_pos\n                        JOIN pg_operator po ON po.oid = c.conexclop[col_pos]\n                        ORDER BY col_pos\n                    )\n                ELSE ARRAY[]::name[]\n            END AS \"exclusion_operators!: Vec<String>\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    (SELECT am.amname\n                     FROM pg_index idx\n                     JOIN pg_class idx_cl ON idx.indexrelid = idx_cl.oid\n                     JOIN pg_am am ON idx_cl.relam = am.oid\n                     WHERE idx.indexrelid = c.conindid)\n                ELSE NULL\n            END AS \"index_method?\",\n\n            CASE\n                WHEN c.contype = 'x' THEN\n                    (SELECT pg_catalog.pg_get_expr(idx.indpred, idx.indrelid, true)\n                     FROM pg_index idx\n                     WHERE idx.indexrelid = c.conindid AND idx.indpred IS NOT NULL)\n                ELSE NULL\n            END AS \"predicate?\"\n\n        FROM pg_constraint c\n        JOIN pg_class cl ON c.conrelid = cl.oid\n        LEFT JOIN pg_class fcl ON c.confrelid = fcl.oid\n        WHERE cl.relkind = 'r'\n          AND c.contype IN ('u', 'f', 'c', 'x')\n        ORDER BY c.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "conname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "contype!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "table_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "table_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "table_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "columns!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "referenced_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "referenced_table?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "referenced_columns!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "on_delete?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "on_update?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "deferrable!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "condeferrable"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "initially_deferred!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "condeferred"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "check_clause?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "exclusion_elements!: Vec<String>",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "exclusion_opcnames!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "exclusion_operators!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "index_method?",
+        "type_info": "Name",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 19,
+        "name": "predicate?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "196fec9302d6474c72ad74ccebd0908cebca9174eae6cd520545a04c9e3db8dd"
+}

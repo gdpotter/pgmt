@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use tracing::info;
 
 use super::exclusion::{Converted, Excluded, ExclusionReason};
-use super::index::OidIndex;
+use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::function::{Function, FunctionKind, FunctionParam};
 use crate::catalog::id::DbObjectId;
