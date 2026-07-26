@@ -26,6 +26,7 @@ pub mod identity;
 pub mod index;
 pub mod operator;
 pub mod policy;
+pub mod raw;
 pub mod schema;
 pub mod sequence;
 pub mod table;

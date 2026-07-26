@@ -1,0 +1,20 @@
+//! OID-keyed catalog layer, upstream of the logical catalog.
+//!
+//! The logical structs (`Table`, `Operator`, …) are compared by value across two
+//! different databases, so their identity must be name-based: a physical
+//! coordinate such as an OID differs between two databases holding the same
+//! schema and would turn every comparison into a spurious drop/recreate.
+//! OIDs therefore live in this module (and in the converters that read it) and
+//! never appear on a logical struct.
+//!
+//! What lives here is the cross-cutting state that is addressed by OID in
+//! `pg_catalog` — the namespace map, extension-ownership edges, and
+//! `pg_description` rows — plus the [`index::OidIndex`] that turns an OID back
+//! into a logical [`crate::catalog::id::DbObjectId`].
+
+// The layer is consumed by converters and by tests, not by the CLI binary's
+// module tree, so unused-item warnings here would be noise.
+#![allow(dead_code)]
+
+pub mod index;
+pub mod shared;

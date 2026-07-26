@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            cl.relname AS \"class_name!\",\n            dep.objid AS \"objid!\",\n            e.extname AS \"extension!\"\n        FROM pg_depend dep\n        JOIN pg_class cl ON cl.oid = dep.classid\n        JOIN pg_extension e ON e.oid = dep.refobjid\n        WHERE dep.deptype = 'e'\n          AND dep.refclassid = 'pg_extension'::regclass\n        ORDER BY cl.relname, dep.objid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "class_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "objid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_depend",
+            "name": "objid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "extension!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e2dde293c9fb65a7b9d3056b1d02651d553e81899a424727e2ef59479ba3411c"
+}
