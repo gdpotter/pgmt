@@ -20,6 +20,22 @@
 // module tree, so unused-item warnings here would be noise.
 #![allow(dead_code)]
 
+use std::collections::HashSet;
+
+use crate::catalog::id::DbObjectId;
+
+/// Drop repeated dependencies, keeping the first occurrence of each.
+///
+/// A converter derives one edge per catalog row it reads, and `pg_catalog`
+/// records the same referent once per column, attribute or argument that uses
+/// it — a self-referencing foreign key, a composite with two attributes of one
+/// type, an aggregate whose SFUNC is also its FINALFUNC. The surviving order is
+/// the derivation order, which is what callers see.
+pub fn dedup_preserving_order(dependencies: &mut Vec<DbObjectId>) {
+    let mut seen = HashSet::new();
+    dependencies.retain(|dependency| seen.insert(dependency.clone()));
+}
+
 pub mod aggregate;
 pub mod cast;
 pub mod constraint;

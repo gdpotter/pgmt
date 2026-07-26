@@ -15,6 +15,7 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -256,6 +257,10 @@ pub fn convert(
             .and_then(|t| t.schema)
             .unwrap_or_default()
             .to_string();
+
+        // One routine can fill several of an aggregate's slots — a SFUNC that is
+        // also the FINALFUNC names the same function twice.
+        dedup_preserving_order(&mut depends_on);
 
         let definition = build_aggregate_definition(
             schema,

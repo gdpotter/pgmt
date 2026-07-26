@@ -18,6 +18,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -294,10 +295,16 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
         let function_id = function.id();
 
         for dep in dependencies(row, shared) {
-            if dep != function_id && !function.depends_on.contains(&dep) {
+            if dep != function_id {
                 function.depends_on.push(dep);
             }
         }
+    }
+
+    for (_, function) in &mut converted.objects {
+        // A `BEGIN ATOMIC` body records a referent once per column it reads, and
+        // a signature can name one type in several parameters.
+        dedup_preserving_order(&mut function.depends_on);
     }
 
     // The raw fetches order by OID; ordering by name is what callers see, and a

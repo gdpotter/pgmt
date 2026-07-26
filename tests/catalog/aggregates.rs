@@ -572,3 +572,56 @@ async fn test_aggregate_with_domain_state_type() -> Result<()> {
     })
     .await
 }
+
+/// One routine can fill several of an aggregate's slots, and each slot derives
+/// an edge; the routine must still be depended on once.
+#[tokio::test]
+async fn test_aggregate_reusing_one_routine_depends_on_it_once() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE FUNCTION echo_state(state integer) RETURNS integer AS $$
+             BEGIN RETURN state; END; $$ LANGUAGE plpgsql",
+        )
+        .await;
+        db.execute(
+            "CREATE FUNCTION accumulate(state integer, val integer) RETURNS integer AS $$
+             BEGIN RETURN coalesce(state, 0) + val; END; $$ LANGUAGE plpgsql",
+        )
+        .await;
+        // The combine function has the same signature as the state function, so
+        // both slots name one routine.
+        db.execute(
+            "CREATE AGGREGATE total_twice(integer) (
+                SFUNC = accumulate,
+                STYPE = integer,
+                COMBINEFUNC = accumulate,
+                FINALFUNC = echo_state,
+                INITCOND = '0'
+            )",
+        )
+        .await;
+
+        let aggregates = fetch(&mut *db.conn().await).await.unwrap();
+        let aggregate = aggregates
+            .iter()
+            .find(|a| a.name == "total_twice")
+            .expect("aggregate");
+
+        let accumulate = DbObjectId::Function {
+            schema: "public".to_string(),
+            name: "accumulate".to_string(),
+            arguments: "state integer, val integer".to_string(),
+        };
+        assert_eq!(
+            aggregate
+                .depends_on
+                .iter()
+                .filter(|d| **d == accumulate)
+                .count(),
+            1,
+            "expected one edge to accumulate, got {:?}",
+            aggregate.depends_on
+        );
+    })
+    .await;
+}

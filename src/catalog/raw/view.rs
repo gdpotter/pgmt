@@ -15,6 +15,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{ResolvedType, SharedCatalog, class};
@@ -260,10 +261,8 @@ pub fn convert(raw: &RawViews, shared: &SharedCatalog) -> Result<Converted<Conve
     }
 
     for entry in &mut converted.objects {
-        // A view body references the same object once per column it uses, so the
-        // edges arrive duplicated; the first occurrence fixes the order.
-        let mut seen = std::collections::HashSet::new();
-        entry.view.depends_on.retain(|dep| seen.insert(dep.clone()));
+        // A view body references the same object once per column it uses.
+        dedup_preserving_order(&mut entry.view.depends_on);
 
         // The `public` schema is assumed to exist rather than depended on.
         if entry.view.schema != "public" {

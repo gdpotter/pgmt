@@ -664,3 +664,33 @@ async fn test_identity_snapshot_includes_range_types() {
     })
     .await;
 }
+
+/// A composite carries one dependency edge per attribute, so two attributes of
+/// the same type must not leave the type in `depends_on` twice.
+#[tokio::test]
+async fn test_composite_with_repeated_attribute_type_depends_on_it_once() {
+    with_test_db(async |db| {
+        db.execute("CREATE TYPE money_amount AS (amount numeric, currency text)")
+            .await;
+        db.execute("CREATE TYPE transfer AS (debit money_amount, credit money_amount)")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        let transfer = types
+            .iter()
+            .find(|t| t.name == "transfer")
+            .expect("transfer type");
+
+        let money = DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "money_amount".to_string(),
+        };
+        assert_eq!(
+            transfer.depends_on.iter().filter(|d| **d == money).count(),
+            1,
+            "expected one edge to money_amount, got {:?}",
+            transfer.depends_on
+        );
+    })
+    .await;
+}

@@ -17,6 +17,7 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -346,6 +347,9 @@ pub fn convert(
             other => bail!("Unknown constraint type: {}", other),
         };
 
+        // A self-referencing foreign key names its own table as the referent.
+        dedup_preserving_order(&mut depends_on);
+
         converted.objects.push((
             row.oid,
             Constraint {
@@ -442,6 +446,31 @@ mod tests {
         assert!(
             error.to_string().contains("namespace map"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// A self-referencing foreign key names its own table both as the
+    /// constrained relation and as the referent.
+    #[test]
+    fn test_self_referencing_foreign_key_depends_on_its_table_once() {
+        let mut row = foreign_key(Some(Oid(100)), Some("orders"));
+        row.columns = vec!["parent_id".to_string()];
+        let converted = convert(&[row], &shared_with_app_schema()).expect("converts");
+        let (_, constraint) = &converted.objects[0];
+
+        let orders = DbObjectId::Table {
+            schema: "app".to_string(),
+            name: "orders".to_string(),
+        };
+        assert_eq!(
+            constraint
+                .depends_on
+                .iter()
+                .filter(|dep| **dep == orders)
+                .count(),
+            1,
+            "expected one edge to the table, got {:?}",
+            constraint.depends_on
         );
     }
 

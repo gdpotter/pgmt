@@ -13,9 +13,10 @@
 use anyhow::{Context, Result, anyhow};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -284,8 +285,7 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
     for (_, index) in &mut converted.objects {
         // Several referents can resolve to the same extension, and an index
         // references the same type once per column that has it.
-        let mut seen = HashSet::new();
-        index.depends_on.retain(|dep| seen.insert(dep.clone()));
+        dedup_preserving_order(&mut index.depends_on);
     }
 
     // The raw fetch orders by OID; ordering by name is what callers see.

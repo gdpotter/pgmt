@@ -12,6 +12,7 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -264,8 +265,7 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Converted<
         }
 
         // De-duplicate dependencies while preserving order.
-        let mut seen = std::collections::HashSet::new();
-        depends_on.retain(|d| seen.insert(d.clone()));
+        dedup_preserving_order(&mut depends_on);
 
         let definition = build_operator_definition(
             schema,

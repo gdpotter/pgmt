@@ -14,6 +14,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -263,6 +264,12 @@ pub fn convert(
                 comment: None,
             });
         entry.attribute_attnums.push(row.attnum);
+    }
+
+    for entry in &mut converted.objects {
+        // A composite carries one edge per attribute, so two attributes of one
+        // type name it twice.
+        dedup_preserving_order(&mut entry.custom_type.depends_on);
     }
 
     // The raw fetches order by OID; ordering by name is what callers see.

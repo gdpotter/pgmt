@@ -21,6 +21,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
@@ -225,18 +226,15 @@ pub fn convert(raw: &RawPolicies, shared: &SharedCatalog) -> Result<Converted<(O
         }
 
         let (_, policy) = &mut converted.objects[idx];
-        push_dependency(
-            policy,
-            DbObjectId::Column {
-                schema: schema.to_string(),
-                table: row.relation_name.clone(),
-                column: row.column_name.clone(),
-            },
-        );
+        policy.depends_on.push(DbObjectId::Column {
+            schema: schema.to_string(),
+            table: row.relation_name.clone(),
+            column: row.column_name.clone(),
+        });
         // PostgreSQL may record a referenced relation only through its columns,
         // so the relation the column belongs to is a dependency of its own.
         if let Some(dep) = relation_dependency(&row.relkind, schema, &row.relation_name, policy) {
-            push_dependency(policy, dep);
+            policy.depends_on.push(dep);
         }
     }
 
@@ -256,7 +254,7 @@ pub fn convert(raw: &RawPolicies, shared: &SharedCatalog) -> Result<Converted<(O
                 continue;
             }
             if let Some(dep) = relation_dependency(relkind, schema, name, policy) {
-                push_dependency(policy, dep);
+                policy.depends_on.push(dep);
             }
             continue;
         }
@@ -285,8 +283,13 @@ pub fn convert(raw: &RawPolicies, shared: &SharedCatalog) -> Result<Converted<(O
                     arguments: args.clone(),
                 },
             };
-            push_dependency(policy, dep);
+            policy.depends_on.push(dep);
         }
+    }
+
+    for (_, policy) in &mut converted.objects {
+        // An expression references the same relation once per column it reads.
+        dedup_preserving_order(&mut policy.depends_on);
     }
 
     // The raw fetch orders by OID; ordering by name is what callers see.
@@ -333,14 +336,6 @@ fn relation_dependency(
             })
         }
         _ => None,
-    }
-}
-
-/// Add a dependency the policy does not already carry, keeping the order edges
-/// were derived in.
-fn push_dependency(policy: &mut Policy, dep: DbObjectId) {
-    if !policy.depends_on.contains(&dep) {
-        policy.depends_on.push(dep);
     }
 }
 
