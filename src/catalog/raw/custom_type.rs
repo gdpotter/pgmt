@@ -103,7 +103,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawCustomTypes> {
 /// comment and its composite attributes' comments attached through the OID
 /// index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<CustomType>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("type"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -147,6 +149,8 @@ pub async fn load_with_exclusions(
             }
         }
     }
+
+    converted.index = index;
 
     Ok(converted.map(|entry| entry.custom_type))
 }

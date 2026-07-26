@@ -22,7 +22,7 @@ use crate::catalog::schema::Schema;
 /// Convert the shared namespace map into the logical catalog, with each schema's
 /// comment attached through the OID index.
 pub fn load(shared: &SharedCatalog) -> Result<Vec<Schema>> {
-    Ok(load_with_exclusions(shared)?.objects)
+    Ok(load_with_exclusions(shared)?.log_and_take_objects("schema"))
 }
 
 /// The same load, keeping the named reason for every namespace that did not
@@ -50,6 +50,8 @@ pub fn load_with_exclusions(shared: &SharedCatalog) -> Result<Converted<Schema>>
         };
         schema.comment = comments.get(&id).map(|text| text.to_string());
     }
+
+    converted.index = oids;
 
     Ok(converted.map(|(_, schema)| schema))
 }

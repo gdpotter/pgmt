@@ -90,7 +90,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawCast>> {
 /// Fetch casts and convert them into the logical catalog, with comments attached
 /// through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Cast>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("cast"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not become
@@ -115,6 +117,8 @@ pub async fn load_with_exclusions(
     for (_, cast) in &mut converted.objects {
         cast.comment = comments.get(&cast.id()).map(|text| text.to_string());
     }
+
+    converted.index = index;
 
     Ok(converted.map(|(_, cast)| cast))
 }

@@ -20,9 +20,11 @@
 // module tree, so unused-item warnings here would be noise.
 #![allow(dead_code)]
 
+use anyhow::{Context, Result};
 use std::collections::HashSet;
 
 use crate::catalog::id::DbObjectId;
+use oid_index::OidIndex;
 
 /// Drop repeated dependencies, keeping the first occurrence of each.
 ///
@@ -34,6 +36,31 @@ use crate::catalog::id::DbObjectId;
 pub fn dedup_preserving_order(dependencies: &mut Vec<DbObjectId>) {
     let mut seen = HashSet::new();
     dependencies.retain(|dependency| seen.insert(dependency.clone()));
+}
+
+/// Fold the per-kind OID indexes of one catalog load into a single index.
+///
+/// Each kind indexes the addresses its own OID-addressed state is resolved
+/// through, and a kind may register an object under more than one catalog table
+/// (a table and its primary-key constraint, a composite type and its backing
+/// relation). Merging them is what makes the addresses of a whole load
+/// resolvable in one lookup, rather than only within the kind that produced
+/// them.
+///
+/// Two kinds registering different identities under one `(catalog table, OID)`
+/// is a contradiction — one of them has misderived an identity — and
+/// [`OidIndex::insert`] rejects it; the kind is named so the conflict points at
+/// the converter that has to be fixed.
+pub fn merge_indexes(indexes: Vec<(&'static str, OidIndex)>) -> Result<OidIndex> {
+    let mut merged = OidIndex::new();
+    for (kind, index) in indexes {
+        for (class, oid, id) in index.iter() {
+            merged
+                .insert(class, oid, id.clone())
+                .with_context(|| format!("merging the OID index of every {kind}"))?;
+        }
+    }
+    Ok(merged)
 }
 
 pub mod aggregate;
@@ -55,3 +82,90 @@ pub mod snapshot;
 pub mod table;
 pub mod trigger;
 pub mod view;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::class;
+    use sqlx::postgres::types::Oid;
+
+    fn table(name: &str) -> DbObjectId {
+        DbObjectId::Table {
+            schema: "public".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_merge_keeps_every_kind_addressable() {
+        let tables = OidIndex::from_pairs(class::PG_CLASS, [(Oid(16400), table("users"))]).unwrap();
+        let types = OidIndex::from_pairs(
+            class::PG_TYPE,
+            [(
+                Oid(16500),
+                DbObjectId::Type {
+                    schema: "public".to_string(),
+                    name: "status".to_string(),
+                },
+            )],
+        )
+        .unwrap();
+
+        let merged = merge_indexes(vec![("table", tables), ("type", types)]).unwrap();
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            merged.get(class::PG_CLASS, Oid(16400)),
+            Some(&table("users"))
+        );
+        assert!(merged.contains(class::PG_TYPE, Oid(16500)));
+    }
+
+    /// One catalog address resolving to two identities means a converter has
+    /// misderived one of them, and every comment or edge routed through that
+    /// address would be attached to the wrong object. The merge refuses, and the
+    /// error names the kind whose index brought the conflict in.
+    #[test]
+    fn test_merge_reports_the_kind_a_conflicting_address_came_from() {
+        let tables = OidIndex::from_pairs(class::PG_CLASS, [(Oid(16400), table("users"))]).unwrap();
+        let views = OidIndex::from_pairs(
+            class::PG_CLASS,
+            [(
+                Oid(16400),
+                DbObjectId::View {
+                    schema: "public".to_string(),
+                    name: "user_emails".to_string(),
+                },
+            )],
+        )
+        .unwrap();
+
+        let error = merge_indexes(vec![("table", tables), ("view", views)]).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("view"), "message was: {message}");
+        assert!(message.contains("16400"), "message was: {message}");
+    }
+
+    /// A kind may register one object under more than one catalog table (a
+    /// composite type under `pg_type` and its backing relation under
+    /// `pg_class`), so the same identity legitimately appears twice.
+    #[test]
+    fn test_merge_accepts_one_identity_under_several_addresses() {
+        let composite = DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "point2d".to_string(),
+        };
+        let mut types = OidIndex::new();
+        types
+            .insert(class::PG_TYPE, Oid(16500), composite.clone())
+            .unwrap();
+        types
+            .insert(class::PG_CLASS, Oid(16501), composite.clone())
+            .unwrap();
+
+        let merged = merge_indexes(vec![("type", types)]).unwrap();
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged.get(class::PG_CLASS, Oid(16501)), Some(&composite));
+    }
+}

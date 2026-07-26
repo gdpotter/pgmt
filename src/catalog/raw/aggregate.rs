@@ -126,7 +126,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawAggregate>> {
 /// Fetch aggregates and convert them into the logical catalog, with comments
 /// attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Aggregate>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("aggregate"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -152,6 +154,8 @@ pub async fn load_with_exclusions(
     for (_, aggregate) in &mut converted.objects {
         aggregate.comment = comments.get(&aggregate.id()).map(|text| text.to_string());
     }
+
+    converted.index = index;
 
     Ok(converted.map(|(_, aggregate)| aggregate))
 }

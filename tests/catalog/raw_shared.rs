@@ -4,11 +4,19 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::id::DbObjectId;
+use pgmt::catalog::Catalog;
+use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::raw::oid_index::OidIndex;
 use pgmt::catalog::raw::shared::{self, class};
-use pgmt::catalog::raw::table as raw_table;
+use pgmt::catalog::raw::{
+    aggregate as raw_aggregate, cast as raw_cast, constraint as raw_constraint,
+    custom_type as raw_custom_type, domain as raw_domain, extension as raw_extension,
+    function as raw_function, index as raw_index, merge_indexes, operator as raw_operator,
+    policy as raw_policy, schema as raw_schema, sequence as raw_sequence, table as raw_table,
+    trigger as raw_trigger, view as raw_view,
+};
 use sqlx::postgres::types::Oid;
+use std::collections::BTreeSet;
 
 /// Look up a relation's OID by name, the way a raw fetch would carry it.
 async fn relation_oid(db: &crate::helpers::harness::TestDatabase, qualified: &str) -> Oid {
@@ -369,6 +377,173 @@ async fn test_subobject_comments_resolve_through_the_index() -> Result<()> {
             .expect("app.users should be in the catalog");
         assert_eq!(users.columns[0].comment, None);
         assert_eq!(users.columns[1].comment.as_deref(), Some("Contact address"));
+
+        Ok(())
+    })
+    .await
+}
+
+/// A schema wide enough that every kind contributes to the index.
+const SCHEMA: &[&str] = &[
+    "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"",
+    "CREATE SCHEMA app",
+    "CREATE TYPE app.status AS ENUM ('active', 'retired')",
+    "CREATE TYPE app.point2d AS (x integer, y integer)",
+    "CREATE DOMAIN app.email AS text CHECK (VALUE LIKE '%@%')",
+    "CREATE SEQUENCE app.counter",
+    r#"CREATE TABLE app.users (
+        id integer PRIMARY KEY,
+        email app.email NOT NULL,
+        state app.status NOT NULL DEFAULT 'active',
+        home app.point2d,
+        CONSTRAINT users_id_positive CHECK (id > 0)
+    )"#,
+    "CREATE INDEX users_email_idx ON app.users (email)",
+    "CREATE VIEW app.active_users AS SELECT id, email FROM app.users WHERE state = 'active'",
+    r#"CREATE FUNCTION app.touch() RETURNS trigger AS $$
+       BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql"#,
+    "CREATE TRIGGER users_touch BEFORE UPDATE ON app.users FOR EACH ROW EXECUTE FUNCTION app.touch()",
+    "ALTER TABLE app.users ENABLE ROW LEVEL SECURITY",
+    "CREATE POLICY users_self ON app.users USING (id > 0)",
+    "CREATE FUNCTION app.combine(integer, integer) RETURNS integer AS $$ SELECT $1 + $2 $$ LANGUAGE sql IMMUTABLE",
+    "CREATE OPERATOR app.=== (LEFTARG = integer, RIGHTARG = integer, FUNCTION = app.combine)",
+    "CREATE AGGREGATE app.total (integer) (SFUNC = app.combine, STYPE = integer, INITCOND = '0')",
+    "CREATE FUNCTION app.email_to_status(app.email) RETURNS app.status AS $$ SELECT 'active'::app.status $$ LANGUAGE sql IMMUTABLE",
+    "CREATE CAST (app.email AS app.status) WITH FUNCTION app.email_to_status(app.email)",
+];
+
+/// The identity of every object a full catalog load produces, grants aside:
+/// grants are attached state rather than objects the index addresses.
+fn catalog_object_ids(catalog: &Catalog) -> BTreeSet<DbObjectId> {
+    let mut ids = BTreeSet::new();
+
+    // Schemas have no DependsOn impl; their identity is just the name.
+    for schema in &catalog.schemas {
+        ids.insert(DbObjectId::Schema {
+            name: schema.name.clone(),
+        });
+    }
+
+    fn collect<T: DependsOn>(items: &[T], ids: &mut BTreeSet<DbObjectId>) {
+        ids.extend(items.iter().map(|item| item.id()));
+    }
+
+    collect(&catalog.tables, &mut ids);
+    collect(&catalog.views, &mut ids);
+    collect(&catalog.types, &mut ids);
+    collect(&catalog.domains, &mut ids);
+    collect(&catalog.functions, &mut ids);
+    collect(&catalog.aggregates, &mut ids);
+    collect(&catalog.operators, &mut ids);
+    collect(&catalog.casts, &mut ids);
+    collect(&catalog.sequences, &mut ids);
+    collect(&catalog.indexes, &mut ids);
+    collect(&catalog.constraints, &mut ids);
+    collect(&catalog.triggers, &mut ids);
+    collect(&catalog.policies, &mut ids);
+    collect(&catalog.extensions, &mut ids);
+
+    ids
+}
+
+/// A converter's OID index outlives the converter: the per-kind indexes of one
+/// load merge into a single index in which every object that load produced is
+/// addressable. That is what lets OID-addressed state beyond comments be
+/// resolved once, rather than by re-deriving an index per consumer.
+#[tokio::test]
+async fn test_merged_oid_index_addresses_every_loaded_object() -> Result<()> {
+    with_test_db(async |db| {
+        for statement in SCHEMA {
+            db.execute(statement).await;
+        }
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let mut indexes = Vec::new();
+
+        raw_schema::load_with_exclusions(&shared)?.collect_into("schema", &mut indexes);
+        raw_table::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("table", &mut indexes);
+        raw_view::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("view", &mut indexes);
+        raw_custom_type::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("type", &mut indexes);
+        raw_domain::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("domain", &mut indexes);
+        raw_function::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("function", &mut indexes);
+        raw_aggregate::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("aggregate", &mut indexes);
+        raw_operator::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("operator", &mut indexes);
+        raw_cast::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("cast", &mut indexes);
+        raw_sequence::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("sequence", &mut indexes);
+        raw_index::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("index", &mut indexes);
+        raw_constraint::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("constraint", &mut indexes);
+        raw_trigger::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("trigger", &mut indexes);
+        raw_policy::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("policy", &mut indexes);
+        raw_extension::load_with_exclusions(&mut conn, &shared)
+            .await?
+            .collect_into("extension", &mut indexes);
+
+        let merged = merge_indexes(indexes)?;
+        let addressed: BTreeSet<DbObjectId> = merged.iter().map(|(_, _, id)| id.clone()).collect();
+
+        let catalog = Catalog::load_unfiltered(db.pool()).await?;
+        let missing: Vec<String> = catalog_object_ids(&catalog)
+            .difference(&addressed)
+            .map(|id| id.to_string())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "objects the merged index cannot address: {:?}",
+            missing
+        );
+
+        // The index addresses objects through the catalog table each one's
+        // OID-addressed state is keyed by, so a table is reachable under
+        // `pg_class` and a composite type under both `pg_type` and the
+        // `pg_class` entry its attribute comments hang off.
+        let users = relation_oid(db, "app.users").await;
+        assert_eq!(
+            merged.get(class::PG_CLASS, users),
+            Some(&DbObjectId::Table {
+                schema: "app".to_string(),
+                name: "users".to_string(),
+            })
+        );
+        let point2d: (Oid,) = sqlx::query_as("SELECT 'app.point2d'::regtype::oid")
+            .fetch_one(db.pool())
+            .await?;
+        let point2d_relation = relation_oid(db, "app.point2d").await;
+        let point2d_id = DbObjectId::Type {
+            schema: "app".to_string(),
+            name: "point2d".to_string(),
+        };
+        assert_eq!(merged.get(class::PG_TYPE, point2d.0), Some(&point2d_id));
+        assert_eq!(
+            merged.get(class::PG_CLASS, point2d_relation),
+            Some(&point2d_id)
+        );
 
         Ok(())
     })

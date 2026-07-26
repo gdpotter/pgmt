@@ -133,7 +133,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawTables> {
 /// comment, its column comments and its primary key's comment attached through
 /// the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Table>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("table"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -184,6 +186,8 @@ pub async fn load_with_exclusions(
             pk.comment = pk_comment;
         }
     }
+
+    converted.index = index;
 
     Ok(converted.map(|entry| entry.table))
 }

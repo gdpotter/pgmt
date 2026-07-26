@@ -6,7 +6,7 @@
 
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;
-use pgmt::catalog::raw::exclusion::ExclusionReason;
+use pgmt::catalog::raw::exclusion::{Converted, ExclusionReason};
 use pgmt::catalog::raw::shared;
 use pgmt::catalog::raw::{
     aggregate as raw_aggregate, cast as raw_cast, constraint as raw_constraint,
@@ -667,14 +667,13 @@ async fn test_conversion_yields_the_physical_catalog() -> Result<()> {
 
         let mut conn = db.conn().await;
         let shared = shared::fetch(&mut conn).await?;
-        let raw = raw_table::fetch(&mut conn).await?;
-        let converted = raw_table::convert(&raw, &shared)?;
+        let converted = raw_table::load_with_exclusions(&mut conn, &shared).await?;
 
         assert!(
             converted
                 .objects
                 .iter()
-                .any(|entry| entry.table.schema == "unmanaged" && entry.table.name == "notes"),
+                .any(|table| table.schema == "unmanaged" && table.name == "notes"),
             "a user table outside the managed universe is still part of the physical catalog"
         );
         assert!(
@@ -699,8 +698,7 @@ async fn test_excluded_rows_keep_their_catalog_oid() -> Result<()> {
 
         let mut conn = db.conn().await;
         let shared = shared::fetch(&mut conn).await?;
-        let raw = raw_table::fetch(&mut conn).await?;
-        let converted = raw_table::convert(&raw, &shared)?;
+        let converted = raw_table::load_with_exclusions(&mut conn, &shared).await?;
 
         let adopted_oid: (Oid,) = sqlx::query_as("SELECT 'adopted'::regclass::oid")
             .fetch_one(db.pool())
@@ -1272,6 +1270,95 @@ async fn test_every_raw_extension_row_is_converted_or_excluded() -> Result<()> {
             .expect("the built-in extension should be excluded");
         assert_eq!(plpgsql.reason, ExclusionReason::BuiltInExtension);
         assert_eq!(plpgsql.kind, "extension");
+
+        Ok(())
+    })
+    .await
+}
+
+/// Every excluded row, as `(OID, reason name)`.
+fn exclusions<T>(converted: &Converted<T>) -> BTreeSet<(u32, &'static str)> {
+    converted
+        .excluded
+        .iter()
+        .map(|row| (row.oid.0, row.reason.name()))
+        .collect()
+}
+
+/// A load carries its converter's accounting out intact.
+///
+/// `load` throws the exclusions away by design — a caller that only wants the
+/// catalog should not have to see them — so `load_with_exclusions` is the API
+/// that has to keep them, for every kind, all the way past the comment pass and
+/// the mapping that drops the OIDs the converter carried.
+#[tokio::test]
+async fn test_the_load_reports_what_its_converter_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE TABLE tickets (id integer GENERATED ALWAYS AS IDENTITY, slot text)")
+            .await;
+        db.execute("CREATE UNIQUE INDEX tickets_slot_key ON tickets (slot)")
+            .await;
+        db.execute("ALTER TABLE tickets ADD CONSTRAINT tickets_slot_unique UNIQUE (slot)")
+            .await;
+        // A foreign key brings the internal triggers that enforce it, and the
+        // extension-owned table a policy that is excluded through its parent.
+        db.execute("CREATE TABLE orders (id integer, user_id integer REFERENCES users (id))")
+            .await;
+        db.execute("ALTER TABLE adopted ENABLE ROW LEVEL SECURITY")
+            .await;
+        db.execute("CREATE POLICY adopted_all ON adopted USING (id > 0)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+
+        macro_rules! assert_load_keeps_exclusions {
+            ($module:ident, $kind:literal) => {{
+                let raw = $module::fetch(&mut conn).await?;
+                let from_converter = $module::convert(&raw, &shared)?;
+                let from_load = $module::load_with_exclusions(&mut conn, &shared).await?;
+                assert_eq!(
+                    exclusions(&from_load),
+                    exclusions(&from_converter),
+                    "the {} load lost its converter's exclusions",
+                    $kind
+                );
+                assert_eq!(
+                    from_load.objects.len(),
+                    from_converter.objects.len(),
+                    "the {} load lost converted objects",
+                    $kind
+                );
+                assert!(
+                    !from_load.excluded.is_empty(),
+                    "the {} fixture should exclude something",
+                    $kind
+                );
+            }};
+        }
+
+        assert_load_keeps_exclusions!(raw_table, "table");
+        assert_load_keeps_exclusions!(raw_view, "view");
+        assert_load_keeps_exclusions!(raw_custom_type, "type");
+        assert_load_keeps_exclusions!(raw_domain, "domain");
+        assert_load_keeps_exclusions!(raw_function, "function");
+        assert_load_keeps_exclusions!(raw_aggregate, "aggregate");
+        assert_load_keeps_exclusions!(raw_operator, "operator");
+        assert_load_keeps_exclusions!(raw_cast, "cast");
+        assert_load_keeps_exclusions!(raw_sequence, "sequence");
+        assert_load_keeps_exclusions!(raw_index, "index");
+        assert_load_keeps_exclusions!(raw_constraint, "constraint");
+        assert_load_keeps_exclusions!(raw_trigger, "trigger");
+        assert_load_keeps_exclusions!(raw_policy, "policy");
+        assert_load_keeps_exclusions!(raw_extension, "extension");
+
+        // Schemas have no fetch of their own: the shared namespace map is the
+        // enumeration they are converted from.
+        let from_converter = raw_schema::convert(&shared)?;
+        let from_load = raw_schema::load_with_exclusions(&shared)?;
+        assert_eq!(exclusions(&from_load), exclusions(&from_converter));
+        assert!(!from_load.excluded.is_empty());
 
         Ok(())
     })

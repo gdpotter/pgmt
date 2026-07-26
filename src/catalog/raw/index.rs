@@ -117,7 +117,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawIndexes> {
 /// Fetch indexes and convert them into the logical catalog, with each index's
 /// comment attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Index>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("index"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not become
@@ -143,6 +145,8 @@ pub async fn load_with_exclusions(
     for (_, index) in &mut converted.objects {
         index.comment = comments.get(&index.id()).map(|text| text.to_string());
     }
+
+    converted.index = oids;
 
     Ok(converted.map(|(_, index)| index))
 }

@@ -115,24 +115,64 @@ impl Catalog {
         // to its search_path.
         let shared = raw::shared::fetch(&mut tx).await?;
 
-        let schemas = raw::schema::load(&shared)?;
-        let tables = raw::table::load(&mut tx, &shared).await?;
-        let views = raw::view::load(&mut tx, &shared).await?;
-        let types = raw::custom_type::load(&mut tx, &shared).await?;
-        let domains = raw::domain::load(&mut tx, &shared).await?;
-        let functions = raw::function::load(&mut tx, &shared).await?;
-        let aggregates = raw::aggregate::load(&mut tx, &shared).await?;
-        let operators = raw::operator::load(&mut tx, &shared).await?;
-        let casts = raw::cast::load(&mut tx, &shared).await?;
-        let sequences = raw::sequence::load(&mut tx, &shared).await?;
-        let indexes = raw::index::load(&mut tx, &shared).await?;
-        let constraints = raw::constraint::load(&mut tx, &shared).await?;
-        let triggers = raw::trigger::load(&mut tx, &shared).await?;
-        let policies = raw::policy::load(&mut tx, &shared).await?;
-        let extensions = raw::extension::load(&mut tx, &shared).await?;
+        // Each kind hands over the addresses it indexed, so the whole load ends
+        // with one index rather than fifteen that expire inside their converter.
+        let mut oid_indexes = Vec::new();
+
+        let schemas =
+            raw::schema::load_with_exclusions(&shared)?.collect_into("schema", &mut oid_indexes);
+        let tables = raw::table::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("table", &mut oid_indexes);
+        let views = raw::view::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("view", &mut oid_indexes);
+        let types = raw::custom_type::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("type", &mut oid_indexes);
+        let domains = raw::domain::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("domain", &mut oid_indexes);
+        let functions = raw::function::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("function", &mut oid_indexes);
+        let aggregates = raw::aggregate::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("aggregate", &mut oid_indexes);
+        let operators = raw::operator::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("operator", &mut oid_indexes);
+        let casts = raw::cast::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("cast", &mut oid_indexes);
+        let sequences = raw::sequence::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("sequence", &mut oid_indexes);
+        let indexes = raw::index::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("index", &mut oid_indexes);
+        let constraints = raw::constraint::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("constraint", &mut oid_indexes);
+        let triggers = raw::trigger::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("trigger", &mut oid_indexes);
+        let policies = raw::policy::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("policy", &mut oid_indexes);
+        let extensions = raw::extension::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("extension", &mut oid_indexes);
         let grants = grant::fetch(&mut tx).await?;
 
         tx.commit().await?;
+
+        // The whole load's OID → identity index, and the attachment point for
+        // OID-addressed state that is not yet resolved through it (ownership,
+        // grants). It is deliberately not stored on `Catalog`: an OID reaching a
+        // logical struct is what breaks cross-database comparison, so the index
+        // dies here, at the firewall.
+        let _merged_oid_index = raw::merge_indexes(oid_indexes)?;
 
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();

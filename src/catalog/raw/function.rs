@@ -132,7 +132,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawFunctions> {
 /// Fetch functions and convert them into the logical catalog, with comments
 /// attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Function>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("function"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -157,6 +159,8 @@ pub async fn load_with_exclusions(
     for (_, function) in &mut converted.objects {
         function.comment = comments.get(&function.id()).map(|text| text.to_string());
     }
+
+    converted.index = index;
 
     Ok(converted.map(|(_, function)| function))
 }

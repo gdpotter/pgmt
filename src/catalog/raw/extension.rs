@@ -66,7 +66,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawExtension>> {
 /// Fetch extensions and convert them into the logical catalog, with each
 /// extension's comment attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Extension>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("extension"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not become
@@ -91,6 +93,8 @@ pub async fn load_with_exclusions(
     for (_, extension) in &mut converted.objects {
         extension.comment = comments.get(&extension.id()).map(|text| text.to_string());
     }
+
+    converted.index = oids;
 
     Ok(converted.map(|(_, extension)| extension))
 }

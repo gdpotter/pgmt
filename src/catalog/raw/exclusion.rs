@@ -13,6 +13,9 @@
 //! logical catalog.
 
 use sqlx::postgres::types::Oid;
+use tracing::{debug, trace};
+
+use super::oid_index::OidIndex;
 
 /// The fixed schemas PostgreSQL owns, which no schema file creates or drops.
 ///
@@ -39,6 +42,21 @@ pub fn is_system_schema(schema: &str) -> bool {
 pub const BUILT_IN_EXTENSIONS: [&str; 1] = ["plpgsql"];
 
 /// Why a raw row did not become a logical object.
+///
+/// A converter applies the reasons in a fixed precedence, and a row that would
+/// match several is recorded under the first that matches: [`SystemSchema`] —
+/// nothing PostgreSQL owns is looked at further — then [`ExtensionOwned`], then
+/// whatever kind-specific reason the converter has ([`ConstraintBackingIndex`],
+/// [`InternalTrigger`], [`IdentityOwnedSequence`], [`BuiltInExtension`]). The
+/// order is what makes a reason stable to assert on: an extension's primary-key
+/// index is `ExtensionOwned`, never `ConstraintBackingIndex`.
+///
+/// [`SystemSchema`]: ExclusionReason::SystemSchema
+/// [`ExtensionOwned`]: ExclusionReason::ExtensionOwned
+/// [`ConstraintBackingIndex`]: ExclusionReason::ConstraintBackingIndex
+/// [`InternalTrigger`]: ExclusionReason::InternalTrigger
+/// [`IdentityOwnedSequence`]: ExclusionReason::IdentityOwnedSequence
+/// [`BuiltInExtension`]: ExclusionReason::BuiltInExtension
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExclusionReason {
     /// The object lives in a schema PostgreSQL owns (`pg_catalog`,
@@ -139,6 +157,11 @@ impl Excluded {
 pub struct Converted<T> {
     pub objects: Vec<T>,
     pub excluded: Vec<Excluded>,
+    /// The addresses of the objects this kind's load indexed, which is where any
+    /// OID-addressed state beyond comments is resolved from. A bare `convert`
+    /// leaves it empty: the index exists only once identities do, which is a
+    /// `load`'s job.
+    pub index: OidIndex,
 }
 
 impl<T> Converted<T> {
@@ -146,16 +169,52 @@ impl<T> Converted<T> {
         Self {
             objects: Vec::new(),
             excluded: Vec::new(),
+            index: OidIndex::new(),
         }
     }
 
-    /// Replace the converted objects, keeping the exclusions — for a `load`
-    /// that maps its converter's output (dropping the OIDs it carried) without
-    /// losing the accounting.
+    /// Replace the converted objects, keeping the exclusions and the index — for
+    /// a `load` that maps its converter's output (dropping the OIDs it carried)
+    /// without losing the accounting.
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> Converted<U> {
         Converted {
             objects: self.objects.into_iter().map(f).collect(),
             excluded: self.excluded,
+            index: self.index,
+        }
+    }
+
+    /// Report what this conversion did with its raw rows, and yield the objects.
+    ///
+    /// The counts go to debug, one line per kind. The excluded rows themselves go
+    /// to trace: a converter drops thousands of `pg_catalog` rows on every load,
+    /// which would bury everything else a debug log is read for. The reason is
+    /// printed with its payload, so an unexpected drop names the extension or
+    /// constraint that claimed the row.
+    pub fn log_and_take_objects(self, kind: &str) -> Vec<T> {
+        self.log(kind);
+        self.objects
+    }
+
+    /// The same, keeping this kind's OID index for the catalog-wide merge.
+    pub fn collect_into(
+        mut self,
+        kind: &'static str,
+        indexes: &mut Vec<(&'static str, OidIndex)>,
+    ) -> Vec<T> {
+        self.log(kind);
+        indexes.push((kind, std::mem::take(&mut self.index)));
+        self.objects
+    }
+
+    fn log(&self, kind: &str) {
+        debug!(
+            "Converted {} {kind} rows, excluded {}",
+            self.objects.len(),
+            self.excluded.len()
+        );
+        for row in &self.excluded {
+            trace!("Excluded {kind} {}: {:?}", row.qualified_name(), row.reason);
         }
     }
 

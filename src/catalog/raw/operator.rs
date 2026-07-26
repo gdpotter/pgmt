@@ -148,7 +148,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
 /// Fetch operators and convert them into the logical catalog, with comments
 /// attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Operator>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("operator"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -170,6 +172,8 @@ pub async fn load_with_exclusions(
     for (_, operator) in &mut converted.objects {
         operator.comment = comments.get(&operator.id()).map(|text| text.to_string());
     }
+
+    converted.index = index;
 
     Ok(converted.map(|(_, operator)| operator))
 }

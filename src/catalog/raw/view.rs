@@ -119,7 +119,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawViews> {
 /// Fetch views and convert them into the logical catalog, with the view's own
 /// comment and its column comments attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<View>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("view"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not
@@ -153,6 +155,8 @@ pub async fn load_with_exclusions(
             }
         }
     }
+
+    converted.index = index;
 
     Ok(converted.map(|entry| entry.view))
 }

@@ -120,7 +120,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawPolicies> {
 /// Fetch policies and convert them into the logical catalog, with each policy's
 /// comment attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Policy>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("policy"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not become
@@ -145,6 +147,8 @@ pub async fn load_with_exclusions(
     for (_, policy) in &mut converted.objects {
         policy.comment = comments.get(&policy.id()).map(|text| text.to_string());
     }
+
+    converted.index = oids;
 
     Ok(converted.map(|(_, policy)| policy))
 }

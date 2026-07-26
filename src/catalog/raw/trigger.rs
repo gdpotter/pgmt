@@ -91,7 +91,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawTrigger>> {
 /// Fetch triggers and convert them into the logical catalog, with each trigger's
 /// comment attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Trigger>> {
-    Ok(load_with_exclusions(conn, shared).await?.objects)
+    Ok(load_with_exclusions(conn, shared)
+        .await?
+        .log_and_take_objects("trigger"))
 }
 
 /// The same load, keeping the named reason for every raw row that did not become
@@ -116,6 +118,8 @@ pub async fn load_with_exclusions(
     for (_, trigger) in &mut converted.objects {
         trigger.comment = comments.get(&trigger.id()).map(|text| text.to_string());
     }
+
+    converted.index = oids;
 
     Ok(converted.map(|(_, trigger)| trigger))
 }
