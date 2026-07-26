@@ -1082,3 +1082,35 @@ async fn test_identity_snapshot_labels_procedures_as_procedures() {
     })
     .await;
 }
+
+/// A parameter's mode lands on the parameter that declares it.
+///
+/// `pg_proc.proargmodes` is a SQL array subscripted from 1, parallel to
+/// `proargnames`. Reading it with a 0-based subscript made the first parameter's
+/// mode NULL and gave every later parameter its predecessor's, so a VARIADIC
+/// parameter was reported as an ordinary one and the parameter before it was
+/// reported as VARIADIC.
+#[tokio::test]
+async fn test_parameter_modes_align_with_their_parameters() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE FUNCTION join_all(separator text, VARIADIC parts text[])
+             RETURNS text AS $$ SELECT array_to_string(parts, separator) $$
+             LANGUAGE sql IMMUTABLE",
+        )
+        .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+        let func = functions
+            .iter()
+            .find(|f| f.name == "join_all")
+            .expect("the variadic function should be in the catalog");
+
+        assert_eq!(func.parameters.len(), 2);
+        assert_eq!(func.parameters[0].name, Some("separator".to_string()));
+        assert_eq!(func.parameters[0].mode, Some("IN".to_string()));
+        assert_eq!(func.parameters[1].name, Some("parts".to_string()));
+        assert_eq!(func.parameters[1].mode, Some("VARIADIC".to_string()));
+    })
+    .await;
+}

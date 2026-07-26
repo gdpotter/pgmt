@@ -526,7 +526,8 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
 
 async fn fetch_parameters(conn: &mut PgConnection) -> Result<Vec<RawFunctionParameter>> {
     // `proargtypes` holds the input parameters, in declaration order; the names
-    // and modes are positional arrays alongside it.
+    // and modes are positional arrays alongside it, both subscripted from 1 the
+    // way `WITH ORDINALITY` counts.
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -535,7 +536,7 @@ async fn fetch_parameters(conn: &mut PgConnection) -> Result<Vec<RawFunctionPara
             param_types.type_oid AS "type_oid!",
             pg_catalog.format_type(param_types.type_oid, NULL) AS "formatted_type!",
             p.proargnames[param_types.ordinal] AS "name?",
-            p.proargmodes[param_types.ordinal - 1]::text AS "mode?"
+            p.proargmodes[param_types.ordinal]::text AS "mode?"
         FROM pg_proc p
         CROSS JOIN LATERAL unnest(p.proargtypes) WITH ORDINALITY AS param_types(type_oid, ordinal)
         WHERE p.prokind != 'a'

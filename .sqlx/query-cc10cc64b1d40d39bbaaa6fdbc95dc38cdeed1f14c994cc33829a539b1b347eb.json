@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            p.oid AS \"function_oid!\",\n            param_types.ordinal AS \"ordinal!\",\n            param_types.type_oid AS \"type_oid!\",\n            pg_catalog.format_type(param_types.type_oid, NULL) AS \"formatted_type!\",\n            p.proargnames[param_types.ordinal] AS \"name?\",\n            p.proargmodes[param_types.ordinal - 1]::text AS \"mode?\"\n        FROM pg_proc p\n        CROSS JOIN LATERAL unnest(p.proargtypes) WITH ORDINALITY AS param_types(type_oid, ordinal)\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid, param_types.ordinal\n        ",
+  "query": "\n        SELECT\n            p.oid AS \"function_oid!\",\n            param_types.ordinal AS \"ordinal!\",\n            param_types.type_oid AS \"type_oid!\",\n            pg_catalog.format_type(param_types.type_oid, NULL) AS \"formatted_type!\",\n            p.proargnames[param_types.ordinal] AS \"name?\",\n            p.proargmodes[param_types.ordinal]::text AS \"mode?\"\n        FROM pg_proc p\n        CROSS JOIN LATERAL unnest(p.proargtypes) WITH ORDINALITY AS param_types(type_oid, ordinal)\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid, param_types.ordinal\n        ",
   "describe": {
     "columns": [
       {
@@ -57,5 +57,5 @@
       null
     ]
   },
-  "hash": "2ec77a623beed385b64ac0b69564dfffdd9e0498b3e88674d7373d1f05513626"
+  "hash": "cc10cc64b1d40d39bbaaa6fdbc95dc38cdeed1f14c994cc33829a539b1b347eb"
 }
