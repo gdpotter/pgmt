@@ -288,12 +288,34 @@ pub fn convert(
                 columns: row.columns.clone(),
             },
             "f" => {
-                let referenced_schema = row
-                    .referenced_namespace
-                    .and_then(|ns| shared.namespaces.name(ns))
-                    .unwrap_or_default()
+                // A foreign key always names a referenced relation, and the
+                // namespace map is the unfiltered enumeration read in the same
+                // snapshot: a referent that will not resolve means the fetch and
+                // the shared state disagree, not that the key has no referent.
+                // Naming it with empty strings would render
+                // `REFERENCES ""."" ` and make the constraint depend on a table
+                // that cannot exist.
+                let (Some(referenced_namespace), Some(referenced_table)) =
+                    (row.referenced_namespace, row.referenced_table.clone())
+                else {
+                    bail!(
+                        "foreign key {}.{}.{} was fetched without a referenced table",
+                        schema,
+                        row.table_name,
+                        row.name
+                    );
+                };
+                let referenced_schema = shared
+                    .namespaces
+                    .name(referenced_namespace)
+                    .with_context(|| {
+                        format!(
+                            "foreign key {}.{}.{} references a table whose namespace is not in \
+                             the namespace map",
+                            schema, row.table_name, row.name
+                        )
+                    })?
                     .to_string();
-                let referenced_table = row.referenced_table.clone().unwrap_or_default();
 
                 depends_on.push(DbObjectId::Table {
                     schema: referenced_schema.clone(),
@@ -362,6 +384,77 @@ fn referential_action(action: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::raw::shared::NamespaceMap;
+
+    /// A raw foreign key on `app.orders`, with whatever referent the caller
+    /// gives it.
+    fn foreign_key(
+        referenced_namespace: Option<Oid>,
+        referenced_table: Option<&str>,
+    ) -> RawConstraint {
+        RawConstraint {
+            oid: Oid(20001),
+            name: "orders_user_fk".to_string(),
+            contype: "f".to_string(),
+            table_oid: Oid(20000),
+            table_namespace: Oid(100),
+            table_name: "orders".to_string(),
+            columns: vec!["user_id".to_string()],
+            referenced_namespace,
+            referenced_table: referenced_table.map(String::from),
+            referenced_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+            deferrable: false,
+            initially_deferred: false,
+            check_clause: None,
+            exclusion_elements: Vec::new(),
+            exclusion_opcnames: Vec::new(),
+            exclusion_operators: Vec::new(),
+            index_method: None,
+            predicate: None,
+        }
+    }
+
+    fn shared_with_app_schema() -> SharedCatalog {
+        SharedCatalog {
+            namespaces: NamespaceMap::from_pairs([(Oid(100), "app".to_string())]),
+            ..SharedCatalog::default()
+        }
+    }
+
+    #[test]
+    fn test_foreign_key_without_a_referent_is_an_error() {
+        let raw = [foreign_key(None, None)];
+        let error = convert(&raw, &shared_with_app_schema())
+            .expect_err("a foreign key with no referenced table must not convert");
+        assert!(
+            error.to_string().contains("without a referenced table"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_foreign_key_with_an_unknown_namespace_is_an_error() {
+        let raw = [foreign_key(Some(Oid(999)), Some("users"))];
+        let error = convert(&raw, &shared_with_app_schema())
+            .expect_err("a foreign key whose referent has no namespace must not convert");
+        assert!(
+            error.to_string().contains("namespace map"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_foreign_key_names_its_referent() {
+        let raw = [foreign_key(Some(Oid(100)), Some("users"))];
+        let converted = convert(&raw, &shared_with_app_schema()).expect("converts");
+        let (_, constraint) = &converted.objects[0];
+        assert!(constraint.depends_on.contains(&DbObjectId::Table {
+            schema: "app".to_string(),
+            name: "users".to_string(),
+        }));
+    }
 
     #[test]
     fn test_referential_actions_name_every_char_but_no_action() {

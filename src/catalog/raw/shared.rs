@@ -49,6 +49,13 @@ pub struct NamespaceMap {
 }
 
 impl NamespaceMap {
+    /// A map of the given `(oid, name)` pairs.
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (Oid, String)>) -> Self {
+        Self {
+            by_oid: pairs.into_iter().map(|(oid, name)| (oid.0, name)).collect(),
+        }
+    }
+
     pub fn name(&self, oid: Oid) -> Option<&str> {
         self.by_oid.get(&oid.0).map(String::as_str)
     }
