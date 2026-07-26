@@ -1,0 +1,253 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            o.oid AS \"oid!\",\n            o.oprnamespace AS \"namespace!\",\n            o.oprname AS \"name!\",\n\n            -- Formatted operand types (NULL for an absent operand). These drive both\n            -- the `(left, right)` identity string and the LEFTARG/RIGHTARG clauses.\n            CASE WHEN o.oprleft = 0 THEN NULL ELSE format_type(o.oprleft, NULL) END AS \"left_type?\",\n            CASE WHEN o.oprright = 0 THEN NULL ELSE format_type(o.oprright, NULL) END AS \"right_type?\",\n\n            -- Implementing function (oprcode) - always present.\n            fn.pronamespace AS \"function_namespace!\",\n            fn.proname AS \"function_name!\",\n            pg_catalog.pg_get_function_identity_arguments(fn.oid) AS \"function_args!\",\n\n            -- Operand types, unresolved: classification happens in the converter.\n            o.oprleft AS \"oprleft!\",\n            o.oprright AS \"oprright!\",\n\n            -- Commutator / negator operator identities (for rendering only).\n            com.oprnamespace AS \"commutator_namespace?\",\n            com.oprname AS \"commutator_name?\",\n            neg.oprnamespace AS \"negator_namespace?\",\n            neg.oprname AS \"negator_name?\",\n\n            -- Restriction / join selectivity functions.\n            rf.pronamespace AS \"restrict_namespace?\",\n            rf.proname AS \"restrict_name?\",\n            pg_catalog.pg_get_function_identity_arguments(rf.oid) AS \"restrict_args?\",\n            jf.pronamespace AS \"join_namespace?\",\n            jf.proname AS \"join_name?\",\n            pg_catalog.pg_get_function_identity_arguments(jf.oid) AS \"join_args?\",\n\n            o.oprcanhash AS \"hashes!\",\n            o.oprcanmerge AS \"merges!\"\n\n        FROM pg_operator o\n\n        -- Implementing function\n        JOIN pg_proc fn ON o.oprcode = fn.oid\n\n        -- Commutator / negator\n        LEFT JOIN pg_operator com ON o.oprcom = com.oid AND o.oprcom != 0\n        LEFT JOIN pg_operator neg ON o.oprnegate = neg.oid AND o.oprnegate != 0\n\n        -- Selectivity functions\n        LEFT JOIN pg_proc rf ON o.oprrest = rf.oid AND o.oprrest != 0\n        LEFT JOIN pg_proc jf ON o.oprjoin = jf.oid AND o.oprjoin != 0\n\n        ORDER BY o.oprnamespace, o.oprname, o.oprleft, o.oprright\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "left_type?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "right_type?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "function_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "function_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "function_args!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "oprleft!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprleft"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "oprright!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprright"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "commutator_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "commutator_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprname"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "negator_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "negator_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprname"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "restrict_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "restrict_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "restrict_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "join_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "join_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "join_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 20,
+        "name": "hashes!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprcanhash"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "merges!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_operator",
+            "name": "oprcanmerge"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "bf3c63d4aeddd575d1ec2b5254b880adc83bb321e64d7cc0a42e43d3d7829ffc"
+}

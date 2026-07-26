@@ -16,7 +16,7 @@ use super::index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::operator::Operator;
-use crate::catalog::utils::{is_system_schema, resolve_type_dependency};
+use crate::catalog::utils::is_system_schema;
 
 /// Schemas whose operators are never pgmt's to manage.
 const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
@@ -36,20 +36,11 @@ pub struct RawOperator {
     pub function_name: String,
     pub function_args: String,
 
-    /// Operand type metadata, already resolved through `typelem` so an array
-    /// operand reports its element type. The OID is the one an extension would
-    /// own; the rest classifies the dependency.
-    pub left_type_oid: Option<Oid>,
-    pub left_type_name: Option<String>,
-    pub left_type_namespace: Option<Oid>,
-    pub left_typtype: Option<String>,
-    pub left_relkind: Option<String>,
-
-    pub right_type_oid: Option<Oid>,
-    pub right_type_name: Option<String>,
-    pub right_type_namespace: Option<Oid>,
-    pub right_typtype: Option<String>,
-    pub right_relkind: Option<String>,
+    /// Operand types, unresolved: an array's own OID, not its element type's,
+    /// and `0` for an absent operand. The converter classifies them through the
+    /// shared type map.
+    pub oprleft: Oid,
+    pub oprright: Oid,
 
     pub commutator_namespace: Option<Oid>,
     pub commutator_name: Option<String>,
@@ -87,19 +78,9 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
             fn.proname AS "function_name!",
             pg_catalog.pg_get_function_identity_arguments(fn.oid) AS "function_args!",
 
-            -- Left operand type metadata (resolve array element type).
-            COALESCE(NULLIF(lt.typelem, 0::oid), lt.oid) AS "left_type_oid?",
-            CASE WHEN lt.typelem != 0 THEN lt_elem.typname ELSE lt.typname END AS "left_type_name?",
-            CASE WHEN lt.typelem != 0 THEN lt_elem.typnamespace ELSE lt.typnamespace END AS "left_type_namespace?",
-            CASE WHEN lt.typelem != 0 THEN lt_elem.typtype::text ELSE lt.typtype::text END AS "left_typtype?",
-            CASE WHEN lt.typelem != 0 THEN lt_elem_rel.relkind::text ELSE lt_rel.relkind::text END AS "left_relkind?",
-
-            -- Right operand type metadata (resolve array element type).
-            COALESCE(NULLIF(rt.typelem, 0::oid), rt.oid) AS "right_type_oid?",
-            CASE WHEN rt.typelem != 0 THEN rt_elem.typname ELSE rt.typname END AS "right_type_name?",
-            CASE WHEN rt.typelem != 0 THEN rt_elem.typnamespace ELSE rt.typnamespace END AS "right_type_namespace?",
-            CASE WHEN rt.typelem != 0 THEN rt_elem.typtype::text ELSE rt.typtype::text END AS "right_typtype?",
-            CASE WHEN rt.typelem != 0 THEN rt_elem_rel.relkind::text ELSE rt_rel.relkind::text END AS "right_relkind?",
+            -- Operand types, unresolved: classification happens in the converter.
+            o.oprleft AS "oprleft!",
+            o.oprright AS "oprright!",
 
             -- Commutator / negator operator identities (for rendering only).
             com.oprnamespace AS "commutator_namespace?",
@@ -122,18 +103,6 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
 
         -- Implementing function
         JOIN pg_proc fn ON o.oprcode = fn.oid
-
-        -- Left operand type (+ array element resolution)
-        LEFT JOIN pg_type lt ON o.oprleft = lt.oid AND o.oprleft != 0
-        LEFT JOIN pg_type lt_elem ON lt.typelem = lt_elem.oid AND lt.typelem != 0
-        LEFT JOIN pg_class lt_rel ON lt.typrelid = lt_rel.oid AND lt.typrelid != 0
-        LEFT JOIN pg_class lt_elem_rel ON lt_elem.typrelid = lt_elem_rel.oid AND lt_elem.typrelid != 0
-
-        -- Right operand type (+ array element resolution)
-        LEFT JOIN pg_type rt ON o.oprright = rt.oid AND o.oprright != 0
-        LEFT JOIN pg_type rt_elem ON rt.typelem = rt_elem.oid AND rt.typelem != 0
-        LEFT JOIN pg_class rt_rel ON rt.typrelid = rt_rel.oid AND rt.typrelid != 0
-        LEFT JOIN pg_class rt_elem_rel ON rt_elem.typrelid = rt_elem_rel.oid AND rt_elem.typrelid != 0
 
         -- Commutator / negator
         LEFT JOIN pg_operator com ON o.oprcom = com.oid AND o.oprcom != 0
@@ -160,16 +129,8 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
             function_namespace: row.function_namespace,
             function_name: row.function_name,
             function_args: row.function_args,
-            left_type_oid: row.left_type_oid,
-            left_type_name: row.left_type_name,
-            left_type_namespace: row.left_type_namespace,
-            left_typtype: row.left_typtype,
-            left_relkind: row.left_relkind,
-            right_type_oid: row.right_type_oid,
-            right_type_name: row.right_type_name,
-            right_type_namespace: row.right_type_namespace,
-            right_typtype: row.right_typtype,
-            right_relkind: row.right_relkind,
+            oprleft: row.oprleft,
+            oprright: row.oprright,
             commutator_namespace: row.commutator_namespace,
             commutator_name: row.commutator_name,
             negator_namespace: row.negator_namespace,
@@ -257,33 +218,9 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Vec<(Oid, 
             });
         }
 
-        for (type_oid, type_name, type_namespace, typtype, relkind) in [
-            (
-                row.left_type_oid,
-                &row.left_type_name,
-                row.left_type_namespace,
-                &row.left_typtype,
-                &row.left_relkind,
-            ),
-            (
-                row.right_type_oid,
-                &row.right_type_name,
-                row.right_type_namespace,
-                &row.right_typtype,
-                &row.right_relkind,
-            ),
-        ] {
-            let extension = type_oid.and_then(|oid| shared.extensions.owner(class::PG_TYPE, oid));
-            let type_schema = type_namespace.and_then(|ns| namespaces.name(ns));
-
-            if let Some(dep) = resolve_type_dependency(
-                type_schema,
-                type_name.as_deref(),
-                typtype.as_deref(),
-                relkind.as_deref(),
-                extension.is_some(),
-                extension,
-            ) {
+        // An absent operand is `0`, which resolves to nothing.
+        for operand in [row.oprleft, row.oprright] {
+            if let Some(dep) = shared.resolve_type(operand).and_then(|t| t.dependency()) {
                 depends_on.push(dep);
             }
         }
