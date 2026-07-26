@@ -1,7 +1,14 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::aggregate::fetch;
+use pgmt::catalog::aggregate::Aggregate;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
+use pgmt::catalog::raw::aggregate as raw_aggregate;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Aggregate>> {
+    load_converted(conn, raw_aggregate::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_aggregate() {

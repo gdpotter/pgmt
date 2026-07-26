@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT\n            p.oid AS \"function_oid!\",\n            refcl.relname AS \"ref_class!\",\n            d.refobjid AS \"ref_oid!\",\n\n            cls.relkind::text AS \"relation_kind?\",\n            cls.relnamespace AS \"relation_namespace?\",\n            cls.relname AS \"relation_name?\",\n            cls_attr.attname AS \"relation_column?\",\n\n            proc.pronamespace AS \"routine_namespace?\",\n            proc.proname AS \"routine_name?\",\n            pg_catalog.pg_get_function_identity_arguments(proc.oid) AS \"routine_args?\"\n\n        FROM pg_proc p\n        JOIN pg_depend d ON d.classid = 'pg_proc'::regclass::oid AND d.objid = p.oid\n        JOIN pg_class refcl ON refcl.oid = d.refclassid\n\n        LEFT JOIN pg_class cls\n          ON d.refclassid = 'pg_class'::regclass::oid\n         AND d.refobjid = cls.oid\n        LEFT JOIN pg_attribute cls_attr\n          ON cls_attr.attrelid = cls.oid\n         AND cls_attr.attnum = d.refobjsubid\n         AND d.refobjsubid > 0\n\n        LEFT JOIN pg_proc proc\n          ON d.refclassid = 'pg_proc'::regclass::oid\n         AND d.refobjid = proc.oid\n\n        WHERE p.prokind != 'a'\n          AND d.deptype = 'n'\n          AND d.refclassid IN (\n            'pg_class'::regclass::oid,\n            'pg_type'::regclass::oid,\n            'pg_proc'::regclass::oid\n          )\n        ORDER BY p.oid, refcl.relname, d.refobjid, cls_attr.attname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "function_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ref_class!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "ref_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_depend",
+            "name": "refobjid"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "relation_kind?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "relation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "relation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "relation_column?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "routine_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "routine_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "routine_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "9f1df240dacf0e6f8213ea106ab89c52ced289751ca4cba4f5319a2134404de2"
+}

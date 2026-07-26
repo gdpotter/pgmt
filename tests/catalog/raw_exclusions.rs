@@ -9,8 +9,9 @@ use anyhow::Result;
 use pgmt::catalog::raw::exclusion::ExclusionReason;
 use pgmt::catalog::raw::shared;
 use pgmt::catalog::raw::{
-    custom_type as raw_custom_type, domain as raw_domain, operator as raw_operator,
-    table as raw_table, view as raw_view,
+    aggregate as raw_aggregate, cast as raw_cast, custom_type as raw_custom_type,
+    domain as raw_domain, function as raw_function, operator as raw_operator, table as raw_table,
+    view as raw_view,
 };
 use sqlx::postgres::types::Oid;
 use std::collections::BTreeSet;
@@ -406,6 +407,244 @@ async fn test_every_raw_domain_row_is_converted_or_excluded() -> Result<()> {
                 .excluded_for("SystemSchema")
                 .any(|row| row.schema == "information_schema"),
             "expected information_schema domains to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_function_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE FUNCTION greet(name text) RETURNS text AS $$ SELECT 'hi ' || name $$ LANGUAGE sql")
+            .await;
+        db.execute("CREATE FUNCTION adopted_fn() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD FUNCTION adopted_fn()")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_function::fetch(&mut conn).await?;
+        let converted = raw_function::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.functions.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .functions
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw function rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.functions.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, function)| function.name == "greet")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_fn")
+            .expect("the adopted function should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "function");
+
+        // The built-in routines are excluded as system-schema rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog"),
+            "expected pg_catalog functions to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_aggregate_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute(
+            "CREATE FUNCTION concat_sfunc(state text, val text) RETURNS text \
+             AS $$ SELECT COALESCE(state || ',', '') || val $$ LANGUAGE sql",
+        )
+        .await;
+        db.execute("CREATE AGGREGATE concat_all(text) (SFUNC = concat_sfunc, STYPE = text)")
+            .await;
+        db.execute("CREATE AGGREGATE adopted_agg(text) (SFUNC = concat_sfunc, STYPE = text)")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD AGGREGATE adopted_agg(text)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_aggregate::fetch(&mut conn).await?;
+        let converted = raw_aggregate::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw aggregate rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, aggregate)| aggregate.name == "concat_all")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_agg")
+            .expect("the adopted aggregate should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "aggregate");
+
+        // The built-in aggregates (sum, count, …) are system-schema rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog" && row.name == "count"),
+            "expected pg_catalog aggregates to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_cast_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE TYPE celsius AS (deg double precision)")
+            .await;
+        db.execute("CREATE TYPE fahrenheit AS (deg double precision)")
+            .await;
+        db.execute(
+            "CREATE FUNCTION c_to_f(celsius) RETURNS fahrenheit \
+             AS $$ SELECT ROW(($1).deg * 9.0 / 5.0 + 32.0)::fahrenheit $$ LANGUAGE sql IMMUTABLE",
+        )
+        .await;
+        db.execute("CREATE CAST (celsius AS fahrenheit) WITH FUNCTION c_to_f(celsius)")
+            .await;
+        db.execute("CREATE CAST (fahrenheit AS celsius) WITH INOUT")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD CAST (fahrenheit AS celsius)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_cast::fetch(&mut conn).await?;
+        let converted = raw_cast::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<String> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| format!("{} AS {}", row.source, row.target))
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw cast rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, cast)| cast.source == "celsius" && cast.target == "fahrenheit")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "fahrenheit AS celsius")
+            .expect("the adopted cast should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "cast");
+
+        // Every built-in cast converts between built-in types, and is the
+        // server's rather than a user's.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.name == "integer AS bigint"),
+            "expected built-in casts to be excluded as SystemSchema"
         );
 
         Ok(())

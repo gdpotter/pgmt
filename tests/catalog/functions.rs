@@ -1,7 +1,15 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 
-use pgmt::catalog::function::{FunctionKind, fetch};
+use anyhow::Result;
+use pgmt::catalog::function::{Function, FunctionKind};
 use pgmt::catalog::id::{DbObjectId, DependsOn};
+use pgmt::catalog::raw::function as raw_function;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Function>> {
+    load_converted(conn, raw_function::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_function() {

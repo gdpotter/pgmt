@@ -1,7 +1,14 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
-use pgmt::catalog::cast::fetch;
+use anyhow::Result;
+use pgmt::catalog::cast::Cast;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
+use pgmt::catalog::raw::cast as raw_cast;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Cast>> {
+    load_converted(conn, raw_cast::load).await
+}
 
 /// Two composite "temperature" types plus a conversion function — a clean basis
 /// for a user WITH FUNCTION cast that doesn't collide with any built-in cast.

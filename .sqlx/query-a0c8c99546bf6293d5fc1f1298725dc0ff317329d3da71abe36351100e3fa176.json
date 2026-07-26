@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            pg_catalog.format_type(c.castsource, NULL) AS \"source!\",\n            pg_catalog.format_type(c.casttarget, NULL) AS \"target!\",\n            c.castsource AS \"source_oid!\",\n            c.casttarget AS \"target_oid!\",\n            c.castcontext::text AS \"context!\",\n            c.castmethod::text AS \"method!\",\n\n            fn.pronamespace AS \"function_namespace?\",\n            fn.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(fn.oid) AS \"function_args?\"\n\n        FROM pg_cast c\n        LEFT JOIN pg_proc fn ON c.castfunc = fn.oid AND c.castfunc != 0\n        ORDER BY c.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_cast",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "target!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_cast",
+            "name": "castsource"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "target_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_cast",
+            "name": "casttarget"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "context!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "method!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "function_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "function_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "function_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a0c8c99546bf6293d5fc1f1298725dc0ff317329d3da71abe36351100e3fa176"
+}

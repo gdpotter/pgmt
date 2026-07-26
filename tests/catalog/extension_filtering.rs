@@ -1,14 +1,16 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::raw::{custom_type as raw_custom_type, table as raw_table, view as raw_view};
-use pgmt::catalog::{constraint, function, grant, index, policy, sequence, triggers};
+use pgmt::catalog::raw::{
+    custom_type as raw_custom_type, function as raw_function, table as raw_table, view as raw_view,
+};
+use pgmt::catalog::{constraint, grant, index, policy, sequence, triggers};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline function count before creating extension
-        let functions_before = function::fetch(&mut *db.conn().await).await?;
+        let functions_before = load_converted(&mut *db.conn().await, raw_function::load).await?;
         let baseline_count = functions_before.len();
 
         // Create the uuid-ossp extension which adds many functions
@@ -16,7 +18,7 @@ async fn test_extension_functions_are_filtered() -> Result<()> {
             .await;
 
         // Fetch functions after creating extension
-        let functions_after = function::fetch(&mut *db.conn().await).await?;
+        let functions_after = load_converted(&mut *db.conn().await, raw_function::load).await?;
         let after_count = functions_after.len();
 
         // The function count should be the same - extension functions should be filtered out
@@ -78,7 +80,8 @@ async fn test_user_functions_still_tracked() -> Result<()> {
             .await;
 
         // Get function count after extension
-        let functions_before_user = function::fetch(&mut *db.conn().await).await?;
+        let functions_before_user =
+            load_converted(&mut *db.conn().await, raw_function::load).await?;
         let before_count = functions_before_user.len();
 
         // Create a user-defined function
@@ -94,7 +97,8 @@ async fn test_user_functions_still_tracked() -> Result<()> {
         .await;
 
         // Fetch functions after creating user function
-        let functions_after_user = function::fetch(&mut *db.conn().await).await?;
+        let functions_after_user =
+            load_converted(&mut *db.conn().await, raw_function::load).await?;
         let after_count = functions_after_user.len();
 
         // Should have one more function now
@@ -123,7 +127,7 @@ async fn test_user_functions_still_tracked() -> Result<()> {
 async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline counts for all object types before creating extension
-        let functions_before = function::fetch(&mut *db.conn().await).await?;
+        let functions_before = load_converted(&mut *db.conn().await, raw_function::load).await?;
         let types_before = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_before = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_before = load_converted(&mut *db.conn().await, raw_view::load).await?;
@@ -136,7 +140,7 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
             .await;
 
         // Fetch objects after creating extension
-        let functions_after = function::fetch(&mut *db.conn().await).await?;
+        let functions_after = load_converted(&mut *db.conn().await, raw_function::load).await?;
         let types_after = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_after = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_after = load_converted(&mut *db.conn().await, raw_view::load).await?;

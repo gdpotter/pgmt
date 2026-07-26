@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"function_oid!\",\n            param_types.ordinal AS \"ordinal!\",\n            param_types.type_oid AS \"type_oid!\",\n            pg_catalog.format_type(param_types.type_oid, NULL) AS \"formatted_type!\",\n            p.proargnames[param_types.ordinal] AS \"name?\",\n            p.proargmodes[param_types.ordinal - 1]::text AS \"mode?\"\n        FROM pg_proc p\n        CROSS JOIN LATERAL unnest(p.proargtypes) WITH ORDINALITY AS param_types(type_oid, ordinal)\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid, param_types.ordinal\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "function_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "type_oid!",
+        "type_info": "Oid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "formatted_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "name?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "mode?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "2ec77a623beed385b64ac0b69564dfffdd9e0498b3e88674d7373d1f05513626"
+}

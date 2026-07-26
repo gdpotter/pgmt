@@ -87,7 +87,6 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             let kind_str = match n.kind {
                 FunctionKind::Function => "FUNCTION",
                 FunctionKind::Procedure => "PROCEDURE",
-                FunctionKind::Aggregate => "AGGREGATE FUNCTION",
             };
 
             let params = format_parameter_list(&n.parameters);
@@ -111,7 +110,6 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
             let kind_str = match o.kind {
                 FunctionKind::Function => "FUNCTION",
                 FunctionKind::Procedure => "PROCEDURE",
-                FunctionKind::Aggregate => "AGGREGATE FUNCTION",
             };
 
             let param_types: Vec<String> =
@@ -146,7 +144,6 @@ pub fn diff(old: Option<&Function>, new: Option<&Function>) -> Vec<MigrationStep
                 let kind_str = match n.kind {
                     FunctionKind::Function => "FUNCTION",
                     FunctionKind::Procedure => "PROCEDURE",
-                    FunctionKind::Aggregate => "AGGREGATE FUNCTION",
                 };
 
                 let params = format_parameter_list(&n.parameters);

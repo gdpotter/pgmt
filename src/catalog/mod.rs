@@ -105,10 +105,10 @@ impl Catalog {
         let views = raw::view::load(&mut *conn, &shared).await?;
         let types = raw::custom_type::load(&mut *conn, &shared).await?;
         let domains = raw::domain::load(&mut *conn, &shared).await?;
-        let functions = function::fetch(&mut *conn).await?;
-        let aggregates = aggregate::fetch(&mut *conn).await?;
+        let functions = raw::function::load(&mut *conn, &shared).await?;
+        let aggregates = raw::aggregate::load(&mut *conn, &shared).await?;
         let operators = raw::operator::load(&mut *conn, &shared).await?;
-        let casts = cast::fetch(&mut *conn).await?;
+        let casts = raw::cast::load(&mut *conn, &shared).await?;
         let sequences = sequence::fetch(&mut *conn).await?;
         let indexes = index::fetch(&mut *conn).await?;
         let constraints = constraint::fetch(&mut *conn).await?;

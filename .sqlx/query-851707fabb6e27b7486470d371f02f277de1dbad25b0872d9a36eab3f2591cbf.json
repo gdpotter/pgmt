@@ -1,0 +1,145 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"oid!\",\n            p.pronamespace AS \"namespace!\",\n            p.proname AS \"name!\",\n            p.prokind::text AS \"prokind!\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"arguments!\",\n            pg_catalog.pg_get_functiondef(p.oid) AS \"definition!\",\n            pg_catalog.pg_get_function_result(p.oid) AS \"return_type?\",\n            p.prorettype AS \"return_type_oid!\",\n            l.lanname AS \"language!\",\n            p.provolatile::text AS \"volatility!\",\n            p.proisstrict AS \"is_strict!\",\n            p.prosecdef AS \"security_definer!\",\n            p.pronargs AS \"num_args!\"\n        FROM pg_proc p\n        JOIN pg_language l ON p.prolang = l.oid\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "prokind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "arguments!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "definition!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "return_type?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "return_type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "prorettype"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "language!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_language",
+            "name": "lanname"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "volatility!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_strict!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proisstrict"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "security_definer!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "prosecdef"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "num_args!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronargs"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "851707fabb6e27b7486470d371f02f277de1dbad25b0872d9a36eab3f2591cbf"
+}

@@ -130,6 +130,7 @@ impl DependencyBuilder {
     ///
     /// Use this method when you have access to `typtype` information (e.g., for function
     /// parameters and return types). Falls back to `DbObjectId::Type` if typtype is unknown.
+    #[allow(dead_code)] // Used in tests; converters call resolve_type_dependency directly
     pub fn add_type_dependency(
         &mut self,
         type_schema: Option<String>,

@@ -1,0 +1,181 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"oid!\",\n            p.pronamespace AS \"namespace!\",\n            p.proname AS \"name!\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"arguments!\",\n\n            -- State type (STYPE), unresolved: classification happens in the converter.\n            agg.aggtranstype AS \"state_type_oid!\",\n            pg_catalog.format_type(agg.aggtranstype, NULL) AS \"state_type_formatted!\",\n\n            -- State transition function (SFUNC) - always present.\n            tfunc.pronamespace AS \"state_func_namespace!\",\n            tfunc.proname AS \"state_func_name!\",\n            pg_catalog.pg_get_function_identity_arguments(tfunc.oid) AS \"state_func_args!\",\n\n            -- Final function (FINALFUNC) - optional.\n            ffunc.pronamespace AS \"final_func_namespace?\",\n            ffunc.proname AS \"final_func_name?\",\n            pg_catalog.pg_get_function_identity_arguments(ffunc.oid) AS \"final_func_args?\",\n\n            -- Combine function for parallel aggregation (COMBINEFUNC) - optional.\n            cfunc.pronamespace AS \"combine_func_namespace?\",\n            cfunc.proname AS \"combine_func_name?\",\n            pg_catalog.pg_get_function_identity_arguments(cfunc.oid) AS \"combine_func_args?\",\n\n            agg.agginitval AS \"initial_value?\"\n\n        FROM pg_aggregate agg\n        JOIN pg_proc p ON agg.aggfnoid = p.oid\n        JOIN pg_proc tfunc ON agg.aggtransfn = tfunc.oid\n        LEFT JOIN pg_proc ffunc ON agg.aggfinalfn = ffunc.oid AND agg.aggfinalfn != 0\n        LEFT JOIN pg_proc cfunc ON agg.aggcombinefn = cfunc.oid AND agg.aggcombinefn != 0\n        ORDER BY p.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "arguments!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "state_type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_aggregate",
+            "name": "aggtranstype"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "state_type_formatted!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "state_func_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "state_func_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "state_func_args!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "final_func_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "final_func_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "final_func_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "combine_func_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "combine_func_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "combine_func_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "initial_value?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_aggregate",
+            "name": "agginitval"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "b646e5df966025ee732451a2aef076fee01f18ceef5327632dee4a36d2bb84c9"
+}
