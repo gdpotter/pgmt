@@ -4,6 +4,7 @@ use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::custom_type::{CustomType, TypeKind};
 use pgmt::catalog::id::{DbObjectId, DependsOn};
+use pgmt::catalog::identity::CatalogIdentity;
 use pgmt::catalog::raw::custom_type as raw_custom_type;
 use sqlx::postgres::PgConnection;
 
@@ -276,6 +277,51 @@ async fn test_exclude_table_row_types() {
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].name, "status");
         assert_eq!(types[0].kind, TypeKind::Enum);
+    })
+    .await;
+}
+
+/// A partitioned table's and a foreign table's row types are not composite types.
+///
+/// Every relation gets a `pg_type` row of typtype 'c' for its row type, and only
+/// the row types of ordinary tables, views, materialized views and sequences used
+/// to be filtered out. A partitioned or foreign table's row type therefore reached
+/// the catalog as a standalone composite, and pgmt planned a
+/// `CREATE TYPE public.<table> AS (...)` for a table it had already created.
+#[tokio::test]
+async fn test_exclude_partitioned_and_foreign_table_row_types() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE orders (id integer, placed_on date) PARTITION BY RANGE (placed_on)")
+            .await;
+        db.execute("CREATE TABLE orders_2024 PARTITION OF orders FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")
+            .await;
+        // A foreign data wrapper needs no handler to define foreign tables with;
+        // only reading from them would.
+        db.execute("CREATE FOREIGN DATA WRAPPER dummy").await;
+        db.execute("CREATE SERVER remote FOREIGN DATA WRAPPER dummy")
+            .await;
+        db.execute("CREATE FOREIGN TABLE remote_orders (id integer) SERVER remote")
+            .await;
+        db.execute("CREATE TYPE status AS ENUM ('active', 'inactive')")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+
+        let names: Vec<&str> = types.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["status"]);
+
+        // The identity snapshot mirrors the catalog's row-type filter, so neither
+        // relation may show up as a type there either.
+        let snapshot = CatalogIdentity::load(db.pool()).await.unwrap();
+        for name in ["orders", "orders_2024", "remote_orders"] {
+            assert!(
+                !snapshot.objects.contains(&DbObjectId::Type {
+                    schema: "public".to_string(),
+                    name: name.to_string(),
+                }),
+                "{name}'s row type is reported as a type by the identity snapshot"
+            );
+        }
     })
     .await;
 }

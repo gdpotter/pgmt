@@ -41,6 +41,14 @@ const SCHEMA: &[&str] = &[
         total numeric(10, 2) NOT NULL
     )"#,
     "CREATE INDEX orders_total_idx ON app.orders (total) WHERE total > 0",
+    // A partitioned table and its partition: their row types are the relations'
+    // own, so neither side may report them as composite types.
+    r#"CREATE TABLE app.events (
+        id integer,
+        occurred_on date NOT NULL
+    ) PARTITION BY RANGE (occurred_on)"#,
+    "CREATE TABLE app.events_2024 PARTITION OF app.events \
+     FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
     // Both sequence shapes: an identity column's sequence is internal to the
     // column and belongs to neither side, while a SERIAL column's is a sequence
     // of its own that both sides must report. The exclusion constraint owns its
