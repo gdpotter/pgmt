@@ -220,7 +220,19 @@ pub fn convert(
         });
     }
 
-    for row in &raw.enum_values {
+    // `enumsortorder` is where an enum's label order lives physically, and this is
+    // where it dies: the labels are ordered by it once, here, and the logical type
+    // carries only the resulting sequence. Two databases that reached the same
+    // label order by different routes (`ADD VALUE BEFORE` allocates fractional
+    // sort orders) must compare equal.
+    let mut enum_values: Vec<&RawEnumValue> = raw.enum_values.iter().collect();
+    enum_values.sort_by(|a, b| {
+        a.sort_order
+            .partial_cmp(&b.sort_order)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for row in enum_values {
         let Some(&idx) = kept.get(&row.type_oid.0) else {
             continue;
         };
@@ -229,7 +241,6 @@ pub fn convert(
             .enum_values
             .push(EnumValue {
                 name: row.name.clone(),
-                sort_order: row.sort_order,
             });
     }
 

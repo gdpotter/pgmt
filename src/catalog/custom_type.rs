@@ -27,10 +27,13 @@ impl TypeKind {
     }
 }
 
+/// One label of an enum type. The labels' order is the `Vec`'s order; the
+/// `pg_enum.enumsortorder` float that produced it is physical — two databases
+/// reach the same label order through different floats once a label has been
+/// added with `ADD VALUE BEFORE` — and dies in the converter.
 #[derive(Debug, Clone)]
 pub struct EnumValue {
     pub name: String,
-    pub sort_order: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -84,10 +87,8 @@ mod tests {
     fn make_enum_type(schema: &str, name: &str, values: Vec<&str>) -> CustomType {
         let enum_values = values
             .into_iter()
-            .enumerate()
-            .map(|(i, name)| EnumValue {
+            .map(|name| EnumValue {
                 name: name.to_string(),
-                sort_order: i as f32,
             })
             .collect();
 

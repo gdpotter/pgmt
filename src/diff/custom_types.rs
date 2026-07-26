@@ -78,22 +78,12 @@ pub fn diff(old: Option<&CustomType>, new: Option<&CustomType>) -> Vec<Migration
                             return vec![drop_step(o), create_step(n)];
                         }
 
-                        // Add the first new value after the last existing value (by sort
-                        // order); each subsequent value after the previous new one.
-                        let after_clause = if !old_values.is_empty() {
-                            let last_enum_value = o
-                                .enum_values
-                                .iter()
-                                .max_by(|a, b| {
-                                    a.sort_order
-                                        .partial_cmp(&b.sort_order)
-                                        .unwrap_or(std::cmp::Ordering::Equal)
-                                })
-                                .map(|v| &v.name)
-                                .unwrap_or(old_values[0]);
-                            format!(" AFTER '{}'", last_enum_value)
-                        } else {
-                            String::new()
+                        // Add the first new value after the last existing one — the
+                        // labels are carried in label order — and each subsequent
+                        // value after the previous new one.
+                        let after_clause = match old_values.last() {
+                            Some(last_enum_value) => format!(" AFTER '{}'", last_enum_value),
+                            None => String::new(),
                         };
 
                         added_values

@@ -213,11 +213,6 @@ async fn test_enum_values_ordering() {
         assert_eq!(type_.enum_values[1].name, "medium");
         assert_eq!(type_.enum_values[2].name, "high");
         assert_eq!(type_.enum_values[3].name, "critical");
-
-        // Verify sort_order values are increasing
-        assert!(type_.enum_values[0].sort_order < type_.enum_values[1].sort_order);
-        assert!(type_.enum_values[1].sort_order < type_.enum_values[2].sort_order);
-        assert!(type_.enum_values[2].sort_order < type_.enum_values[3].sort_order);
     })
     .await;
 }

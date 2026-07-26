@@ -138,6 +138,92 @@ async fn test_identical_schemas_with_skewed_oids_produce_no_diff() -> Result<()>
     result
 }
 
+/// Two databases whose enums hold the same labels in the same order are the same
+/// schema, whatever floats got them there.
+///
+/// `pg_enum.enumsortorder` is an allocation, not a property: a label added with
+/// `ADD VALUE BEFORE` gets a fractional sort order between its neighbours, so the
+/// same final label order is reached with `1, 2, 3` in one database and
+/// `1, 1.5, 2` in another. A logical enum that carried the float would diff the
+/// two as different types.
+#[tokio::test]
+async fn test_enums_reached_by_different_sort_orders_produce_no_diff() -> Result<()> {
+    let pg = PgTestInstance::new().await;
+    let first = pg.create_test_database().await;
+    let second = pg.create_test_database().await;
+
+    let result = async {
+        apply(
+            &first,
+            &[
+                "CREATE SCHEMA app",
+                "CREATE TYPE app.status AS ENUM ('draft', 'review', 'published')",
+            ],
+        )
+        .await;
+        apply(
+            &second,
+            &[
+                "CREATE SCHEMA app",
+                "CREATE TYPE app.status AS ENUM ('draft', 'published')",
+                "ALTER TYPE app.status ADD VALUE 'review' BEFORE 'published'",
+            ],
+        )
+        .await;
+
+        // The fixture is only meaningful if the two databases really did allocate
+        // different sort orders for the same labels.
+        async fn sort_orders(db: &TestDatabase) -> Result<Vec<f32>> {
+            let rows = sqlx::query_as::<_, (f32,)>(
+                "SELECT e.enumsortorder FROM pg_enum e
+                 JOIN pg_type t ON t.oid = e.enumtypid
+                 WHERE t.typname = 'status' ORDER BY e.enumsortorder",
+            )
+            .fetch_all(db.pool())
+            .await?;
+            Ok(rows.into_iter().map(|(order,)| order).collect())
+        }
+        let first_orders = sort_orders(&first).await?;
+        let second_orders = sort_orders(&second).await?;
+        assert_ne!(
+            first_orders, second_orders,
+            "expected the two databases to allocate different enum sort orders"
+        );
+
+        let first_catalog = Catalog::load_unfiltered(first.pool()).await?;
+        let second_catalog = Catalog::load_unfiltered(second.pool()).await?;
+
+        let labels = |catalog: &Catalog| {
+            catalog
+                .types
+                .iter()
+                .find(|t| t.schema == "app" && t.name == "status")
+                .expect("the enum should be in the catalog")
+                .enum_values
+                .iter()
+                .map(|value| value.name.clone())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(labels(&first_catalog), labels(&second_catalog));
+
+        let forward = plan(&first_catalog, &second_catalog)?;
+        assert!(forward.is_empty(), "enums diffed non-empty: {:#?}", forward);
+        let backward = plan(&second_catalog, &first_catalog)?;
+        assert!(
+            backward.is_empty(),
+            "enums diffed non-empty in reverse: {:#?}",
+            backward
+        );
+
+        Ok(())
+    }
+    .await;
+
+    first.cleanup().await;
+    second.cleanup().await;
+    result
+}
+
 /// Whether a source line declares a field (or binding) whose type or name is a
 /// physical catalog coordinate.
 fn declares_physical_coordinate(line: &str) -> bool {
@@ -154,15 +240,21 @@ fn declares_physical_coordinate(line: &str) -> bool {
     }
     let type_ = type_.trim().trim_end_matches([',', ';']).trim();
 
-    type_
+    let words: Vec<&str> = type_
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .any(|word| word == "Oid")
+        .collect();
+
+    words.contains(&"Oid")
+        // A float on a logical struct is a catalog coordinate: PostgreSQL uses
+        // one where the value it stores is an allocation (pg_enum.enumsortorder),
+        // not a property of the object. Nothing logical is measured in floats.
+        || words.iter().any(|word| matches!(*word, "f32" | "f64"))
         || (name.contains("oid") && matches!(type_, "u32" | "i32" | "i64" | "Option<u32>"))
         || (name.contains("attnum")
             && matches!(type_, "i16" | "i32" | "Option<i16>" | "Option<i32>"))
 }
 
-/// No logical struct may carry an OID or an attnum.
+/// No logical struct may carry an OID, an attnum or a catalog float.
 ///
 /// The diff test above only catches a leak that changes a comparison: a field
 /// that happens to hold the same value in both databases — an attnum equal by
@@ -200,7 +292,7 @@ fn test_logical_catalog_source_carries_no_physical_coordinates() {
     assert!(files_scanned > 10, "expected to scan the catalog modules");
     assert!(
         offenders.is_empty(),
-        "the logical catalog must carry no OIDs or attnums; \
+        "the logical catalog must carry no OIDs, attnums or catalog floats; \
          physical coordinates belong in src/catalog/raw/:\n  {}",
         offenders.join("\n  ")
     );
@@ -217,6 +309,10 @@ mod detector_tests {
             "    pub relation_oid: Option<Oid>,"
         ));
         assert!(declares_physical_coordinate("    pub table_oid: u32,"));
+        assert!(declares_physical_coordinate("    pub sort_order: f32,"));
+        assert!(declares_physical_coordinate(
+            "    pub weights: Option<Vec<f64>>,"
+        ));
     }
 
     #[test]
@@ -229,6 +325,6 @@ mod detector_tests {
             "    // attnum: i16 would leak"
         ));
         assert!(!declares_physical_coordinate("          AND a.attnum > 0"));
-        assert!(!declares_physical_coordinate("    pub sort_order: i32,"));
+        assert!(!declares_physical_coordinate("    pub position: i32,"));
     }
 }
