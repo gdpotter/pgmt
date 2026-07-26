@@ -14,12 +14,26 @@
 
 use sqlx::postgres::types::Oid;
 
-/// The schemas PostgreSQL owns, which no schema file creates or drops.
+/// The fixed schemas PostgreSQL owns, which no schema file creates or drops.
 ///
-/// The fixed three; a converter that also has to account for the per-backend
-/// temporary namespaces (`pg_temp_N`, `pg_toast_temp_N`) matches those by
-/// prefix.
-pub const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
+/// The full rule is [`is_system_schema`]: beyond these three, every backend that
+/// creates a temporary object gets a `pg_temp_N` namespace and its
+/// `pg_toast_temp_N` companion, numbered by backend slot.
+const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
+
+/// Whether a namespace belongs to PostgreSQL rather than to a schema file.
+///
+/// This is the one Rust definition of [`ExclusionReason::SystemSchema`]; every
+/// converter applies it, and [`sql::not_a_system_namespace`] is its SQL mirror
+/// for the identity snapshot. Two spellings of "system schema" — one temp-aware,
+/// one not — mean an object excluded by a converter is still reported by the
+/// snapshot, which is exactly the `CatalogIdentity` ≡ `Catalog` divergence the
+/// snapshot exists to avoid.
+pub fn is_system_schema(schema: &str) -> bool {
+    SYSTEM_SCHEMAS.contains(&schema)
+        || schema.starts_with("pg_temp_")
+        || schema.starts_with("pg_toast_temp_")
+}
 
 /// The extension `initdb` installs into every database from `template1`.
 pub const BUILT_IN_EXTENSIONS: [&str; 1] = ["plpgsql"];
@@ -185,23 +199,19 @@ pub mod sql {
         format!("({})", names.join(", "))
     }
 
-    /// The schema named by `nspname_expr` is not one PostgreSQL owns.
+    /// The namespace named by `nspname_expr` is not PostgreSQL's own — the three
+    /// fixed catalog schemas and the per-backend temporary namespaces, which
+    /// exist for as long as a session holds a temporary object.
     ///
-    /// Mirrors [`super::ExclusionReason::SystemSchema`] as the converters apply
-    /// it: the three fixed catalog schemas.
-    pub fn not_in_system_schemas(nspname_expr: &str) -> String {
-        format!("{nspname_expr} NOT IN {}", system_schema_list())
-    }
-
-    /// The namespace named by `nspname_expr` is not PostgreSQL's own — including
-    /// the per-backend temporary namespaces, which exist for as long as a
-    /// session holds a temporary object.
-    ///
-    /// Mirrors `raw::schema::is_system_namespace`.
+    /// Mirrors [`super::is_system_schema`], negated. It is also the spelling the
+    /// raw fetches of `raw::function`, `raw::view` and `raw::index` duplicate as
+    /// a literal, to skip rendering definitions for rows their converter
+    /// excludes; [`tests::test_system_namespace_predicate_is_stable`] pins the
+    /// text those literals must match.
     pub fn not_a_system_namespace(nspname_expr: &str) -> String {
         format!(
-            "{} AND {nspname_expr} NOT LIKE 'pg_temp_%' AND {nspname_expr} NOT LIKE 'pg_toast_temp_%'",
-            not_in_system_schemas(nspname_expr)
+            "{nspname_expr} NOT IN {} AND {nspname_expr} NOT LIKE 'pg_temp_%' AND {nspname_expr} NOT LIKE 'pg_toast_temp_%'",
+            system_schema_list()
         )
     }
 
@@ -272,5 +282,42 @@ pub mod sql {
             .map(|name| format!("'{name}'"))
             .collect();
         format!("{extname_expr} NOT IN ({})", names.join(", "))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::not_a_system_namespace;
+
+        /// `sqlx::query!` needs a string literal, so the raw fetches that skip
+        /// rendering a definition for a system-schema row cannot interpolate this
+        /// fragment and spell it out instead. This pins the spelling those
+        /// literals are bound to.
+        #[test]
+        fn test_system_namespace_predicate_is_stable() {
+            assert_eq!(
+                not_a_system_namespace("n.nspname"),
+                "n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') \
+                 AND n.nspname NOT LIKE 'pg_temp_%' AND n.nspname NOT LIKE 'pg_toast_temp_%'"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_system_schema;
+
+    #[test]
+    fn test_temporary_namespaces_belong_to_postgres() {
+        assert!(is_system_schema("pg_catalog"));
+        assert!(is_system_schema("information_schema"));
+        assert!(is_system_schema("pg_toast"));
+        assert!(is_system_schema("pg_temp_3"));
+        assert!(is_system_schema("pg_toast_temp_3"));
+
+        assert!(!is_system_schema("public"));
+        assert!(!is_system_schema("app"));
+        // A user schema whose name merely starts the same way is the user's.
+        assert!(!is_system_schema("pg_temporary_data"));
     }
 }

@@ -13,12 +13,12 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::DependsOn;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::triggers::Trigger;
-use crate::catalog::{DependsOn, utils::is_system_schema};
 
 /// One `pg_trigger` row, before names are resolved and OIDs are discarded.
 #[derive(Debug, Clone)]

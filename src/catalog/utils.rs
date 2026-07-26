@@ -1,11 +1,9 @@
 use crate::catalog::id::DbObjectId;
 
-/// Helper to check if a schema name is a system schema.
-/// Used for dependency tracking to avoid tracking dependencies on system objects.
-pub fn is_system_schema(schema: &str) -> bool {
-    matches!(schema, "pg_catalog" | "information_schema" | "pg_toast")
-        || schema.starts_with("pg_temp_")
-}
+/// Whether a schema name is one PostgreSQL owns — the single definition, next to
+/// the SQL fragment mirroring it. Dependency tracking uses it to avoid tracking
+/// dependencies on system objects.
+pub use crate::catalog::raw::exclusion::is_system_schema;
 
 /// Resolve type metadata into the appropriate DbObjectId.
 ///
@@ -161,18 +159,6 @@ impl DependencyBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_system_schema() {
-        assert!(is_system_schema("pg_catalog"));
-        assert!(is_system_schema("information_schema"));
-        assert!(is_system_schema("pg_toast"));
-        assert!(is_system_schema("pg_temp_1234"));
-
-        assert!(!is_system_schema("public"));
-        assert!(!is_system_schema("my_schema"));
-        assert!(!is_system_schema("pg_something"));
-    }
 
     #[test]
     fn test_dependency_builder() {

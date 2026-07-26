@@ -13,7 +13,7 @@
 use anyhow::Result;
 use sqlx::postgres::types::Oid;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
@@ -64,7 +64,7 @@ pub fn convert(shared: &SharedCatalog) -> Result<Converted<(Oid, Schema)>> {
     let mut converted: Converted<(Oid, Schema)> = Converted::new();
 
     for (oid, name) in shared.namespaces.iter() {
-        if is_system_namespace(name) {
+        if is_system_schema(name) {
             converted.excluded.push(Excluded::new(
                 oid,
                 "schema",
@@ -90,34 +90,4 @@ pub fn convert(shared: &SharedCatalog) -> Result<Converted<(Oid, Schema)>> {
         .sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
 
     Ok(converted)
-}
-
-/// Whether a namespace belongs to PostgreSQL rather than to a schema file.
-///
-/// Beyond the three fixed catalog schemas, every backend that creates a
-/// temporary object gets a `pg_temp_N` namespace and its `pg_toast_temp_N`
-/// companion, numbered by backend slot.
-fn is_system_namespace(name: &str) -> bool {
-    matches!(name, "pg_catalog" | "information_schema" | "pg_toast")
-        || name.starts_with("pg_temp_")
-        || name.starts_with("pg_toast_temp_")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_temporary_namespaces_belong_to_postgres() {
-        assert!(is_system_namespace("pg_catalog"));
-        assert!(is_system_namespace("information_schema"));
-        assert!(is_system_namespace("pg_toast"));
-        assert!(is_system_namespace("pg_temp_3"));
-        assert!(is_system_namespace("pg_toast_temp_3"));
-
-        assert!(!is_system_namespace("public"));
-        assert!(!is_system_namespace("app"));
-        // A user schema whose name merely starts the same way is the user's.
-        assert!(!is_system_namespace("pg_temporary_data"));
-    }
 }

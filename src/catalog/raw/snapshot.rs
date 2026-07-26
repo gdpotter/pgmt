@@ -143,7 +143,7 @@ pub fn branches() -> Vec<Branch> {
         .schema("n.nspname")
         .name("c.relname")
         .filter("c.relkind = 'r'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_class", "c.oid")),
         // raw::view
         Branch::new(
@@ -153,7 +153,7 @@ pub fn branches() -> Vec<Branch> {
         .schema("n.nspname")
         .name("c.relname")
         .filter("c.relkind = 'v'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_class", "c.oid")),
         // raw::sequence
         Branch::new(
@@ -163,7 +163,7 @@ pub fn branches() -> Vec<Branch> {
         .schema("n.nspname")
         .name("c.relname")
         .filter("c.relkind = 'S'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_class", "c.oid"))
         .filter(sql::not_an_identity_sequence("c.oid")),
         // raw::index. The enumeration is `pg_index`, as the raw fetch's is: it
@@ -182,8 +182,8 @@ pub fn branches() -> Vec<Branch> {
         )
         .schema("n.nspname")
         .name("i.relname")
-        .filter(sql::not_in_system_schemas("n.nspname"))
-        .filter(sql::not_in_system_schemas("tn.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
+        .filter(sql::not_a_system_namespace("tn.nspname"))
         .filter(sql::not_extension_owned("pg_class", "i.oid"))
         .filter(sql::parent_relation_not_extension_owned("t.oid"))
         .filter(sql::not_a_constraint_backing_index("i.oid")),
@@ -197,7 +197,7 @@ pub fn branches() -> Vec<Branch> {
         .name("p.proname")
         .args("pg_catalog.pg_get_function_identity_arguments(p.oid)")
         .filter("p.prokind NOT IN ('a', 'p')")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_proc", "p.oid")),
         // raw::function, procedure half.
         Branch::new(
@@ -208,7 +208,7 @@ pub fn branches() -> Vec<Branch> {
         .name("p.proname")
         .args("pg_catalog.pg_get_function_identity_arguments(p.oid)")
         .filter("p.prokind = 'p'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_proc", "p.oid")),
         // raw::aggregate, which enumerates `pg_aggregate` joined to its
         // `pg_proc` row — exactly the routines of `prokind = 'a'`.
@@ -220,7 +220,7 @@ pub fn branches() -> Vec<Branch> {
         .name("p.proname")
         .args("pg_catalog.pg_get_function_identity_arguments(p.oid)")
         .filter("p.prokind = 'a'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_proc", "p.oid")),
         // raw::custom_type — enums, composites and ranges. The row-type test
         // mirrors the one in that fetch's own query: a relation's row type is
@@ -237,7 +237,7 @@ pub fn branches() -> Vec<Branch> {
              WHERE c.reltype = t.oid\n      \
              AND c.relkind IN ('r', 'v', 'm', 'S')\n)",
         )
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_type", "t.oid")),
         // raw::domain
         Branch::new(
@@ -247,7 +247,7 @@ pub fn branches() -> Vec<Branch> {
         .schema("n.nspname")
         .name("t.typname")
         .filter("t.typtype = 'd'")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_type", "t.oid")),
         // raw::constraint. Primary keys are carried by their table, so they are
         // not constraints of their own here.
@@ -262,7 +262,7 @@ pub fn branches() -> Vec<Branch> {
         .table("cl.relname")
         .filter("cl.relkind = 'r'")
         .filter("co.contype IN ('u', 'f', 'c', 'x')")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::parent_relation_not_extension_owned("cl.oid")),
         // raw::trigger
         Branch::new(
@@ -276,7 +276,7 @@ pub fn branches() -> Vec<Branch> {
         .table("c.relname")
         .filter("c.relkind IN ('r', 'v', 'm')")
         .filter("NOT tg.tgisinternal")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::parent_relation_not_extension_owned("c.oid")),
         // raw::policy
         Branch::new(
@@ -288,7 +288,7 @@ pub fn branches() -> Vec<Branch> {
         .schema("n.nspname")
         .name("pol.polname")
         .table("c.relname")
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::parent_relation_not_extension_owned("c.oid")),
         // raw::operator. The identity args are the canonical "left, right"
         // operand string `DROP`/`COMMENT ON OPERATOR` require, with NONE for an
@@ -306,7 +306,7 @@ pub fn branches() -> Vec<Branch> {
              || CASE WHEN o.oprright = 0 THEN 'NONE' \
              ELSE pg_catalog.format_type(o.oprright, NULL) END",
         )
-        .filter(sql::not_in_system_schemas("n.nspname"))
+        .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_operator", "o.oid")),
         // raw::cast. A cast is not schema-scoped: its identity is the (source,
         // target) type pair, carried in the "name" and "tbl" columns. Creating
@@ -328,8 +328,8 @@ pub fn branches() -> Vec<Branch> {
         .table("pg_catalog.format_type(ca.casttarget, NULL)")
         .filter(format!(
             "{} OR {}",
-            sql::not_in_system_schemas("stn.nspname"),
-            sql::not_in_system_schemas("ttn.nspname")
+            sql::not_a_system_namespace("stn.nspname"),
+            sql::not_a_system_namespace("ttn.nspname")
         ))
         .filter(sql::not_extension_owned("pg_cast", "ca.oid")),
         // raw::extension

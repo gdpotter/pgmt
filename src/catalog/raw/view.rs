@@ -15,11 +15,10 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{ResolvedType, SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
-use crate::catalog::utils::is_system_schema;
 use crate::catalog::view::{View, ViewColumn};
 
 /// One `pg_class` row of `relkind = 'v'`, before names are resolved and OIDs are
@@ -175,7 +174,7 @@ pub fn convert(raw: &RawViews, shared: &SharedCatalog) -> Result<Converted<Conve
             .name(row.namespace)
             .with_context(|| format!("view {} has no namespace entry", row.name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "view",

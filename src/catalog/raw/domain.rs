@@ -14,7 +14,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::domain::{Domain, DomainCheckConstraint};
@@ -120,7 +120,7 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
             .name(row.namespace)
             .with_context(|| format!("domain {} has no namespace entry", row.name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "domain",

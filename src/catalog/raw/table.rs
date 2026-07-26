@@ -15,12 +15,11 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::table::{Column, IdentityKind, PrimaryKey, Table};
-use crate::catalog::utils::is_system_schema;
 use crate::render::quote_ident;
 
 /// One `pg_class` row of `relkind = 'r'`, before names are resolved and OIDs are
@@ -220,7 +219,7 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Converted<Conv
             .name(row.namespace)
             .with_context(|| format!("table {} has no namespace entry", row.name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "table",
@@ -380,7 +379,7 @@ fn function_dependencies(
         let Some(schema) = shared.namespaces.name(row.function_namespace) else {
             continue;
         };
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             continue;
         }
 

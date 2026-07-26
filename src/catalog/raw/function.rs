@@ -18,12 +18,11 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::function::{Function, FunctionKind, FunctionParam};
 use crate::catalog::id::DbObjectId;
-use crate::catalog::utils::is_system_schema;
 use crate::render::quote_ident;
 
 /// One `pg_proc` row of `prokind` function or procedure, before names are
@@ -180,7 +179,7 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
             .name(row.namespace)
             .with_context(|| format!("function {} has no namespace entry", row.name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "function",

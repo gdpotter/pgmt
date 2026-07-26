@@ -12,12 +12,11 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::operator::Operator;
-use crate::catalog::utils::is_system_schema;
 
 /// One `pg_operator` row, before names are resolved and OIDs are discarded.
 #[derive(Debug, Clone)]
@@ -189,7 +188,7 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Converted<
             .name(row.namespace)
             .with_context(|| format!("operator {} has no namespace entry", row.name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) {
+        if is_system_schema(schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "operator",

@@ -13,12 +13,11 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::cast::Cast;
 use crate::catalog::id::DbObjectId;
-use crate::catalog::utils::is_system_schema;
 
 /// One `pg_cast` row, before names are resolved and OIDs are discarded.
 #[derive(Debug, Clone)]
@@ -135,10 +134,10 @@ pub fn convert(raw: &[RawCast], shared: &SharedCatalog) -> Result<Converted<(Oid
         // PostgreSQL requires ownership of the source or the target type to
         // create a cast, so every user cast has at least one side outside the
         // system schemas; a cast with both sides inside them is the server's.
-        let user_side = [&source, &target].into_iter().flatten().find(|side| {
-            side.schema
-                .is_some_and(|schema| !SYSTEM_SCHEMAS.contains(&schema))
-        });
+        let user_side = [&source, &target]
+            .into_iter()
+            .flatten()
+            .find(|side| side.schema.is_some_and(|schema| !is_system_schema(schema)));
         let Some(user_side) = user_side else {
             converted.excluded.push(Excluded::new(
                 row.oid,

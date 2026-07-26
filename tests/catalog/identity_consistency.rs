@@ -10,6 +10,7 @@ use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::identity::CatalogIdentity;
+use sqlx::{Executor, PgPool};
 use std::collections::BTreeSet;
 
 /// A schema touching every object kind either side can report.
@@ -104,6 +105,37 @@ fn catalog_object_ids(catalog: &Catalog) -> BTreeSet<DbObjectId> {
     ids
 }
 
+/// Load both sides and assert they report the same identities.
+async fn assert_sides_agree(pool: &PgPool) -> Result<()> {
+    let catalog = Catalog::load_unfiltered(pool).await?;
+    let snapshot = CatalogIdentity::load(pool).await?;
+
+    let from_catalog = catalog_object_ids(&catalog);
+    let from_snapshot = snapshot.objects.clone();
+
+    let only_in_catalog: Vec<String> = from_catalog
+        .difference(&from_snapshot)
+        .map(|id| id.to_string())
+        .collect();
+    let only_in_snapshot: Vec<String> = from_snapshot
+        .difference(&from_catalog)
+        .map(|id| id.to_string())
+        .collect();
+
+    assert!(
+        only_in_catalog.is_empty() && only_in_snapshot.is_empty(),
+        "identity snapshot and full catalog disagree\n\
+         only in Catalog::load_unfiltered ({}):\n  {:?}\n\
+         only in CatalogIdentity::load ({}):\n  {:?}",
+        only_in_catalog.len(),
+        only_in_catalog,
+        only_in_snapshot.len(),
+        only_in_snapshot,
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_identity_snapshot_matches_full_catalog() -> Result<()> {
     with_test_db(async |db| {
@@ -111,33 +143,43 @@ async fn test_identity_snapshot_matches_full_catalog() -> Result<()> {
             db.execute(statement).await;
         }
 
-        let catalog = Catalog::load_unfiltered(db.pool()).await?;
-        let snapshot = CatalogIdentity::load(db.pool()).await?;
+        assert_sides_agree(db.pool()).await
+    })
+    .await
+}
 
-        let from_catalog = catalog_object_ids(&catalog);
-        let from_snapshot = snapshot.objects.clone();
+/// A temporary table's trigger and policy belong to neither side.
+///
+/// A session that creates a temporary object gets a `pg_temp_N` namespace, and
+/// the `pg_class`, `pg_trigger` and `pg_policy` rows hanging off it are visible
+/// to every session in the cluster. Both sides must read "system schema" the
+/// same way, or a temporary table's sub-objects are excluded by the converters
+/// and still reported by the snapshot.
+#[tokio::test]
+async fn test_temporary_objects_belong_to_neither_side() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute(
+            r#"CREATE FUNCTION public.touch() RETURNS trigger AS $$
+               BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql"#,
+        )
+        .await;
 
-        let only_in_catalog: Vec<String> = from_catalog
-            .difference(&from_snapshot)
-            .map(|id| id.to_string())
-            .collect();
-        let only_in_snapshot: Vec<String> = from_snapshot
-            .difference(&from_catalog)
-            .map(|id| id.to_string())
-            .collect();
+        // The temporary objects live for as long as the session that created
+        // them, so the connection is held for the duration of the assertions.
+        let mut session = db.pool().acquire().await?;
+        for statement in [
+            "CREATE TEMP TABLE scratch (id integer PRIMARY KEY, note text)",
+            "CREATE TRIGGER scratch_touch BEFORE UPDATE ON scratch \
+             FOR EACH ROW EXECUTE FUNCTION public.touch()",
+            "ALTER TABLE scratch ENABLE ROW LEVEL SECURITY",
+            "CREATE POLICY scratch_all ON scratch USING (id > 0)",
+        ] {
+            session
+                .execute(sqlx::AssertSqlSafe(statement.to_string()))
+                .await?;
+        }
 
-        assert!(
-            only_in_catalog.is_empty() && only_in_snapshot.is_empty(),
-            "identity snapshot and full catalog disagree\n\
-             only in Catalog::load_unfiltered ({}):\n  {:?}\n\
-             only in CatalogIdentity::load ({}):\n  {:?}",
-            only_in_catalog.len(),
-            only_in_catalog,
-            only_in_snapshot.len(),
-            only_in_snapshot,
-        );
-
-        Ok(())
+        assert_sides_agree(db.pool()).await
     })
     .await
 }

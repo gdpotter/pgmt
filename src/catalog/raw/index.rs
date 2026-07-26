@@ -16,12 +16,11 @@ use sqlx::postgres::types::Oid;
 use std::collections::{BTreeMap, HashSet};
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
+use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::index::{Index, IndexColumn, IndexType};
-use crate::catalog::utils::is_system_schema;
 
 /// One `pg_index` row with its `pg_class` metadata, before names are resolved
 /// and OIDs are discarded.
@@ -169,7 +168,7 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
             .name(row.table_namespace)
             .with_context(|| format!("table {} has no namespace entry", row.table_name))?;
 
-        if SYSTEM_SCHEMAS.contains(&schema) || SYSTEM_SCHEMAS.contains(&table_schema) {
+        if is_system_schema(schema) || is_system_schema(table_schema) {
             converted.excluded.push(Excluded::new(
                 row.oid,
                 "index",
