@@ -1364,3 +1364,70 @@ async fn test_the_load_reports_what_its_converter_excluded() -> Result<()> {
     })
     .await
 }
+
+/// The expensive server-side renderings are skipped for the rows the converters
+/// exclude, and present for the rows they keep.
+///
+/// `pg_get_functiondef` and `pg_get_function_identity_arguments` are rendered per
+/// row, and a database has thousands of built-in routines whose renderings are
+/// discarded — rendering them dominated a catalog load. The fetches therefore
+/// return NULL for a system-schema row, which is only safe because the converter
+/// excludes exactly those rows; a kept row that arrived without a rendering is an
+/// error rather than an object with an empty definition or no identity.
+#[tokio::test]
+async fn test_system_schema_rows_arrive_without_their_rendered_signatures() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE FUNCTION greet(name text) RETURNS text AS $$ SELECT 'hi ' || name $$ LANGUAGE sql")
+            .await;
+        db.execute(
+            "CREATE FUNCTION concat_sfunc(state text, val text) RETURNS text \
+             AS $$ SELECT COALESCE(state || ',', '') || val $$ LANGUAGE sql",
+        )
+        .await;
+        db.execute("CREATE AGGREGATE concat_all(text) (SFUNC = concat_sfunc, STYPE = text)")
+            .await;
+
+        let mut conn = db.conn().await;
+
+        let functions = raw_function::fetch(&mut conn).await?;
+        let user_function = functions
+            .functions
+            .iter()
+            .find(|row| row.name == "greet")
+            .expect("the user function should be fetched");
+        assert_eq!(user_function.arguments.as_deref(), Some("name text"));
+        assert!(user_function.definition.is_some());
+        assert!(
+            functions
+                .functions
+                .iter()
+                .any(|row| row.arguments.is_none() && row.definition.is_none()),
+            "the built-in routines should arrive without a rendered signature or definition"
+        );
+
+        let aggregates = raw_aggregate::fetch(&mut conn).await?;
+        let user_aggregate = aggregates
+            .iter()
+            .find(|row| row.name == "concat_all")
+            .expect("the user aggregate should be fetched");
+        assert_eq!(user_aggregate.arguments.as_deref(), Some("text"));
+        assert!(
+            aggregates.iter().any(|row| row.arguments.is_none()),
+            "the built-in aggregates should arrive without a rendered signature"
+        );
+
+        // Every row that survives conversion has its signature: the skipping and
+        // the exclusion cover exactly the same rows.
+        let shared = shared::fetch(&mut conn).await?;
+        let converted = raw_function::convert(&functions, &shared)?;
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, function)| function.name == "greet" && function.arguments == "name text")
+        );
+
+        Ok(())
+    })
+    .await
+}

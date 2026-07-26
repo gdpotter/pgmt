@@ -37,7 +37,10 @@ pub struct RawFunction {
     pub prokind: String,
     /// `pg_get_function_identity_arguments` — the signature a function is
     /// identified by, rendered relative to the connection's `search_path`.
-    pub arguments: String,
+    /// Absent for a routine in a system schema, which the converter excludes:
+    /// rendering a signature for every built-in routine costs more than the
+    /// answer is worth.
+    pub arguments: Option<String>,
     /// `pg_get_functiondef` — the complete `CREATE FUNCTION` statement. Absent
     /// for a routine in a system schema, which the converter excludes: rendering
     /// a definition for every built-in routine costs more than the whole load.
@@ -212,11 +215,19 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
         }
 
         // Only a row the fetch skipped rendering — that is, one excluded above —
-        // may lack a definition; a routine that converts without one would be
-        // rendered as an empty `CREATE`.
+        // may lack a definition or a signature; a routine that converts without a
+        // definition would be rendered as an empty `CREATE`, and one without a
+        // signature would have no identity at all.
         let definition = row.definition.clone().ok_or_else(|| {
             anyhow!(
                 "function {}.{} was fetched without a definition",
+                schema,
+                row.name
+            )
+        })?;
+        let arguments = row.arguments.clone().ok_or_else(|| {
+            anyhow!(
+                "function {}.{} was fetched without an identity signature",
                 schema,
                 row.name
             )
@@ -268,7 +279,7 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
                 schema: schema.to_string(),
                 name: row.name.clone(),
                 kind: kind.clone(),
-                arguments: row.arguments.clone(),
+                arguments,
                 parameters: declared,
                 return_type: match kind {
                     FunctionKind::Procedure => None,
@@ -472,7 +483,8 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
     // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`,
     // spelled out because `sqlx::query!` takes a literal: the row still has to
     // arrive for the converter to account for its exclusion, but rendering a
-    // definition it will discard is the single most expensive thing in the load.
+    // definition it will discard is the single most expensive thing in the load,
+    // and rendering the identity signature is the next most expensive.
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -480,7 +492,12 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
             p.pronamespace AS "namespace!",
             p.proname AS "name!",
             p.prokind::text AS "prokind!",
-            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "arguments!",
+            CASE
+                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND n.nspname NOT LIKE 'pg_temp_%'
+                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                THEN pg_catalog.pg_get_function_identity_arguments(p.oid)
+            END AS "arguments?",
             CASE
                 WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
                  AND n.nspname NOT LIKE 'pg_temp_%'

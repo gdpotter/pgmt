@@ -10,7 +10,7 @@
 //! system-schema exclusion, state-type classification, dependency derivation,
 //! comment attachment — happens in the converter, where the OIDs die.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
@@ -33,7 +33,9 @@ pub struct RawAggregate {
     pub name: String,
     /// `pg_get_function_identity_arguments` — the signature an aggregate is
     /// identified by, rendered relative to the connection's `search_path`.
-    pub arguments: String,
+    /// Absent for an aggregate in a system schema, which the converter excludes:
+    /// rendering a signature for every built-in aggregate is pure cost.
+    pub arguments: Option<String>,
 
     /// `aggtranstype`, unresolved: an array's own OID, not its element type's.
     pub state_type_oid: Oid,
@@ -60,13 +62,22 @@ pub struct RawAggregate {
 /// Fetch every aggregate in the database, unresolved and unfiltered.
 pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawAggregate>> {
     info!("Fetching aggregates...");
+    // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`,
+    // spelled out because `sqlx::query!` takes a literal: the row still has to
+    // arrive for the converter to account for its exclusion, but rendering the
+    // identity signature of every built-in aggregate is pure cost.
     let rows = sqlx::query!(
         r#"
         SELECT
             p.oid AS "oid!",
             p.pronamespace AS "namespace!",
             p.proname AS "name!",
-            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "arguments!",
+            CASE
+                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND n.nspname NOT LIKE 'pg_temp_%'
+                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                THEN pg_catalog.pg_get_function_identity_arguments(p.oid)
+            END AS "arguments?",
 
             -- State type (STYPE), unresolved: classification happens in the converter.
             agg.aggtranstype AS "state_type_oid!",
@@ -91,6 +102,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawAggregate>> {
 
         FROM pg_aggregate agg
         JOIN pg_proc p ON agg.aggfnoid = p.oid
+        JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_proc tfunc ON agg.aggtransfn = tfunc.oid
         LEFT JOIN pg_proc ffunc ON agg.aggfinalfn = ffunc.oid AND agg.aggfinalfn != 0
         LEFT JOIN pg_proc cfunc ON agg.aggcombinefn = cfunc.oid AND agg.aggcombinefn != 0
@@ -202,6 +214,17 @@ pub fn convert(
             continue;
         }
 
+        // Only a row the fetch skipped rendering — that is, one excluded above —
+        // may lack an identity signature, which is half of an aggregate's
+        // identity.
+        let arguments = row.arguments.clone().ok_or_else(|| {
+            anyhow!(
+                "aggregate {}.{} was fetched without an identity signature",
+                schema,
+                row.name
+            )
+        })?;
+
         let state_func_schema = namespaces
             .name(row.state_func_namespace)
             .with_context(|| format!("aggregate {}.{} has no SFUNC schema", schema, row.name))?;
@@ -270,7 +293,7 @@ pub fn convert(
         let definition = build_aggregate_definition(
             schema,
             &row.name,
-            &row.arguments,
+            &arguments,
             state_func_schema,
             &row.state_func_name,
             &state_type_schema,
@@ -287,7 +310,7 @@ pub fn convert(
             Aggregate {
                 schema: schema.to_string(),
                 name: row.name.clone(),
-                arguments: row.arguments.clone(),
+                arguments: arguments.clone(),
                 state_type: state_type_name,
                 state_type_schema,
                 state_type_formatted: row.state_type_formatted.clone(),

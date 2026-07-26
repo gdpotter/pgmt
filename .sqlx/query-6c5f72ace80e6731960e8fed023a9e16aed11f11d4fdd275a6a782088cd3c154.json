@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            p.oid AS \"oid!\",\n            p.pronamespace AS \"namespace!\",\n            p.proname AS \"name!\",\n            p.prokind::text AS \"prokind!\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"arguments!\",\n            CASE\n                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n                 AND n.nspname NOT LIKE 'pg_temp_%'\n                 AND n.nspname NOT LIKE 'pg_toast_temp_%'\n                THEN pg_catalog.pg_get_functiondef(p.oid)\n            END AS \"definition?\",\n            pg_catalog.pg_get_function_result(p.oid) AS \"return_type?\",\n            p.prorettype AS \"return_type_oid!\",\n            l.lanname AS \"language!\",\n            p.provolatile::text AS \"volatility!\",\n            p.proisstrict AS \"is_strict!\",\n            p.prosecdef AS \"security_definer!\",\n            p.pronargs AS \"num_args!\"\n        FROM pg_proc p\n        JOIN pg_language l ON p.prolang = l.oid\n        JOIN pg_namespace n ON p.pronamespace = n.oid\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid\n        ",
+  "query": "\n        SELECT\n            p.oid AS \"oid!\",\n            p.pronamespace AS \"namespace!\",\n            p.proname AS \"name!\",\n            p.prokind::text AS \"prokind!\",\n            CASE\n                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n                 AND n.nspname NOT LIKE 'pg_temp_%'\n                 AND n.nspname NOT LIKE 'pg_toast_temp_%'\n                THEN pg_catalog.pg_get_function_identity_arguments(p.oid)\n            END AS \"arguments?\",\n            CASE\n                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n                 AND n.nspname NOT LIKE 'pg_temp_%'\n                 AND n.nspname NOT LIKE 'pg_toast_temp_%'\n                THEN pg_catalog.pg_get_functiondef(p.oid)\n            END AS \"definition?\",\n            pg_catalog.pg_get_function_result(p.oid) AS \"return_type?\",\n            p.prorettype AS \"return_type_oid!\",\n            l.lanname AS \"language!\",\n            p.provolatile::text AS \"volatility!\",\n            p.proisstrict AS \"is_strict!\",\n            p.prosecdef AS \"security_definer!\",\n            p.pronargs AS \"num_args!\"\n        FROM pg_proc p\n        JOIN pg_language l ON p.prolang = l.oid\n        JOIN pg_namespace n ON p.pronamespace = n.oid\n        WHERE p.prokind != 'a'\n        ORDER BY p.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -44,7 +44,7 @@
       },
       {
         "ordinal": 4,
-        "name": "arguments!",
+        "name": "arguments?",
         "type_info": "Text",
         "origin": "Expression"
       },
@@ -141,5 +141,5 @@
       false
     ]
   },
-  "hash": "aa7e88d4a7b078e7786d3377bc546cf5903bfff53dd28f9371141f0ca647aa7b"
+  "hash": "6c5f72ace80e6731960e8fed023a9e16aed11f11d4fdd275a6a782088cd3c154"
 }
