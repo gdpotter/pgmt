@@ -15,6 +15,7 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::exclusion::{Converted, Excluded, ExclusionReason};
 use super::index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
@@ -136,6 +137,15 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawTables> {
 /// comment, its column comments and its primary key's comment attached through
 /// the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Table>> {
+    Ok(load_with_exclusions(conn, shared).await?.objects)
+}
+
+/// The same load, keeping the named reason for every raw row that did not
+/// become a table.
+pub async fn load_with_exclusions(
+    conn: &mut PgConnection,
+    shared: &SharedCatalog,
+) -> Result<Converted<Table>> {
     let raw = fetch(conn).await?;
     let mut converted = convert(&raw, shared)?;
 
@@ -144,7 +154,7 @@ pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec
     // the table and its primary-key constraint are indexed, because
     // `pg_description` addresses their comments under different classes.
     let mut index = OidIndex::new();
-    for entry in &converted {
+    for entry in &converted.objects {
         index.insert(entry.oid, entry.table.id())?;
         if let (Some(pk_oid), Some(pk)) = (entry.primary_key_oid, &entry.table.primary_key) {
             index.insert(pk_oid, primary_key_id(&entry.table, pk))?;
@@ -155,7 +165,7 @@ pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec
     let column_comments = index.subobject_comments(&shared.descriptions, class::PG_CLASS);
     let constraint_comments = index.object_comments(&shared.descriptions, class::PG_CONSTRAINT);
 
-    for entry in &mut converted {
+    for entry in &mut converted.objects {
         let id = entry.table.id();
         entry.table.comment = table_comments.get(&id).map(|text| text.to_string());
 
@@ -175,7 +185,7 @@ pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec
         }
     }
 
-    Ok(converted.into_iter().map(|entry| entry.table).collect())
+    Ok(converted.map(|entry| entry.table))
 }
 
 /// The identity a primary key's comment is addressed by. Primary keys are not
@@ -194,14 +204,15 @@ fn primary_key_id(table: &Table, pk: &PrimaryKey) -> DbObjectId {
 /// before the identities cross the firewall.
 ///
 /// Tables in a system schema and tables owned by an extension are dropped here,
-/// along with the columns, keys and dependencies belonging to them.
-pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Vec<ConvertedTable>> {
+/// each recorded with its named reason, along with the columns, keys and
+/// dependencies belonging to them.
+pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Converted<ConvertedTable>> {
     let namespaces = &shared.namespaces;
 
     // The tables that survive filtering, by OID, so every per-column row can be
     // routed to its table (or dropped with it).
     let mut kept: BTreeMap<u32, usize> = BTreeMap::new();
-    let mut converted: Vec<ConvertedTable> = Vec::new();
+    let mut converted: Converted<ConvertedTable> = Converted::new();
 
     for row in &raw.tables {
         let schema = namespaces
@@ -209,9 +220,25 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Vec<ConvertedT
             .with_context(|| format!("table {} has no namespace entry", row.name))?;
 
         if SYSTEM_SCHEMAS.contains(&schema) {
+            converted.excluded.push(Excluded::new(
+                row.oid,
+                "table",
+                schema,
+                &row.name,
+                ExclusionReason::SystemSchema,
+            ));
             continue;
         }
-        if shared.extensions.is_owned(class::PG_CLASS, row.oid) {
+        if let Some(extension) = shared.extensions.owner(class::PG_CLASS, row.oid) {
+            converted.excluded.push(Excluded::new(
+                row.oid,
+                "table",
+                schema,
+                &row.name,
+                ExclusionReason::ExtensionOwned {
+                    extension: extension.to_string(),
+                },
+            ));
             continue;
         }
 
@@ -228,8 +255,8 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Vec<ConvertedT
         table.rls_enabled = row.rls_enabled;
         table.rls_forced = row.rls_forced;
 
-        kept.insert(row.oid.0, converted.len());
-        converted.push(ConvertedTable {
+        kept.insert(row.oid.0, converted.objects.len());
+        converted.objects.push(ConvertedTable {
             oid: row.oid,
             table,
             column_attnums: Vec::new(),
@@ -273,7 +300,7 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Vec<ConvertedT
         };
 
         let is_stored_generated = row.attgenerated.as_deref() == Some("s");
-        converted[idx].table.columns.push(Column {
+        converted.objects[idx].table.columns.push(Column {
             name: row.name.clone(),
             data_type,
             default: if is_stored_generated {
@@ -291,27 +318,28 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Vec<ConvertedT
             comment: None,
             depends_on,
         });
-        converted[idx].column_attnums.push(row.attnum);
+        converted.objects[idx].column_attnums.push(row.attnum);
     }
 
     for row in &raw.primary_keys {
         let Some(&idx) = kept.get(&row.conrelid.0) else {
             continue;
         };
-        converted[idx].table.primary_key = Some(PrimaryKey {
+        converted.objects[idx].table.primary_key = Some(PrimaryKey {
             name: row.name.clone(),
             columns: row.columns.clone(),
             comment: None,
         });
-        converted[idx].primary_key_oid = Some(row.oid);
+        converted.objects[idx].primary_key_oid = Some(row.oid);
     }
 
-    for entry in &mut converted {
+    for entry in &mut converted.objects {
         entry.table.update_all_dependencies();
     }
 
     // The raw fetches order by OID; ordering by name is what callers see.
     converted
+        .objects
         .sort_by(|a, b| (&a.table.schema, &a.table.name).cmp(&(&b.table.schema, &b.table.name)));
 
     Ok(converted)

@@ -12,6 +12,7 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
+use super::exclusion::{Converted, Excluded, ExclusionReason};
 use super::index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
@@ -150,21 +151,27 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawOperator>> {
 /// Fetch operators and convert them into the logical catalog, with comments
 /// attached through the OID index.
 pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec<Operator>> {
+    Ok(load_with_exclusions(conn, shared).await?.objects)
+}
+
+/// The same load, keeping the named reason for every raw row that did not
+/// become an operator.
+pub async fn load_with_exclusions(
+    conn: &mut PgConnection,
+    shared: &SharedCatalog,
+) -> Result<Converted<Operator>> {
     let raw = fetch(conn).await?;
     let mut converted = convert(&raw, shared)?;
 
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known.
-    let index = OidIndex::from_pairs(converted.iter().map(|(oid, op)| (*oid, op.id())))?;
+    let index = OidIndex::from_pairs(converted.objects.iter().map(|(oid, op)| (*oid, op.id())))?;
     let comments = index.object_comments(&shared.descriptions, class::PG_OPERATOR);
-    for (_, operator) in &mut converted {
+    for (_, operator) in &mut converted.objects {
         operator.comment = comments.get(&operator.id()).map(|text| text.to_string());
     }
 
-    Ok(converted
-        .into_iter()
-        .map(|(_, operator)| operator)
-        .collect())
+    Ok(converted.map(|(_, operator)| operator))
 }
 
 /// Resolve raw operators into logical ones, keeping each operator's OID beside
@@ -172,10 +179,10 @@ pub async fn load(conn: &mut PgConnection, shared: &SharedCatalog) -> Result<Vec
 /// the firewall.
 ///
 /// Operators in a system schema and operators owned by an extension are dropped
-/// here.
-pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Vec<(Oid, Operator)>> {
+/// here, each recorded with its named reason.
+pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Converted<(Oid, Operator)>> {
     let namespaces = &shared.namespaces;
-    let mut converted: Vec<(Oid, Operator)> = Vec::new();
+    let mut converted: Converted<(Oid, Operator)> = Converted::new();
 
     for row in raw {
         let schema = namespaces
@@ -183,9 +190,25 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Vec<(Oid, 
             .with_context(|| format!("operator {} has no namespace entry", row.name))?;
 
         if SYSTEM_SCHEMAS.contains(&schema) {
+            converted.excluded.push(Excluded::new(
+                row.oid,
+                "operator",
+                schema,
+                &row.name,
+                ExclusionReason::SystemSchema,
+            ));
             continue;
         }
-        if shared.extensions.is_owned(class::PG_OPERATOR, row.oid) {
+        if let Some(extension) = shared.extensions.owner(class::PG_OPERATOR, row.oid) {
+            converted.excluded.push(Excluded::new(
+                row.oid,
+                "operator",
+                schema,
+                &row.name,
+                ExclusionReason::ExtensionOwned {
+                    extension: extension.to_string(),
+                },
+            ));
             continue;
         }
 
@@ -264,7 +287,7 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Vec<(Oid, 
             row.merges,
         );
 
-        converted.push((
+        converted.objects.push((
             row.oid,
             Operator {
                 schema: schema.to_string(),
@@ -280,7 +303,9 @@ pub fn convert(raw: &[RawOperator], shared: &SharedCatalog) -> Result<Vec<(Oid, 
     // The raw fetch orders by namespace OID; ordering by schema name is what
     // callers see, and a stable sort keeps the rest of the raw ordering
     // (name, then operand OIDs) intact.
-    converted.sort_by(|(_, a), (_, b)| a.schema.cmp(&b.schema));
+    converted
+        .objects
+        .sort_by(|(_, a), (_, b)| a.schema.cmp(&b.schema));
 
     Ok(converted)
 }

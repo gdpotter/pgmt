@@ -11,11 +11,16 @@
 //! `pg_catalog` — the namespace map, extension-ownership edges, and
 //! `pg_description` rows — plus the [`index::OidIndex`] that turns an OID back
 //! into a logical [`crate::catalog::id::DbObjectId`].
+//!
+//! A converter also accounts for what it drops: every raw row that does not
+//! become a logical object carries an [`exclusion::ExclusionReason`], so the
+//! rows a converter deliberately excludes can be told apart from rows it lost.
 
 // The layer is consumed by converters and by tests, not by the CLI binary's
 // module tree, so unused-item warnings here would be noise.
 #![allow(dead_code)]
 
+pub mod exclusion;
 pub mod index;
 pub mod operator;
 pub mod shared;

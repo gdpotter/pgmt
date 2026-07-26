@@ -16,6 +16,7 @@ pub mod indexes;
 pub mod oid_firewall;
 pub mod operators;
 pub mod policies;
+pub mod raw_exclusions;
 pub mod raw_shared;
 pub mod schemas;
 pub mod sequences;
