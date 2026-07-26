@@ -8,7 +8,7 @@ use crate::diff::{
     sequences as sequences_diff, tables as tables_diff, triggers as triggers_diff,
     views as views_diff,
 };
-use sqlx::PgPool;
+use sqlx::{Acquire, PgPool};
 use std::collections::BTreeMap;
 
 pub mod aggregate;
@@ -94,28 +94,45 @@ impl Catalog {
             .execute(&mut *conn)
             .await?;
 
+        // A load is many queries, and its results are cross-referenced: a raw row
+        // resolves its schema and its types through the shared maps fetched
+        // separately, so a namespace created or dropped between two of the
+        // queries yields a row whose namespace cannot be resolved — a failure of
+        // the whole load. A read-only REPEATABLE READ transaction gives every
+        // fetch one snapshot, so concurrent DDL is invisible for the sequence.
+        // `search_path` is set outside it, where the whole session sees it.
+        //
+        // The transaction rolls back if a fetch fails (the guard is dropped
+        // unfinished); it is only committed once every fetch has succeeded.
+        let mut tx = conn.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+
         // The cross-cutting state (namespace map, extension ownership,
         // comments) every converted kind resolves against. It must be fetched
         // on this connection: identity-argument strings are rendered relative
         // to its search_path.
-        let shared = raw::shared::fetch(&mut *conn).await?;
+        let shared = raw::shared::fetch(&mut tx).await?;
 
         let schemas = raw::schema::load(&shared)?;
-        let tables = raw::table::load(&mut *conn, &shared).await?;
-        let views = raw::view::load(&mut *conn, &shared).await?;
-        let types = raw::custom_type::load(&mut *conn, &shared).await?;
-        let domains = raw::domain::load(&mut *conn, &shared).await?;
-        let functions = raw::function::load(&mut *conn, &shared).await?;
-        let aggregates = raw::aggregate::load(&mut *conn, &shared).await?;
-        let operators = raw::operator::load(&mut *conn, &shared).await?;
-        let casts = raw::cast::load(&mut *conn, &shared).await?;
-        let sequences = raw::sequence::load(&mut *conn, &shared).await?;
-        let indexes = raw::index::load(&mut *conn, &shared).await?;
-        let constraints = raw::constraint::load(&mut *conn, &shared).await?;
-        let triggers = raw::trigger::load(&mut *conn, &shared).await?;
-        let policies = raw::policy::load(&mut *conn, &shared).await?;
-        let extensions = raw::extension::load(&mut *conn, &shared).await?;
-        let grants = grant::fetch(&mut *conn).await?;
+        let tables = raw::table::load(&mut tx, &shared).await?;
+        let views = raw::view::load(&mut tx, &shared).await?;
+        let types = raw::custom_type::load(&mut tx, &shared).await?;
+        let domains = raw::domain::load(&mut tx, &shared).await?;
+        let functions = raw::function::load(&mut tx, &shared).await?;
+        let aggregates = raw::aggregate::load(&mut tx, &shared).await?;
+        let operators = raw::operator::load(&mut tx, &shared).await?;
+        let casts = raw::cast::load(&mut tx, &shared).await?;
+        let sequences = raw::sequence::load(&mut tx, &shared).await?;
+        let indexes = raw::index::load(&mut tx, &shared).await?;
+        let constraints = raw::constraint::load(&mut tx, &shared).await?;
+        let triggers = raw::trigger::load(&mut tx, &shared).await?;
+        let policies = raw::policy::load(&mut tx, &shared).await?;
+        let extensions = raw::extension::load(&mut tx, &shared).await?;
+        let grants = grant::fetch(&mut tx).await?;
+
+        tx.commit().await?;
 
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();
