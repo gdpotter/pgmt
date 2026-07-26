@@ -531,3 +531,39 @@ async fn test_identity_snapshot_keeps_index_referenced_by_foreign_key() {
     })
     .await;
 }
+
+/// An index over a domain-typed expression depends on the domain.
+///
+/// An index's `pg_depend` edges name a `pg_type` OID, which says nothing about
+/// whether the target is a domain, an enum or an array. Classifying it as a plain
+/// type gave the index a `Type` dependency the domain catalog never yields, so the
+/// edge matched no object and the index could be ordered before its domain.
+#[tokio::test]
+async fn test_index_on_domain_expression_depends_on_the_domain() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA app").await;
+        db.execute("CREATE DOMAIN app.short_code AS text CHECK (length(VALUE) <= 4)")
+            .await;
+        db.execute("CREATE TABLE products (id integer, code text NOT NULL)")
+            .await;
+        db.execute("CREATE INDEX idx_products_code ON products ((code::app.short_code))")
+            .await;
+
+        let indexes = fetch(&mut *db.conn().await).await.unwrap();
+
+        let idx = indexes
+            .iter()
+            .find(|i| i.name == "idx_products_code")
+            .expect("the domain-cast expression index should be in the catalog");
+        assert!(
+            idx.depends_on()
+                .contains(&pgmt::catalog::id::DbObjectId::Domain {
+                    schema: "app".to_string(),
+                    name: "short_code".to_string()
+                }),
+            "an index casting to a domain should depend on the domain, got: {:?}",
+            idx.depends_on()
+        );
+    })
+    .await;
+}

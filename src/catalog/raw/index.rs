@@ -79,10 +79,6 @@ pub struct RawIndexDependency {
     pub ref_class: String,
     pub ref_oid: Oid,
 
-    /// Referenced type (`pg_type`).
-    pub type_namespace: Option<Oid>,
-    pub type_name: Option<String>,
-
     /// Referenced routine (`pg_proc`).
     pub function_namespace: Option<Oid>,
     pub function_name: Option<String>,
@@ -318,16 +314,13 @@ fn dependency(row: &RawIndexDependency, shared: &SharedCatalog) -> Option<DbObje
     }
 
     match row.ref_class.as_str() {
-        class::PG_TYPE => {
-            let schema = shared.namespaces.name(row.type_namespace?)?;
-            if is_system_schema(schema) {
-                return None;
-            }
-            Some(DbObjectId::Type {
-                schema: schema.to_string(),
-                name: row.type_name.clone()?,
-            })
-        }
+        // The shared type map is what classifies a type reference: a reference to
+        // an array resolves to its element type, and a domain is a domain rather
+        // than a type. Rebuilding either from a join on `pg_type` here would give
+        // an index dependency identities no other object's dependencies use.
+        class::PG_TYPE => shared
+            .resolve_type(row.ref_oid)
+            .and_then(|referent| referent.dependency()),
         class::PG_PROC => {
             let schema = shared.namespaces.name(row.function_namespace?)?;
             if is_system_schema(schema) {
@@ -506,15 +499,12 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawIndexDepen
             d.objid AS "index_oid!",
             cl.relname AS "ref_class!",
             d.refobjid AS "ref_oid!",
-            t.typnamespace AS "type_namespace?",
-            t.typname AS "type_name?",
             p.pronamespace AS "function_namespace?",
             p.proname AS "function_name?",
             pg_catalog.pg_get_function_identity_arguments(p.oid) AS "function_args?"
         FROM pg_depend d
         JOIN pg_index idx ON idx.indexrelid = d.objid
         JOIN pg_class cl ON cl.oid = d.refclassid
-        LEFT JOIN pg_type t ON d.refclassid = 'pg_type'::regclass AND d.refobjid = t.oid
         LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid
         WHERE d.classid = 'pg_class'::regclass
           AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_opclass'::regclass)
@@ -530,8 +520,6 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawIndexDepen
             index_oid: row.index_oid,
             ref_class: row.ref_class,
             ref_oid: row.ref_oid,
-            type_namespace: row.type_namespace,
-            type_name: row.type_name,
             function_namespace: row.function_namespace,
             function_name: row.function_name,
             function_args: row.function_args,
