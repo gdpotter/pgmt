@@ -36,6 +36,34 @@ pub mod class {
     pub const PG_TRIGGER: &str = "pg_trigger";
     pub const PG_POLICY: &str = "pg_policy";
     pub const PG_EXTENSION: &str = "pg_extension";
+
+    /// The catalog tables above, the only ones anything here is addressed
+    /// through.
+    pub const ALL: [&str; 11] = [
+        PG_CLASS,
+        PG_PROC,
+        PG_TYPE,
+        PG_NAMESPACE,
+        PG_OPERATOR,
+        PG_CAST,
+        PG_CONSTRAINT,
+        PG_OPCLASS,
+        PG_TRIGGER,
+        PG_POLICY,
+        PG_EXTENSION,
+    ];
+
+    /// The constant naming this catalog table, for a name that arrives as a
+    /// `relname` string from `pg_depend` or `pg_description`.
+    ///
+    /// The shared maps key on the constants rather than on owned strings, so a
+    /// lookup allocates nothing. A row addressed through some other catalog
+    /// table (a comment on a language, an extension owning a text-search
+    /// configuration) has no constant and is not interned: nothing here looks it
+    /// up.
+    pub fn intern(name: &str) -> Option<&'static str> {
+        ALL.into_iter().find(|known| *known == name)
+    }
 }
 
 /// Every namespace in the database, by OID.
@@ -80,20 +108,18 @@ impl NamespaceMap {
 #[derive(Debug, Clone, Default)]
 pub struct ExtensionOwnership {
     /// (catalog table, object OID) → owning extension name.
-    owners: BTreeMap<(String, u32), String>,
+    owners: BTreeMap<(&'static str, u32), String>,
 }
 
 impl ExtensionOwnership {
     /// The extension owning this object, for object classes that carry their own
     /// `deptype = 'e'` row: tables, views, functions, types, sequences,
     /// operators, casts — every first-class object.
-    pub fn owner(&self, class: &str, oid: Oid) -> Option<&str> {
-        self.owners
-            .get(&(class.to_string(), oid.0))
-            .map(String::as_str)
+    pub fn owner(&self, class: &'static str, oid: Oid) -> Option<&str> {
+        self.owners.get(&(class, oid.0)).map(String::as_str)
     }
 
-    pub fn is_owned(&self, class: &str, oid: Oid) -> bool {
+    pub fn is_owned(&self, class: &'static str, oid: Oid) -> bool {
         self.owner(class, oid).is_some()
     }
 
@@ -126,29 +152,27 @@ impl ExtensionOwnership {
 /// sub-object (a column, by attnum).
 #[derive(Debug, Clone, Default)]
 pub struct Descriptions {
-    by_key: BTreeMap<(String, u32, i32), String>,
+    by_key: BTreeMap<(&'static str, u32, i32), String>,
 }
 
 impl Descriptions {
     /// The comment on an object itself (`objsubid = 0`).
-    pub fn object(&self, class: &str, oid: Oid) -> Option<&str> {
+    pub fn object(&self, class: &'static str, oid: Oid) -> Option<&str> {
         self.get(class, oid, 0)
     }
 
-    pub fn get(&self, class: &str, oid: Oid, objsubid: i32) -> Option<&str> {
+    pub fn get(&self, class: &'static str, oid: Oid, objsubid: i32) -> Option<&str> {
         self.by_key
-            .get(&(class.to_string(), oid.0, objsubid))
+            .get(&(class, oid.0, objsubid))
             .map(String::as_str)
     }
 
     /// Every sub-object comment on this object, as `(objsubid, comment)` in
     /// ascending `objsubid` order. For a relation the `objsubid` is the column's
     /// attnum.
-    pub fn subobjects(&self, class: &str, oid: Oid) -> impl Iterator<Item = (i32, &str)> {
-        let start = (class.to_string(), oid.0, 1);
-        let end = (class.to_string(), oid.0, i32::MAX);
+    pub fn subobjects(&self, class: &'static str, oid: Oid) -> impl Iterator<Item = (i32, &str)> {
         self.by_key
-            .range(start..=end)
+            .range((class, oid.0, 1)..=(class, oid.0, i32::MAX))
             .map(|((_, _, subid), text)| (*subid, text.as_str()))
     }
 
@@ -339,7 +363,10 @@ pub async fn fetch_extension_ownership(conn: &mut PgConnection) -> Result<Extens
     Ok(ExtensionOwnership {
         owners: rows
             .into_iter()
-            .map(|row| ((row.class_name, row.objid.0), row.extension))
+            .filter_map(|row| {
+                let class = class::intern(&row.class_name)?;
+                Some(((class, row.objid.0), row.extension))
+            })
             .collect(),
     })
 }
@@ -374,11 +401,9 @@ pub async fn fetch_descriptions(conn: &mut PgConnection) -> Result<Descriptions>
     Ok(Descriptions {
         by_key: rows
             .into_iter()
-            .map(|row| {
-                (
-                    (row.class_name, row.objoid.0, row.objsubid),
-                    row.description,
-                )
+            .filter_map(|row| {
+                let class = class::intern(&row.class_name)?;
+                Some(((class, row.objoid.0, row.objsubid), row.description))
             })
             .collect(),
     })
@@ -420,4 +445,21 @@ pub async fn fetch_types(conn: &mut PgConnection) -> Result<TypeMap> {
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::class;
+
+    /// The shared maps can only be looked up through the class constants, so a
+    /// constant that the interning misses would silently make every lookup of
+    /// that catalog table answer "absent".
+    #[test]
+    fn test_interning_covers_every_class_constant() {
+        for name in class::ALL {
+            assert_eq!(class::intern(name), Some(name));
+        }
+        // A catalog table nothing here is addressed through stays uninterned.
+        assert_eq!(class::intern("pg_language"), None);
+    }
 }

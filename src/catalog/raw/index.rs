@@ -308,7 +308,9 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
 /// classes are not catalog objects of their own, so an in-database one yields no
 /// dependency at all.
 fn dependency(row: &RawIndexDependency, shared: &SharedCatalog) -> Option<DbObjectId> {
-    if let Some(extension) = shared.extensions.owner(&row.ref_class, row.ref_oid) {
+    let ref_class = class::intern(&row.ref_class);
+    if let Some(extension) = ref_class.and_then(|class| shared.extensions.owner(class, row.ref_oid))
+    {
         return Some(DbObjectId::Extension {
             name: extension.to_string(),
         });
