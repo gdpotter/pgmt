@@ -155,9 +155,13 @@ pub async fn load_with_exclusions(
     // `pg_description` addresses their comments under different classes.
     let mut index = OidIndex::new();
     for entry in &converted.objects {
-        index.insert(entry.oid, entry.table.id())?;
+        index.insert(class::PG_CLASS, entry.oid, entry.table.id())?;
         if let (Some(pk_oid), Some(pk)) = (entry.primary_key_oid, &entry.table.primary_key) {
-            index.insert(pk_oid, primary_key_id(&entry.table, pk))?;
+            index.insert(
+                class::PG_CONSTRAINT,
+                pk_oid,
+                primary_key_id(&entry.table, pk),
+            )?;
         }
     }
 

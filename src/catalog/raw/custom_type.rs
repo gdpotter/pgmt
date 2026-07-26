@@ -125,9 +125,9 @@ pub async fn load_with_exclusions(
     let mut index = OidIndex::new();
     for entry in &converted.objects {
         let id = entry.custom_type.id();
-        index.insert(entry.oid, id.clone())?;
+        index.insert(class::PG_TYPE, entry.oid, id.clone())?;
         if let Some(relation_oid) = entry.relation_oid {
-            index.insert(relation_oid, id)?;
+            index.insert(class::PG_CLASS, relation_oid, id)?;
         }
     }
 

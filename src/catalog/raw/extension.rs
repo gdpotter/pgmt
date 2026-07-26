@@ -84,6 +84,7 @@ pub async fn load_with_exclusions(
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known.
     let oids = OidIndex::from_pairs(
+        class::PG_EXTENSION,
         converted
             .objects
             .iter()

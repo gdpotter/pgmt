@@ -192,13 +192,14 @@ async fn test_comments_attach_through_the_oid_index() -> Result<()> {
         .await?;
 
         let index = OidIndex::from_pairs(
+            class::PG_CLASS,
             rows.into_iter()
                 .map(|(oid, schema, name)| (oid, DbObjectId::Table { schema, name })),
         )?;
         assert_eq!(index.len(), 2);
 
         let users_oid = relation_oid(db, "app.users").await;
-        let resolved = index.get(users_oid).cloned();
+        let resolved = index.get(class::PG_CLASS, users_oid).cloned();
         assert_eq!(
             resolved,
             Some(DbObjectId::Table {
@@ -234,7 +235,7 @@ async fn test_comments_attach_through_the_oid_index() -> Result<()> {
 
         // An uncommented object simply has no entry.
         let orders_oid = relation_oid(db, "app.orders").await;
-        assert!(index.contains(orders_oid));
+        assert!(index.contains(class::PG_CLASS, orders_oid));
         assert_eq!(
             shared.descriptions.object(class::PG_CLASS, orders_oid),
             None
@@ -337,16 +338,19 @@ async fn test_subobject_comments_resolve_through_the_index() -> Result<()> {
             schema: "app".to_string(),
             name: "users".to_string(),
         };
-        let index = OidIndex::from_pairs([
-            (users_oid, users_id.clone()),
-            (
-                orders_oid,
-                DbObjectId::Table {
-                    schema: "app".to_string(),
-                    name: "orders".to_string(),
-                },
-            ),
-        ])?;
+        let index = OidIndex::from_pairs(
+            class::PG_CLASS,
+            [
+                (users_oid, users_id.clone()),
+                (
+                    orders_oid,
+                    DbObjectId::Table {
+                        schema: "app".to_string(),
+                        name: "orders".to_string(),
+                    },
+                ),
+            ],
+        )?;
 
         let by_object = index.subobject_comments(&shared.descriptions, class::PG_CLASS);
         let users_columns = by_object

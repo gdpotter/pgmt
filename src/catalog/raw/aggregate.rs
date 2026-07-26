@@ -145,6 +145,7 @@ pub async fn load_with_exclusions(
     // can only be attached to an object whose identity is already known. An
     // aggregate's comment is keyed by the `pg_proc` entry that names it.
     let index = OidIndex::from_pairs(
+        class::PG_PROC,
         converted
             .objects
             .iter()

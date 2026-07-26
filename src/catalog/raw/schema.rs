@@ -32,14 +32,17 @@ pub fn load_with_exclusions(shared: &SharedCatalog) -> Result<Converted<Schema>>
 
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known.
-    let oids = OidIndex::from_pairs(converted.objects.iter().map(|(oid, schema)| {
-        (
-            *oid,
-            DbObjectId::Schema {
-                name: schema.name.clone(),
-            },
-        )
-    }))?;
+    let oids = OidIndex::from_pairs(
+        class::PG_NAMESPACE,
+        converted.objects.iter().map(|(oid, schema)| {
+            (
+                *oid,
+                DbObjectId::Schema {
+                    name: schema.name.clone(),
+                },
+            )
+        }),
+    )?;
     let comments = oids.object_comments(&shared.descriptions, class::PG_NAMESPACE);
     for (_, schema) in &mut converted.objects {
         let id = DbObjectId::Schema {
