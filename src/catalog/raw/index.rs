@@ -12,6 +12,7 @@ use anyhow::{Result, bail};
 use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 
+use super::shared::Descriptions;
 use crate::catalog::id::DbObjectId;
 
 /// Maps each catalog OID to the logical identity of the object it addresses.
@@ -77,6 +78,27 @@ impl OidIndex {
 
     pub fn iter(&self) -> impl Iterator<Item = (Oid, &DbObjectId)> {
         self.by_oid.iter().map(|(oid, id)| (Oid(*oid), id))
+    }
+
+    /// The comments on the indexed objects of one catalog class, keyed by
+    /// identity rather than by OID.
+    ///
+    /// This is the crossing itself: `pg_description` addresses objects by
+    /// `(classoid, objoid)`, and the index is what turns that address into
+    /// something a logical struct can be found by.
+    pub fn object_comments<'a>(
+        &'a self,
+        descriptions: &'a Descriptions,
+        class: &str,
+    ) -> BTreeMap<&'a DbObjectId, &'a str> {
+        self.by_oid
+            .iter()
+            .filter_map(|(oid, id)| {
+                descriptions
+                    .object(class, Oid(*oid))
+                    .map(|comment| (id, comment))
+            })
+            .collect()
     }
 }
 

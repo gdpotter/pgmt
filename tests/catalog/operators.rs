@@ -1,6 +1,16 @@
 use crate::helpers::harness::with_test_db;
+use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
-use pgmt::catalog::operator::fetch;
+use pgmt::catalog::operator::Operator;
+use pgmt::catalog::raw::{operator as raw_operator, shared};
+use sqlx::postgres::PgConnection;
+
+/// Fetch operators the way a catalog load does — the shared state resolved on
+/// the same connection, then the raw rows converted.
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Operator>> {
+    let shared = shared::fetch(&mut *conn).await?;
+    raw_operator::load(&mut *conn, &shared).await
+}
 
 /// An IMMUTABLE integer equality function usable as an operator implementation.
 const INT_EQ_FN: &str = "CREATE FUNCTION my_int_eq(integer, integer) RETURNS boolean \
@@ -194,6 +204,31 @@ async fn test_skip_builtin_operators() {
             operators.is_empty(),
             "built-in operators must be excluded, got {} operators",
             operators.len()
+        );
+    })
+    .await;
+}
+
+/// An operator that belongs to an extension is the extension's to create and
+/// drop, so it must never reach the catalog.
+#[tokio::test]
+async fn test_skip_extension_owned_operators() {
+    with_test_db(async |db| {
+        db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+            .await;
+        db.execute(INT_EQ_FN).await;
+        db.execute(
+            "CREATE OPERATOR === (LEFTARG = integer, RIGHTARG = integer, FUNCTION = my_int_eq)",
+        )
+        .await;
+        db.execute("ALTER EXTENSION \"uuid-ossp\" ADD OPERATOR === (integer, integer)")
+            .await;
+
+        let operators = fetch(&mut *db.conn().await).await.unwrap();
+        assert!(
+            operators.is_empty(),
+            "extension-owned operators must be excluded, got {:?}",
+            operators.iter().map(|op| &op.name).collect::<Vec<_>>()
         );
     })
     .await;

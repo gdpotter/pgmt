@@ -94,6 +94,12 @@ impl Catalog {
             .execute(&mut *conn)
             .await?;
 
+        // The cross-cutting state (namespace map, extension ownership,
+        // comments) every converted kind resolves against. It must be fetched
+        // on this connection: identity-argument strings are rendered relative
+        // to its search_path.
+        let shared = raw::shared::fetch(&mut *conn).await?;
+
         let schemas = schema::fetch(&mut *conn).await?;
         let tables = table::fetch(&mut *conn).await?;
         let views = view::fetch(&mut *conn).await?;
@@ -101,7 +107,7 @@ impl Catalog {
         let domains = domain::fetch(&mut *conn).await?;
         let functions = function::fetch(&mut *conn).await?;
         let aggregates = aggregate::fetch(&mut *conn).await?;
-        let operators = operator::fetch(&mut *conn).await?;
+        let operators = raw::operator::load(&mut *conn, &shared).await?;
         let casts = cast::fetch(&mut *conn).await?;
         let sequences = sequence::fetch(&mut *conn).await?;
         let indexes = index::fetch(&mut *conn).await?;

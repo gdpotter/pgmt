@@ -17,4 +17,5 @@
 #![allow(dead_code)]
 
 pub mod index;
+pub mod operator;
 pub mod shared;
