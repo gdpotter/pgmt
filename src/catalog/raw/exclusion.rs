@@ -103,9 +103,14 @@ impl Excluded {
 /// What a converter produces: the objects that crossed into the logical world,
 /// and the rows that did not, each with its reason.
 ///
-/// Sub-rows of an object (a table's columns and primary key) are not listed
-/// separately — they follow the row they belong to, and are dropped exactly when
-/// it is.
+/// The accounting covers object rows: every raw row that could have become an
+/// object is either converted or listed with its reason. Rows derived from an
+/// object row — a table's columns, its primary key — are not listed separately;
+/// they are carried by the object they belong to. Dependency edges are outside
+/// the accounting entirely: an edge whose referent cannot be named (an
+/// unresolvable namespace, a system schema, an opclass with no logical identity)
+/// is dropped without a reason being recorded, and the object it would have
+/// pointed from is still converted.
 #[derive(Debug, Clone)]
 pub struct Converted<T> {
     pub objects: Vec<T>,
