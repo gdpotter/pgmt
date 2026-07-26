@@ -10,7 +10,7 @@
 //! check, dependency derivation, comment attachment — happens in the converter,
 //! where the OIDs die.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use std::collections::{BTreeMap, HashSet};
@@ -57,8 +57,10 @@ pub struct RawIndexColumn {
     /// 1-based position within the index, key columns first.
     pub position: i32,
     /// `pg_get_indexdef(indexrelid, position, true)`: a column name, or the
-    /// expression an expression index is built on.
-    pub expression: String,
+    /// expression an expression index is built on. Absent for an index in a
+    /// system schema or on a system table, which the converter excludes:
+    /// rendering every system index costs more than the whole load.
+    pub expression: Option<String>,
     pub collation: Option<String>,
     pub opclass: Option<String>,
     pub ordering: String,
@@ -241,8 +243,20 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
             continue;
         };
         let (_, index) = &mut converted.objects[idx];
+        // Only a row the fetch skipped rendering — a column of an index excluded
+        // above — may lack an expression; a kept index with an unrendered column
+        // would silently lose a key.
+        let expression = row.expression.clone().ok_or_else(|| {
+            anyhow!(
+                "index {}.{} was fetched without an expression for column {}",
+                index.schema,
+                index.name,
+                row.position
+            )
+        })?;
+
         if row.is_included {
-            index.include_columns.push(row.expression.clone());
+            index.include_columns.push(expression);
             continue;
         }
 
@@ -250,7 +264,7 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
         // direction and null placement are meaningless and are not rendered.
         let is_btree = index.index_type == IndexType::Btree;
         index.columns.push(IndexColumn {
-            expression: row.expression.clone(),
+            expression,
             collation: row.collation.clone(),
             opclass: row.opclass.clone(),
             ordering: is_btree.then(|| row.ordering.clone()),
@@ -396,12 +410,25 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
     // `pg_get_indexdef` is asked for one column at a time: it is what renders an
     // expression index's expression, and `indkey` is 0 for such a column, so
     // there is nothing in `pg_attribute` to render instead.
+    //
+    // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`
+    // for both the index and its table, spelled out because `sqlx::query!` takes
+    // a literal: the converter drops those rows, and rendering each column of
+    // every system index is pure cost.
     let rows = sqlx::query!(
         r#"
         SELECT
             idx.indexrelid AS "index_oid!",
             col_pos AS "position!",
-            pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true) AS "expression!",
+            CASE
+                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND n.nspname NOT LIKE 'pg_temp_%'
+                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                 AND tn.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND tn.nspname NOT LIKE 'pg_temp_%'
+                 AND tn.nspname NOT LIKE 'pg_toast_temp_%'
+                THEN pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true)
+            END AS "expression?",
             CASE
                 WHEN c.collname IS NOT NULL AND c.collname != 'default'
                 THEN quote_ident(cn.nspname) || '.' || quote_ident(c.collname)
@@ -422,6 +449,10 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
             END AS "nulls_ordering!",
             col_pos > idx.indnkeyatts AS "is_included!"
         FROM pg_index idx
+        JOIN pg_class i ON idx.indexrelid = i.oid
+        JOIN pg_namespace n ON i.relnamespace = n.oid
+        JOIN pg_class t ON idx.indrelid = t.oid
+        JOIN pg_namespace tn ON t.relnamespace = tn.oid
         CROSS JOIN generate_series(1, idx.indnatts) AS col_pos
         LEFT JOIN pg_attribute a ON a.attrelid = idx.indrelid
                                  AND a.attnum = idx.indkey[col_pos-1]

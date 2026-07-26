@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.relnamespace AS \"namespace!\",\n            c.relname AS \"name!\",\n            pg_catalog.pg_get_viewdef(c.oid, true) AS \"definition!\",\n            c.reloptions AS \"reloptions?\"\n        FROM pg_class c\n        WHERE c.relkind = 'v'\n        ORDER BY c.oid\n        ",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.relnamespace AS \"namespace!\",\n            c.relname AS \"name!\",\n            CASE\n                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')\n                 AND n.nspname NOT LIKE 'pg_temp_%'\n                 AND n.nspname NOT LIKE 'pg_toast_temp_%'\n                THEN pg_catalog.pg_get_viewdef(c.oid, true)\n            END AS \"definition?\",\n            c.reloptions AS \"reloptions?\"\n        FROM pg_class c\n        JOIN pg_namespace n ON c.relnamespace = n.oid\n        WHERE c.relkind = 'v'\n        ORDER BY c.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -38,7 +38,7 @@
       },
       {
         "ordinal": 3,
-        "name": "definition!",
+        "name": "definition?",
         "type_info": "Text",
         "origin": "Expression"
       },
@@ -65,5 +65,5 @@
       true
     ]
   },
-  "hash": "1bd8203ca033f7e23350b527b548ff203b6b658f8c8a1b843098774812954d6f"
+  "hash": "cf6d1092d69e68d1c895c8ea6a1a47d22da1ea767b6714d64afcceacfa4c31d9"
 }

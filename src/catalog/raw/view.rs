@@ -9,7 +9,7 @@
 //! system-schema exclusion, type classification, dependency derivation, comment
 //! attachment — happens in the converter, where the OIDs die.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
@@ -29,7 +29,9 @@ pub struct RawView {
     pub namespace: Oid,
     pub name: String,
     /// `pg_get_viewdef(oid, true)` — the view body as the server renders it.
-    pub definition: String,
+    /// Absent for a view in a system schema, which the converter excludes:
+    /// rendering the whole of `information_schema` costs more than the load.
+    pub definition: Option<String>,
     pub reloptions: Option<Vec<String>>,
 }
 
@@ -197,6 +199,17 @@ pub fn convert(raw: &RawViews, shared: &SharedCatalog) -> Result<Converted<Conve
             continue;
         }
 
+        // Only a row the fetch skipped rendering — that is, one excluded above —
+        // may lack a definition; a view that converts without one would be
+        // rendered as an empty `CREATE VIEW`.
+        let definition = row.definition.clone().ok_or_else(|| {
+            anyhow!(
+                "view {}.{} was fetched without a definition",
+                schema,
+                row.name
+            )
+        })?;
+
         let (security_invoker, security_barrier) = parse_view_options(&row.reloptions);
 
         kept.insert(row.oid.0, converted.objects.len());
@@ -205,7 +218,7 @@ pub fn convert(raw: &RawViews, shared: &SharedCatalog) -> Result<Converted<Conve
             view: View {
                 schema: schema.to_string(),
                 name: row.name.clone(),
-                definition: row.definition.clone(),
+                definition,
                 columns: Vec::new(),
                 comment: None,
                 security_invoker,
@@ -395,15 +408,25 @@ fn parse_view_options(reloptions: &Option<Vec<String>>) -> (bool, bool) {
 }
 
 async fn fetch_views(conn: &mut PgConnection) -> Result<Vec<RawView>> {
+    // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`,
+    // spelled out because `sqlx::query!` takes a literal: the row still has to
+    // arrive for the converter to account for its exclusion, but rendering the
+    // body of a view the converter drops is pure cost.
     let rows = sqlx::query!(
         r#"
         SELECT
             c.oid AS "oid!",
             c.relnamespace AS "namespace!",
             c.relname AS "name!",
-            pg_catalog.pg_get_viewdef(c.oid, true) AS "definition!",
+            CASE
+                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND n.nspname NOT LIKE 'pg_temp_%'
+                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                THEN pg_catalog.pg_get_viewdef(c.oid, true)
+            END AS "definition?",
             c.reloptions AS "reloptions?"
         FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
         WHERE c.relkind = 'v'
         ORDER BY c.oid
         "#

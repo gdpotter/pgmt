@@ -37,8 +37,10 @@ pub struct RawFunction {
     /// `pg_get_function_identity_arguments` — the signature a function is
     /// identified by, rendered relative to the connection's `search_path`.
     pub arguments: String,
-    /// `pg_get_functiondef` — the complete `CREATE FUNCTION` statement.
-    pub definition: String,
+    /// `pg_get_functiondef` — the complete `CREATE FUNCTION` statement. Absent
+    /// for a routine in a system schema, which the converter excludes: rendering
+    /// a definition for every built-in routine costs more than the whole load.
+    pub definition: Option<String>,
     /// `pg_get_function_result`, absent for a procedure.
     pub return_type: Option<String>,
     /// `prorettype`, unresolved: an array's own OID, not its element type's.
@@ -202,6 +204,17 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
             continue;
         }
 
+        // Only a row the fetch skipped rendering — that is, one excluded above —
+        // may lack a definition; a routine that converts without one would be
+        // rendered as an empty `CREATE`.
+        let definition = row.definition.clone().ok_or_else(|| {
+            anyhow!(
+                "function {}.{} was fetched without a definition",
+                schema,
+                row.name
+            )
+        })?;
+
         // Aggregates never reach here — they are their own object kind, fetched
         // from `pg_aggregate`. A window function is a function.
         let kind = match row.prokind.as_str() {
@@ -255,7 +268,7 @@ pub fn convert(raw: &RawFunctions, shared: &SharedCatalog) -> Result<Converted<(
                     _ => row.return_type.clone(),
                 },
                 language: row.language.clone(),
-                definition: row.definition.clone(),
+                definition,
                 volatility: match row.volatility.as_str() {
                     "i" => "IMMUTABLE".to_string(),
                     "s" => "STABLE".to_string(),
@@ -442,6 +455,11 @@ fn dependencies(row: &RawFunctionDependency, shared: &SharedCatalog) -> Vec<DbOb
 async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
     // Aggregates are their own object kind, reconstructed from `pg_aggregate`;
     // `pg_get_functiondef` cannot render them at all.
+    //
+    // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`,
+    // spelled out because `sqlx::query!` takes a literal: the row still has to
+    // arrive for the converter to account for its exclusion, but rendering a
+    // definition it will discard is the single most expensive thing in the load.
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -450,7 +468,12 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
             p.proname AS "name!",
             p.prokind::text AS "prokind!",
             pg_catalog.pg_get_function_identity_arguments(p.oid) AS "arguments!",
-            pg_catalog.pg_get_functiondef(p.oid) AS "definition!",
+            CASE
+                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 AND n.nspname NOT LIKE 'pg_temp_%'
+                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                THEN pg_catalog.pg_get_functiondef(p.oid)
+            END AS "definition?",
             pg_catalog.pg_get_function_result(p.oid) AS "return_type?",
             p.prorettype AS "return_type_oid!",
             l.lanname AS "language!",
@@ -460,6 +483,7 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
             p.pronargs AS "num_args!"
         FROM pg_proc p
         JOIN pg_language l ON p.prolang = l.oid
+        JOIN pg_namespace n ON p.pronamespace = n.oid
         WHERE p.prokind != 'a'
         ORDER BY p.oid
         "#
