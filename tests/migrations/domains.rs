@@ -1,14 +1,21 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::migration::MigrationTestHelper;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::Catalog;
-use pgmt::catalog::domain::fetch;
+use pgmt::catalog::domain::Domain;
+use pgmt::catalog::raw::domain as raw_domain;
 use pgmt::diff::domains::diff;
 use pgmt::diff::operations::{
     CommentOperation, DomainOperation, MigrationStep, SqlRenderer, TypeOperation,
 };
 use pgmt::diff::plan;
 use pgmt::render::Safety;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
+    load_converted(conn, raw_domain::load).await
+}
 
 #[tokio::test]
 async fn test_create_domain_migration() -> Result<()> {

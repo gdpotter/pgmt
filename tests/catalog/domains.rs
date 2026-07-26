@@ -1,7 +1,14 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::domain::fetch;
+use pgmt::catalog::domain::Domain;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
+use pgmt::catalog::raw::domain as raw_domain;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Domain>> {
+    load_converted(conn, raw_domain::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_domain() {

@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            e.enumtypid AS \"type_oid!\",\n            e.enumlabel AS \"name!\",\n            e.enumsortorder AS \"sort_order!\"\n        FROM pg_enum e\n        ORDER BY e.enumtypid, e.enumsortorder\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_enum",
+            "name": "enumtypid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_enum",
+            "name": "enumlabel"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "sort_order!",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "pg_enum",
+            "name": "enumsortorder"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "66611a3fde9db0d808224cc87c84ff38930181e6d8963e8d7011c749c9c12a80"
+}

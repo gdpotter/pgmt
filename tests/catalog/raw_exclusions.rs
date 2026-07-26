@@ -8,7 +8,10 @@ use crate::helpers::harness::with_test_db;
 use anyhow::Result;
 use pgmt::catalog::raw::exclusion::ExclusionReason;
 use pgmt::catalog::raw::shared;
-use pgmt::catalog::raw::{operator as raw_operator, table as raw_table};
+use pgmt::catalog::raw::{
+    custom_type as raw_custom_type, domain as raw_domain, operator as raw_operator,
+    table as raw_table, view as raw_view,
+};
 use sqlx::postgres::types::Oid;
 use std::collections::BTreeSet;
 
@@ -178,6 +181,231 @@ async fn test_every_raw_operator_row_is_converted_or_excluded() -> Result<()> {
                 .excluded_for("SystemSchema")
                 .any(|row| row.schema == "pg_catalog"),
             "expected pg_catalog operators to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_view_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE VIEW user_emails AS SELECT id, email FROM users")
+            .await;
+        db.execute("CREATE VIEW adopted_ids AS SELECT id FROM adopted")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD VIEW adopted_ids")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_view::fetch(&mut conn).await?;
+        let converted = raw_view::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|entry| entry.oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.views.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .views
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw view rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.views.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|entry| entry.view.name == "user_emails")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_ids")
+            .expect("the adopted view should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "view");
+
+        // The catalog's own views are excluded as system-schema rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog"),
+            "expected pg_catalog views to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_type_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE TYPE status AS ENUM ('active', 'inactive')")
+            .await;
+        db.execute("CREATE TYPE adopted_pair AS (a integer, b integer)")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD TYPE adopted_pair")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_custom_type::fetch(&mut conn).await?;
+        let converted = raw_custom_type::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|entry| entry.oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.types.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .types
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw type rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.types.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|entry| entry.custom_type.name == "status")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_pair")
+            .expect("the adopted type should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "type");
+
+        // The built-in range types live in pg_catalog and are excluded as
+        // system-schema rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "pg_catalog" && row.name == "int4range"),
+            "expected pg_catalog range types to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_domain_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE DOMAIN positive_int AS integer CHECK (VALUE > 0)")
+            .await;
+        db.execute("CREATE DOMAIN adopted_code AS text").await;
+        db.execute("ALTER EXTENSION citext ADD DOMAIN adopted_code")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_domain::fetch(&mut conn).await?;
+        let converted = raw_domain::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.domains.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .domains
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw domain rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.domains.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, domain)| domain.name == "positive_int")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_code")
+            .expect("the adopted domain should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "domain");
+
+        // information_schema is built out of domains, all of them system rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.schema == "information_schema"),
+            "expected information_schema domains to be excluded as SystemSchema"
         );
 
         Ok(())

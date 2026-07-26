@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            pg_catalog.format_type(t.typbasetype, t.typtypmod) AS \"base_type!\",\n            t.typbasetype AS \"base_type_oid!\",\n            t.typnotnull AS \"not_null!\",\n            pg_catalog.pg_get_expr(t.typdefaultbin, 0) AS \"default?\",\n            CASE\n                WHEN t.typcollation != 0 AND t.typcollation != (\n                    SELECT oid FROM pg_collation WHERE collname = 'default'\n                ) THEN (SELECT collname FROM pg_collation WHERE oid = t.typcollation)\n                ELSE NULL\n            END AS \"collation?\"\n        FROM pg_type t\n        WHERE t.typtype = 'd'\n        ORDER BY t.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "base_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "base_type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typbasetype"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "not_null!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typnotnull"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "default?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "collation?",
+        "type_info": "Name",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "6fcb7d46dbf976da444392111161d117487ebc0043c868b42aa6c8b187ed8a15"
+}

@@ -1,10 +1,8 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::raw::table as raw_table;
-use pgmt::catalog::{
-    constraint, custom_type, function, grant, index, policy, sequence, triggers, view,
-};
+use pgmt::catalog::raw::{custom_type as raw_custom_type, table as raw_table, view as raw_view};
+use pgmt::catalog::{constraint, function, grant, index, policy, sequence, triggers};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {
@@ -49,7 +47,7 @@ async fn test_extension_functions_are_filtered() -> Result<()> {
 async fn test_extension_types_are_filtered() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline type count
-        let types_before = custom_type::fetch(&mut *db.conn().await).await?;
+        let types_before = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let baseline_count = types_before.len();
 
         // Create an extension that might add types (not all extensions do)
@@ -57,7 +55,7 @@ async fn test_extension_types_are_filtered() -> Result<()> {
             .await;
 
         // Fetch types after creating extension
-        let types_after = custom_type::fetch(&mut *db.conn().await).await?;
+        let types_after = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let after_count = types_after.len();
 
         // The type count should be the same - extension types should be filtered out
@@ -126,9 +124,9 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
     with_test_db(async |db| {
         // Get baseline counts for all object types before creating extension
         let functions_before = function::fetch(&mut *db.conn().await).await?;
-        let types_before = custom_type::fetch(&mut *db.conn().await).await?;
+        let types_before = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_before = load_converted(&mut *db.conn().await, raw_table::load).await?;
-        let views_before = view::fetch(&mut *db.conn().await).await?;
+        let views_before = load_converted(&mut *db.conn().await, raw_view::load).await?;
         let sequences_before = sequence::fetch(&mut *db.conn().await).await?;
         let indexes_before = index::fetch(&mut *db.conn().await).await?;
         let grants_before = grant::fetch(&mut *db.conn().await).await?;
@@ -139,9 +137,9 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
 
         // Fetch objects after creating extension
         let functions_after = function::fetch(&mut *db.conn().await).await?;
-        let types_after = custom_type::fetch(&mut *db.conn().await).await?;
+        let types_after = load_converted(&mut *db.conn().await, raw_custom_type::load).await?;
         let tables_after = load_converted(&mut *db.conn().await, raw_table::load).await?;
-        let views_after = view::fetch(&mut *db.conn().await).await?;
+        let views_after = load_converted(&mut *db.conn().await, raw_view::load).await?;
         let sequences_after = sequence::fetch(&mut *db.conn().await).await?;
         let indexes_after = index::fetch(&mut *db.conn().await).await?;
         let grants_after = grant::fetch(&mut *db.conn().await).await?;

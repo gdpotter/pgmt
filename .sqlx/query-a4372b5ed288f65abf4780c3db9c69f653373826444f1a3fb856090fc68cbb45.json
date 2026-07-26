@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            NULLIF(t.typrelid, 0::oid) AS \"relation_oid?\"\n        FROM pg_type t\n        WHERE t.typtype IN ('e', 'c', 'r')\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.reltype = t.oid\n              AND c.relkind IN ('r', 'v', 'm', 'S')\n          )\n        ORDER BY t.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "typtype!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "relation_oid?",
+        "type_info": "Oid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "a4372b5ed288f65abf4780c3db9c69f653373826444f1a3fb856090fc68cbb45"
+}

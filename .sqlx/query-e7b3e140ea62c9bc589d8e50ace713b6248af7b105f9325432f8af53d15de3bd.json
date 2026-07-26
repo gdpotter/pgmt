@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            con.contypid AS \"domain_oid!\",\n            con.conname AS \"name!\",\n            pg_catalog.pg_get_constraintdef(con.oid, true) AS \"expression!\"\n        FROM pg_constraint con\n        WHERE con.contype = 'c'\n          AND con.contypid != 0\n        ORDER BY con.contypid, con.conname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "contypid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "conname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expression!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "e7b3e140ea62c9bc589d8e50ace713b6248af7b105f9325432f8af53d15de3bd"
+}

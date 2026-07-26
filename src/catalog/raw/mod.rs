@@ -20,8 +20,11 @@
 // module tree, so unused-item warnings here would be noise.
 #![allow(dead_code)]
 
+pub mod custom_type;
+pub mod domain;
 pub mod exclusion;
 pub mod index;
 pub mod operator;
 pub mod shared;
 pub mod table;
+pub mod view;

@@ -3,11 +3,18 @@ use crate::helpers::migration::MigrationTestHelper;
 
 use anyhow::Result;
 
+use crate::helpers::raw::load_converted;
 use pgmt::catalog::Catalog;
-use pgmt::catalog::custom_type::{TypeKind, fetch};
+use pgmt::catalog::custom_type::{CustomType, TypeKind};
+use pgmt::catalog::raw::custom_type as raw_custom_type;
 use pgmt::diff::custom_types::diff;
 use pgmt::diff::operations::{CommentOperation, MigrationStep, SqlRenderer, TypeOperation};
 use pgmt::diff::plan;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<CustomType>> {
+    load_converted(conn, raw_custom_type::load).await
+}
 
 #[tokio::test]
 async fn test_create_enum_migration() -> Result<()> {

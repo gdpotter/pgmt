@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"type_oid!\",\n            a.attnum AS \"attnum!\",\n            a.attname AS \"name!\",\n            a.atttypid AS \"attribute_type_oid!\",\n            pg_catalog.format_type(a.atttypid, a.atttypmod) AS \"formatted_type!\",\n            COALESCE(a.attndims, 0)::int AS \"attndims!: i32\"\n        FROM pg_type t\n        JOIN pg_class c ON t.typrelid = c.oid\n        JOIN pg_attribute a ON a.attrelid = c.oid\n        WHERE t.typtype = 'c'\n          AND a.attnum > 0\n          AND NOT a.attisdropped\n        ORDER BY t.oid, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "attnum!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnum"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "attribute_type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "atttypid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "formatted_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "attndims!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "082b5b80a955bd2d24fab7eb002890881eebf52628453b7f347fd49df1f6d3b0"
+}

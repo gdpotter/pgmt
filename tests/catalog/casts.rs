@@ -1,4 +1,5 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use pgmt::catalog::cast::fetch;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 
@@ -240,7 +241,7 @@ async fn test_view_using_cast_records_function_not_cast() {
         db.execute("CREATE VIEW v AS SELECT m::bigint AS b FROM t")
             .await;
 
-        let views = pgmt::catalog::view::fetch(&mut *db.conn().await)
+        let views = load_converted(&mut *db.conn().await, pgmt::catalog::raw::view::load)
             .await
             .unwrap();
         let view = views.iter().find(|v| v.name == "v").expect("view v");

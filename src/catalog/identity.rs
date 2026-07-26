@@ -51,7 +51,7 @@ impl CatalogIdentity {
 
             -- Views (excluding extension-owned). relkind 'v' only: the snapshot
             -- mirrors exactly what the catalog fetchers capture and nothing
-            -- more, and view::fetch does not capture materialized views. An
+            -- more, and the view catalog does not capture materialized views. An
             -- identity no fetcher can yield would be attributed to a file and
             -- then never found in the catalog it is diffed against.
             SELECT 'view', n.nspname, c.relname, NULL, NULL
