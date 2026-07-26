@@ -2,6 +2,7 @@ pub mod cli;
 pub mod docker;
 pub mod harness;
 pub mod migration;
+pub mod raw;
 
 use tokio::sync::Mutex;
 

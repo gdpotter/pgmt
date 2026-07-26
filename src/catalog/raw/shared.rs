@@ -16,6 +16,9 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use crate::catalog::id::DbObjectId;
+use crate::catalog::utils::resolve_type_dependency;
+
 /// Names of the `pg_catalog` tables an OID can be addressed through.
 ///
 /// An OID identifies a row within one catalog table, so both `pg_depend`
@@ -150,12 +153,124 @@ impl Descriptions {
     }
 }
 
+/// One `pg_type` row, as far as classifying a reference to it requires.
+#[derive(Debug, Clone)]
+pub struct TypeEntry {
+    pub oid: Oid,
+    pub namespace: Oid,
+    pub name: String,
+    /// `pg_type.typtype`: 'd' domain, 'c' composite, 'e' enum, 'r' range, …
+    pub typtype: String,
+    /// `pg_type.typelem`: non-zero when the type has an element type.
+    pub typelem: Oid,
+    /// `relkind` of `typrelid`, present only for composite types, and what
+    /// distinguishes a table's row type from a view's from a standalone
+    /// `CREATE TYPE ... AS`.
+    pub relkind: Option<String>,
+}
+
+/// Every type in the database, by OID.
+///
+/// This is the classification table a converter resolves `atttypid`,
+/// `prorettype`, `oprleft`, … against: an OID reference to a type says nothing
+/// about whether the target is a domain, an enum, a table's row type, or an
+/// array of any of those, and that distinction decides which dependency the
+/// referring object gets.
+#[derive(Debug, Clone, Default)]
+pub struct TypeMap {
+    by_oid: BTreeMap<u32, TypeEntry>,
+}
+
+impl TypeMap {
+    pub fn get(&self, oid: Oid) -> Option<&TypeEntry> {
+        self.by_oid.get(&oid.0)
+    }
+
+    /// The type a reference actually depends on: for an array, its element
+    /// type; otherwise the type itself.
+    ///
+    /// Arrays are detected through `typelem`, never by the leading underscore in
+    /// the array type's name — `_internal_status` is a legitimate type name and
+    /// stripping the prefix invents a type that does not exist.
+    pub fn element_or_self(&self, oid: Oid) -> Option<&TypeEntry> {
+        let entry = self.get(oid)?;
+        if entry.typelem.0 != 0 {
+            // A type whose element type is missing from the map cannot occur
+            // (typelem references pg_type), but fall back to the array type
+            // rather than dropping the reference entirely.
+            return self.get(entry.typelem).or(Some(entry));
+        }
+        Some(entry)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_oid.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_oid.is_empty()
+    }
+}
+
+/// A type reference resolved into everything a converter needs to name it and
+/// to decide what depends on what: array references are already resolved to
+/// their element type, and the schema and owning extension are looked up.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedType<'a> {
+    /// OID of the element type for an array reference, of the type itself
+    /// otherwise. This is the OID an extension owns.
+    pub oid: Oid,
+    pub schema: Option<&'a str>,
+    pub name: &'a str,
+    pub typtype: &'a str,
+    pub relkind: Option<&'a str>,
+    /// The extension providing this type, if any.
+    pub extension: Option<&'a str>,
+    /// The reference was to an array of this type.
+    pub is_array: bool,
+}
+
+impl ResolvedType<'_> {
+    /// The dependency a reference to this type creates: the extension for an
+    /// extension-provided type, the domain/table/view/type otherwise, and
+    /// nothing for a built-in.
+    pub fn dependency(&self) -> Option<DbObjectId> {
+        resolve_type_dependency(
+            self.schema,
+            Some(self.name),
+            Some(self.typtype),
+            self.relkind,
+            self.extension.is_some(),
+            self.extension,
+        )
+    }
+}
+
 /// The cross-cutting catalog state, fetched once per catalog load.
 #[derive(Debug, Clone, Default)]
 pub struct SharedCatalog {
     pub namespaces: NamespaceMap,
     pub extensions: ExtensionOwnership,
     pub descriptions: Descriptions,
+    pub types: TypeMap,
+}
+
+impl SharedCatalog {
+    /// Resolve a type reference (an `atttypid`, `prorettype`, `oprleft`, …)
+    /// through the array indirection, the namespace map, and the extension
+    /// ownership edges in one step.
+    pub fn resolve_type(&self, oid: Oid) -> Option<ResolvedType<'_>> {
+        let entry = self.types.element_or_self(oid)?;
+        Some(ResolvedType {
+            oid: entry.oid,
+            schema: self.namespaces.name(entry.namespace),
+            name: &entry.name,
+            typtype: &entry.typtype,
+            relkind: entry.relkind.as_deref(),
+            extension: self.extensions.owner(class::PG_TYPE, entry.oid),
+            is_array: entry.oid != oid,
+        })
+    }
 }
 
 /// Fetch all shared state on one connection.
@@ -167,11 +282,13 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<SharedCatalog> {
     let namespaces = fetch_namespaces(&mut *conn).await?;
     let extensions = fetch_extension_ownership(&mut *conn).await?;
     let descriptions = fetch_descriptions(&mut *conn).await?;
+    let types = fetch_types(&mut *conn).await?;
 
     Ok(SharedCatalog {
         namespaces,
         extensions,
         descriptions,
+        types,
     })
 }
 
@@ -247,6 +364,44 @@ pub async fn fetch_descriptions(conn: &mut PgConnection) -> Result<Descriptions>
                 (
                     (row.class_name, row.objoid.0, row.objsubid),
                     row.description,
+                )
+            })
+            .collect(),
+    })
+}
+
+pub async fn fetch_types(conn: &mut PgConnection) -> Result<TypeMap> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            t.oid AS "oid!",
+            t.typnamespace AS "namespace!",
+            t.typname AS "name!",
+            t.typtype::text AS "typtype!",
+            t.typelem AS "typelem!",
+            rel.relkind::text AS "relkind?"
+        FROM pg_type t
+        LEFT JOIN pg_class rel ON rel.oid = t.typrelid AND t.typrelid != 0
+        ORDER BY t.oid
+        "#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(TypeMap {
+        by_oid: rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.oid.0,
+                    TypeEntry {
+                        oid: row.oid,
+                        namespace: row.namespace,
+                        name: row.name,
+                        typtype: row.typtype,
+                        typelem: row.typelem,
+                        relkind: row.relkind,
+                    },
                 )
             })
             .collect(),

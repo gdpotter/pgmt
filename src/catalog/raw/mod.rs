@@ -19,3 +19,4 @@
 pub mod index;
 pub mod operator;
 pub mod shared;
+pub mod table;

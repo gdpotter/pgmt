@@ -1,0 +1,57 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            con.oid AS \"oid!\",\n            con.conrelid AS \"conrelid!\",\n            con.conname AS \"name!\",\n            array_agg(a.attname ORDER BY array_position(con.conkey, a.attnum)) AS \"columns!: Vec<String>\"\n        FROM pg_constraint con\n        JOIN pg_attribute a\n          ON a.attrelid = con.conrelid\n         AND a.attnum = ANY(con.conkey)\n        WHERE con.contype = 'p'\n        GROUP BY con.oid, con.conrelid, con.conname\n        ORDER BY con.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "conrelid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "conrelid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "conname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "columns!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "3320dc0a5467c43223492828ad6c34e4a948185e697c1fc9d27229a53c84ac38"
+}

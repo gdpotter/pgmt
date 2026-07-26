@@ -1,15 +1,13 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::operator::Operator;
-use pgmt::catalog::raw::{operator as raw_operator, shared};
+use pgmt::catalog::raw::operator as raw_operator;
 use sqlx::postgres::PgConnection;
 
-/// Fetch operators the way a catalog load does — the shared state resolved on
-/// the same connection, then the raw rows converted.
 async fn fetch(conn: &mut PgConnection) -> Result<Vec<Operator>> {
-    let shared = shared::fetch(&mut *conn).await?;
-    raw_operator::load(&mut *conn, &shared).await
+    load_converted(conn, raw_operator::load).await
 }
 
 /// An IMMUTABLE integer equality function usable as an operator implementation.

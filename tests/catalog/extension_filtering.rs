@@ -1,7 +1,9 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
+use pgmt::catalog::raw::table as raw_table;
 use pgmt::catalog::{
-    constraint, custom_type, function, grant, index, policy, sequence, table, triggers, view,
+    constraint, custom_type, function, grant, index, policy, sequence, triggers, view,
 };
 
 #[tokio::test]
@@ -125,7 +127,7 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         // Get baseline counts for all object types before creating extension
         let functions_before = function::fetch(&mut *db.conn().await).await?;
         let types_before = custom_type::fetch(&mut *db.conn().await).await?;
-        let tables_before = table::fetch(&mut *db.conn().await).await?;
+        let tables_before = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_before = view::fetch(&mut *db.conn().await).await?;
         let sequences_before = sequence::fetch(&mut *db.conn().await).await?;
         let indexes_before = index::fetch(&mut *db.conn().await).await?;
@@ -138,7 +140,7 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         // Fetch objects after creating extension
         let functions_after = function::fetch(&mut *db.conn().await).await?;
         let types_after = custom_type::fetch(&mut *db.conn().await).await?;
-        let tables_after = table::fetch(&mut *db.conn().await).await?;
+        let tables_after = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let views_after = view::fetch(&mut *db.conn().await).await?;
         let sequences_after = sequence::fetch(&mut *db.conn().await).await?;
         let indexes_after = index::fetch(&mut *db.conn().await).await?;
@@ -237,7 +239,7 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
         db.execute("ALTER EXTENSION \"uuid-ossp\" ADD TABLE ext_owned")
             .await;
 
-        let tables = table::fetch(&mut *db.conn().await).await?;
+        let tables = load_converted(&mut *db.conn().await, raw_table::load).await?;
         assert!(
             !tables.iter().any(|t| t.name == "ext_owned"),
             "Extension-owned table should be filtered from table catalog"

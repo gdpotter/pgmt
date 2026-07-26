@@ -100,6 +100,32 @@ impl OidIndex {
             })
             .collect()
     }
+
+    /// The sub-object comments on the indexed objects of one catalog class,
+    /// keyed by the owning object's identity and then by `objsubid`.
+    ///
+    /// `pg_description` addresses a sub-object as a `objsubid` under its parent
+    /// — a column's attnum under its table's OID — so the sub-object identity
+    /// (the column's name) is only known to the converter that holds the
+    /// attnum-to-name correspondence. The index carries the lookup as far as the
+    /// parent.
+    pub fn subobject_comments<'a>(
+        &'a self,
+        descriptions: &'a Descriptions,
+        class: &str,
+    ) -> BTreeMap<&'a DbObjectId, BTreeMap<i32, &'a str>> {
+        self.by_oid
+            .iter()
+            .filter_map(|(oid, id)| {
+                let subs: BTreeMap<i32, &str> = descriptions.subobjects(class, Oid(*oid)).collect();
+                if subs.is_empty() {
+                    None
+                } else {
+                    Some((id, subs))
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

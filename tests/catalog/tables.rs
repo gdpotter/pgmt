@@ -1,8 +1,16 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
+use anyhow::Result;
 use pgmt::catalog::id::DependsOn;
 
 use pgmt::catalog::id::DbObjectId;
-use pgmt::catalog::table::fetch;
+use pgmt::catalog::raw::table as raw_table;
+use pgmt::catalog::table::Table;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> Result<Vec<Table>> {
+    load_converted(conn, raw_table::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_basic_table() {

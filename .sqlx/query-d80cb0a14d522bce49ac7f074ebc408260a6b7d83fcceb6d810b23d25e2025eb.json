@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.relnamespace AS \"namespace!\",\n            c.relname AS \"name!\",\n            c.relrowsecurity AS \"rls_enabled!\",\n            c.relforcerowsecurity AS \"rls_forced!\"\n        FROM pg_class c\n        WHERE c.relkind = 'r'\n        ORDER BY c.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "rls_enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relrowsecurity"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "rls_forced!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relforcerowsecurity"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d80cb0a14d522bce49ac7f074ebc408260a6b7d83fcceb6d810b23d25e2025eb"
+}

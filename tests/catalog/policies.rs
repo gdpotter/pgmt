@@ -1,9 +1,16 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::policy::{Policy, PolicyCommand, fetch};
-use pgmt::catalog::table::fetch as fetch_tables;
+use pgmt::catalog::raw::table as raw_table;
+use pgmt::catalog::table::Table;
+use sqlx::postgres::PgConnection;
 use std::collections::HashSet;
+
+async fn fetch_tables(conn: &mut PgConnection) -> Result<Vec<Table>> {
+    load_converted(conn, raw_table::load).await
+}
 
 #[tokio::test]
 async fn test_fetch_policy_view_dependency() {

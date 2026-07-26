@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            a.attrelid AS \"attrelid!\",\n            a.attnum AS \"attnum!\",\n            seq.relnamespace AS \"sequence_namespace!\",\n            seq.relname AS \"sequence_name!\"\n        FROM pg_depend d\n        JOIN pg_attrdef ad ON d.objid = ad.oid\n        JOIN pg_attribute a ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum\n        JOIN pg_class seq ON d.refobjid = seq.oid\n        WHERE d.refclassid = 'pg_class'::regclass\n          AND seq.relkind = 'S'\n        ORDER BY a.attrelid, a.attnum, seq.relnamespace, seq.relname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attrelid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attrelid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "attnum!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnum"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "sequence_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sequence_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7151d43a970ed939f455824b04cc23ff8500447d6664d43ae5c8f810fc63b63e"
+}

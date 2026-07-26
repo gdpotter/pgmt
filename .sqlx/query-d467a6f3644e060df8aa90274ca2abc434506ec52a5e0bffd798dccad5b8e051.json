@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            t.typelem AS \"typelem!\",\n            rel.relkind::text AS \"relkind?\"\n        FROM pg_type t\n        LEFT JOIN pg_class rel ON rel.oid = t.typrelid AND t.typrelid != 0\n        ORDER BY t.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "typtype!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "typelem!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typelem"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "relkind?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "d467a6f3644e060df8aa90274ca2abc434506ec52a5e0bffd798dccad5b8e051"
+}

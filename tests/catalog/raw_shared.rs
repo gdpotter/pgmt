@@ -2,11 +2,12 @@
 //! OID → DbObjectId index built on top of them.
 
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::DbObjectId;
 use pgmt::catalog::raw::index::OidIndex;
 use pgmt::catalog::raw::shared::{self, class};
-use pgmt::catalog::table;
+use pgmt::catalog::raw::table as raw_table;
 use sqlx::postgres::types::Oid;
 
 /// Look up a relation's OID by name, the way a raw fetch would carry it.
@@ -207,9 +208,9 @@ async fn test_comments_attach_through_the_oid_index() -> Result<()> {
         );
 
         // What the index buys: the comment is reached without a per-kind
-        // pg_description join, and it matches what the fat fetcher produces.
+        // pg_description join, and it is the comment the converted table carries.
         let attached = shared.descriptions.object(class::PG_CLASS, users_oid);
-        let tables = table::fetch(&mut *db.conn().await).await?;
+        let tables = load_converted(&mut *db.conn().await, raw_table::load).await?;
         let users = tables
             .iter()
             .find(|t| t.schema == "app" && t.name == "users")
@@ -238,6 +239,132 @@ async fn test_comments_attach_through_the_oid_index() -> Result<()> {
             shared.descriptions.object(class::PG_CLASS, orders_oid),
             None
         );
+
+        Ok(())
+    })
+    .await
+}
+
+/// A type reference resolves to what a dependency must name: an array reference
+/// resolves to its element type, and the classification comes from the shared
+/// type map rather than a per-kind join.
+#[tokio::test]
+async fn test_type_map_resolves_array_references_to_their_element_type() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA app").await;
+        db.execute("CREATE TYPE app.status AS ENUM ('active', 'retired')")
+            .await;
+        // A type whose name starts with an underscore is a legitimate type, not
+        // an array: only typelem decides.
+        db.execute("CREATE TYPE app._internal_status AS ENUM ('draft')")
+            .await;
+
+        let shared = shared::fetch(&mut *db.conn().await).await?;
+
+        let type_oid = |name: &'static str| async move {
+            let row: (Oid,) = sqlx::query_as("SELECT $1::regtype::oid")
+                .bind(name)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+            row.0
+        };
+
+        let scalar = shared.resolve_type(type_oid("app.status").await).unwrap();
+        assert_eq!(scalar.name, "status");
+        assert_eq!(scalar.schema, Some("app"));
+        assert_eq!(scalar.typtype, "e");
+        assert!(!scalar.is_array);
+        assert_eq!(
+            scalar.dependency(),
+            Some(DbObjectId::Type {
+                schema: "app".to_string(),
+                name: "status".to_string(),
+            })
+        );
+
+        let array = shared.resolve_type(type_oid("app.status[]").await).unwrap();
+        assert_eq!(array.name, "status");
+        assert!(array.is_array);
+        assert_eq!(array.dependency(), scalar.dependency());
+
+        let underscored = shared
+            .resolve_type(type_oid("app._internal_status").await)
+            .unwrap();
+        assert_eq!(underscored.name, "_internal_status");
+        assert!(!underscored.is_array);
+
+        // A built-in creates no dependency, and a table's row type resolves to
+        // the table rather than to a standalone type.
+        let builtin = shared.resolve_type(type_oid("text").await).unwrap();
+        assert_eq!(builtin.dependency(), None);
+
+        db.execute("CREATE TABLE app.users (id integer)").await;
+        let shared = shared::fetch(&mut *db.conn().await).await?;
+        let row_type = shared.resolve_type(type_oid("app.users").await).unwrap();
+        assert_eq!(row_type.typtype, "c");
+        assert_eq!(row_type.relkind, Some("r"));
+        assert_eq!(
+            row_type.dependency(),
+            Some(DbObjectId::Table {
+                schema: "app".to_string(),
+                name: "users".to_string(),
+            })
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Sub-object comments cross the firewall the same way object comments do: the
+/// index resolves the parent OID, and the attnum keying stays on the raw side.
+#[tokio::test]
+async fn test_subobject_comments_resolve_through_the_index() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA app").await;
+        db.execute("CREATE TABLE app.users (id integer, email text)")
+            .await;
+        db.execute("CREATE TABLE app.orders (id integer)").await;
+        db.execute("COMMENT ON COLUMN app.users.email IS 'Contact address'")
+            .await;
+
+        let shared = shared::fetch(&mut *db.conn().await).await?;
+        let users_oid = relation_oid(db, "app.users").await;
+        let orders_oid = relation_oid(db, "app.orders").await;
+
+        let users_id = DbObjectId::Table {
+            schema: "app".to_string(),
+            name: "users".to_string(),
+        };
+        let index = OidIndex::from_pairs([
+            (users_oid, users_id.clone()),
+            (
+                orders_oid,
+                DbObjectId::Table {
+                    schema: "app".to_string(),
+                    name: "orders".to_string(),
+                },
+            ),
+        ])?;
+
+        let by_object = index.subobject_comments(&shared.descriptions, class::PG_CLASS);
+        let users_columns = by_object
+            .get(&users_id)
+            .expect("users has a column comment");
+        assert_eq!(users_columns.get(&2), Some(&"Contact address"));
+        assert_eq!(users_columns.len(), 1);
+        // A table with no commented column has no entry at all.
+        assert_eq!(by_object.len(), 1);
+
+        // And the converted table carries it on the named column.
+        let tables = load_converted(&mut *db.conn().await, raw_table::load).await?;
+        let users = tables
+            .iter()
+            .find(|t| t.schema == "app" && t.name == "users")
+            .expect("app.users should be in the catalog");
+        assert_eq!(users.columns[0].comment, None);
+        assert_eq!(users.columns[1].comment.as_deref(), Some("Contact address"));
 
         Ok(())
     })

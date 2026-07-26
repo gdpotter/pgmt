@@ -101,7 +101,7 @@ impl Catalog {
         let shared = raw::shared::fetch(&mut *conn).await?;
 
         let schemas = schema::fetch(&mut *conn).await?;
-        let tables = table::fetch(&mut *conn).await?;
+        let tables = raw::table::load(&mut *conn, &shared).await?;
         let views = view::fetch(&mut *conn).await?;
         let types = custom_type::fetch(&mut *conn).await?;
         let domains = domain::fetch(&mut *conn).await?;
