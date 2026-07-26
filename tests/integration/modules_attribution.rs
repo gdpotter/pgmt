@@ -323,3 +323,67 @@ modules:
     })
     .await
 }
+
+/// A unique index that a later foreign key references keeps the module of the
+/// file that created it. Regression: the identity snapshot discarded any index
+/// some constraint pointed at via `conindid`, and a foreign key's `conindid` is
+/// the *referenced* table's index — so creating an FK against a uniquely
+/// indexed column made the index invisible to attribution, leaving it claimed
+/// by no file and falling out of its module.
+#[tokio::test]
+async fn test_fk_referenced_index_keeps_its_module() -> Result<()> {
+    with_test_db(async |db| {
+        let project = TempDir::new()?;
+        let schema = project.path().join("schema");
+        fs::create_dir_all(schema.join("core"))?;
+        fs::create_dir_all(schema.join("billing"))?;
+        fs::write(
+            schema.join("core/users.sql"),
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT NOT NULL);\n\
+             CREATE UNIQUE INDEX users_email_idx ON users (email);",
+        )?;
+        fs::write(
+            schema.join("billing/invoices.sql"),
+            "-- require: core/users.sql\n\
+             CREATE TABLE invoices (id SERIAL PRIMARY KEY, user_email TEXT REFERENCES users (email));",
+        )?;
+
+        let config = modules_config(
+            r#"
+modules:
+  core:
+    paths: ["schema/core/**"]
+  billing:
+    paths: ["schema/billing/**"]
+    depends_on: [core]
+"#,
+        )?;
+        let processed = process(db, &config, project.path()).await?;
+        let partition = ModulePartition::from_config(&config)?;
+
+        let index = DbObjectId::Index {
+            schema: "public".to_string(),
+            name: "users_email_idx".to_string(),
+        };
+        assert_eq!(
+            partition.module_for_object(&index, &processed.file_mapping)?,
+            Some("core"),
+            "the index belongs to the module of the file that created it"
+        );
+
+        let report = validate_module_references(
+            &processed.catalog,
+            &processed.file_mapping,
+            &partition,
+            &config,
+        )?;
+        assert!(
+            report.is_clean(),
+            "declared billing→core dep should validate cleanly: {:?}",
+            report
+        );
+
+        Ok(())
+    })
+    .await
+}

@@ -1030,3 +1030,47 @@ async fn test_regular_function_no_column_dependency() {
     })
     .await;
 }
+
+/// A procedure must carry the same `DbObjectId::Procedure` identity in the
+/// lightweight snapshot as in the full fetcher. Regression: the snapshot
+/// labelled every function-or-procedure row a Function, so a procedure's
+/// snapshot identity never matched the catalog's and the procedure was
+/// attributed to no file.
+#[tokio::test]
+async fn test_identity_snapshot_labels_procedures_as_procedures() {
+    with_test_db(async |db| {
+        db.execute("CREATE PROCEDURE do_nothing() AS $$ BEGIN END $$ LANGUAGE plpgsql")
+            .await;
+
+        let functions = fetch(&mut *db.conn().await).await.unwrap();
+        let proc = functions
+            .iter()
+            .find(|f| f.name == "do_nothing")
+            .expect("procedure should be in the full catalog");
+        assert_eq!(proc.kind, FunctionKind::Procedure);
+
+        let expected = DbObjectId::Procedure {
+            schema: "public".to_string(),
+            name: "do_nothing".to_string(),
+            arguments: String::new(),
+        };
+        assert_eq!(proc.id(), expected);
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            identity.objects.contains(&expected),
+            "identity snapshot missing {expected}, got: {:?}",
+            identity.objects
+        );
+        assert!(
+            !identity.objects.iter().any(|id| matches!(
+                id,
+                DbObjectId::Function { name, .. } if name == "do_nothing"
+            )),
+            "a procedure must not also appear as a function identity"
+        );
+    })
+    .await;
+}

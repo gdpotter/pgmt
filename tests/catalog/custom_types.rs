@@ -624,3 +624,35 @@ async fn test_composite_type_multilevel_dependency() {
     })
     .await;
 }
+
+/// A range type must appear in the lightweight identity snapshot with the same
+/// `DbObjectId` the full fetcher gives it. Regression: the snapshot's type
+/// branch matched only enum and composite types, so a `CREATE TYPE ... AS RANGE`
+/// in a schema file was claimed by no file at all.
+#[tokio::test]
+async fn test_identity_snapshot_includes_range_types() {
+    with_test_db(async |db| {
+        db.execute("CREATE TYPE int_span AS RANGE (SUBTYPE = integer)")
+            .await;
+
+        let expected = DbObjectId::Type {
+            schema: "public".to_string(),
+            name: "int_span".to_string(),
+        };
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        assert!(
+            types.iter().any(|t| t.id() == expected),
+            "range type should be in the full catalog"
+        );
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            identity.objects.contains(&expected),
+            "identity snapshot missing {expected}"
+        );
+    })
+    .await;
+}

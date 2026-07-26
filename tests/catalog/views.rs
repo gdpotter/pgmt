@@ -746,3 +746,38 @@ async fn test_fetch_view_with_table_composite_type_dependency() {
     })
     .await;
 }
+
+/// Materialized views are not modeled by pgmt: neither the view fetcher nor the
+/// lightweight identity snapshot may report one. Regression: the snapshot
+/// reported relkind 'm' under the View identity, so a materialized view was
+/// attributed to a schema file while the catalog it is diffed against never
+/// contained it.
+#[tokio::test]
+async fn test_materialized_views_absent_from_catalog_and_identity_snapshot() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE orders (id SERIAL PRIMARY KEY, total NUMERIC)")
+            .await;
+        db.execute(
+            "CREATE MATERIALIZED VIEW order_totals AS SELECT sum(total) AS total FROM orders",
+        )
+        .await;
+
+        let views = fetch(&mut *db.conn().await).await.unwrap();
+        assert!(
+            !views.iter().any(|v| v.name == "order_totals"),
+            "view fetcher should not report materialized views"
+        );
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            !identity.objects.contains(&DbObjectId::View {
+                schema: "public".to_string(),
+                name: "order_totals".to_string(),
+            }),
+            "identity snapshot should not report materialized views"
+        );
+    })
+    .await;
+}

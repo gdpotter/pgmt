@@ -49,24 +49,15 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Views (excluding extension-owned)
+            -- Views (excluding extension-owned). relkind 'v' only: the snapshot
+            -- mirrors exactly what the catalog fetchers capture and nothing
+            -- more, and view::fetch does not capture materialized views. An
+            -- identity no fetcher can yield would be attributed to a file and
+            -- then never found in the catalog it is diffed against.
             SELECT 'view', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'v'
-              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-              AND NOT EXISTS (
-                SELECT 1 FROM pg_depend dep
-                WHERE dep.objid = c.oid AND dep.deptype = 'e'
-              )
-
-            UNION ALL
-
-            -- Materialized views (tracked as views, excluding extension-owned)
-            SELECT 'view', n.nspname, c.relname, NULL, NULL
-            FROM pg_class c
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            WHERE c.relkind = 'm'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
               AND NOT EXISTS (
                 SELECT 1 FROM pg_depend dep
@@ -96,13 +87,20 @@ impl CatalogIdentity {
             UNION ALL
 
             -- Indexes (excluding constraint-backing indexes and extension-owned).
+            -- Only primary key, unique and exclusion constraints own their
+            -- backing index (the constraint catalog reports those); a foreign
+            -- key's conindid merely points at the *referenced* table's index,
+            -- which stays a user index of its own.
             -- Indexes created by extension scripts get no pg_depend 'e' entry of
             -- their own — membership is recorded on the parent table, so check both.
             SELECT 'index', n.nspname, c.relname, NULL, NULL
             FROM pg_class c
             JOIN pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind = 'i'
-              AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = c.oid)
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint con
+                WHERE con.conindid = c.oid AND con.contype IN ('p', 'u', 'x')
+              )
               AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
               AND NOT EXISTS (
                 SELECT 1 FROM pg_depend dep
@@ -116,11 +114,25 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Functions and procedures (excluding extension-owned)
+            -- Functions (excluding extension-owned). Procedures are a distinct
+            -- identity variant, as in the function catalog.
             SELECT 'function', n.nspname, p.proname, NULL, pg_get_function_identity_arguments(p.oid)
             FROM pg_proc p
             JOIN pg_namespace n ON p.pronamespace = n.oid
-            WHERE p.prokind IN ('f', 'p')
+            WHERE p.prokind = 'f'
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_depend dep
+                WHERE dep.objid = p.oid AND dep.deptype = 'e'
+              )
+
+            UNION ALL
+
+            -- Procedures (excluding extension-owned)
+            SELECT 'procedure', n.nspname, p.proname, NULL, pg_get_function_identity_arguments(p.oid)
+            FROM pg_proc p
+            JOIN pg_namespace n ON p.pronamespace = n.oid
+            WHERE p.prokind = 'p'
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
               AND NOT EXISTS (
                 SELECT 1 FROM pg_depend dep
@@ -142,11 +154,12 @@ impl CatalogIdentity {
 
             UNION ALL
 
-            -- Custom types (enum and composite) - excludes row types and extension-owned
+            -- Custom types (enum, composite, range) - excludes row types and
+            -- extension-owned; domains are handled separately
             SELECT 'type', n.nspname, t.typname, NULL, NULL
             FROM pg_type t
             JOIN pg_namespace n ON t.typnamespace = n.oid
-            WHERE t.typtype IN ('e', 'c')
+            WHERE t.typtype IN ('e', 'c', 'r')
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
               AND NOT EXISTS (
                 SELECT 1 FROM pg_class c
@@ -297,6 +310,11 @@ impl CatalogIdentity {
                     name: row.name.clone(),
                 },
                 "function" => DbObjectId::Function {
+                    schema: row.schema.clone().unwrap_or_default(),
+                    name: row.name.clone(),
+                    arguments: row.args.clone().unwrap_or_default(),
+                },
+                "procedure" => DbObjectId::Procedure {
                     schema: row.schema.clone().unwrap_or_default(),
                     name: row.name.clone(),
                     arguments: row.args.clone().unwrap_or_default(),

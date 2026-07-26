@@ -499,3 +499,53 @@ async fn test_index_extension_function_dependency() {
     })
     .await;
 }
+
+/// A standalone unique index stays a user index even when a foreign key
+/// references the column it covers. Regression: the identity snapshot dropped
+/// every index that any constraint's `conindid` pointed at, but a foreign key's
+/// `conindid` is the *referenced* table's index — so adding an FK made the
+/// user's `CREATE UNIQUE INDEX` vanish from file-to-object attribution.
+#[tokio::test]
+async fn test_identity_snapshot_keeps_index_referenced_by_foreign_key() {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT NOT NULL)")
+            .await;
+        db.execute("CREATE UNIQUE INDEX users_email_idx ON users (email)")
+            .await;
+        db.execute(
+            "CREATE TABLE orders (id SERIAL PRIMARY KEY, user_email TEXT REFERENCES users (email))",
+        )
+        .await;
+
+        let indexes = pgmt::catalog::index::fetch(&mut *db.conn().await)
+            .await
+            .unwrap();
+        assert!(
+            indexes.iter().any(|i| i.name == "users_email_idx"),
+            "FK-referenced unique index should be in the full catalog"
+        );
+
+        let identity = pgmt::catalog::identity::CatalogIdentity::load(db.pool())
+            .await
+            .unwrap();
+        let expected = pgmt::catalog::id::DbObjectId::Index {
+            schema: "public".to_string(),
+            name: "users_email_idx".to_string(),
+        };
+        assert!(
+            identity.objects.contains(&expected),
+            "identity snapshot missing {expected}"
+        );
+
+        // Constraint-backing indexes are still excluded: the primary keys are
+        // reported by the constraint/table catalogs, not as indexes.
+        assert!(
+            !identity.objects.iter().any(|id| matches!(
+                id,
+                pgmt::catalog::id::DbObjectId::Index { name, .. } if name == "users_pkey"
+            )),
+            "primary key index must not appear as a standalone index"
+        );
+    })
+    .await;
+}
