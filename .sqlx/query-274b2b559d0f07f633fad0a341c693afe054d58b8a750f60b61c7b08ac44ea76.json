@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            e.oid AS \"oid!\",\n            e.extname AS \"name!\",\n            e.extnamespace AS \"namespace!\",\n            e.extversion AS \"version!\",\n            e.extrelocatable AS \"relocatable!\"\n        FROM pg_extension e\n        ORDER BY e.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "version!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extversion"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "relocatable!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_extension",
+            "name": "extrelocatable"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "274b2b559d0f07f633fad0a341c693afe054d58b8a750f60b61c7b08ac44ea76"
+}

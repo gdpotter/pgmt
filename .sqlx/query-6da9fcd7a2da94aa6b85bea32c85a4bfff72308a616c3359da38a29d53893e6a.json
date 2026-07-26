@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.tgname AS \"name!\",\n            c.oid AS \"table_oid!\",\n            c.relnamespace AS \"table_namespace!\",\n            c.relname AS \"table_name!\",\n            t.tgisinternal AS \"is_internal!\",\n            p.pronamespace AS \"function_namespace!\",\n            p.proname AS \"function_name!\",\n            pg_catalog.pg_get_function_identity_arguments(p.oid) AS \"function_args!\",\n            pg_catalog.pg_get_triggerdef(t.oid) AS \"definition!\"\n        FROM pg_trigger t\n        JOIN pg_class c ON t.tgrelid = c.oid\n        JOIN pg_proc p ON t.tgfoid = p.oid\n        WHERE c.relkind IN ('r', 'v', 'm')\n        ORDER BY t.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_trigger",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_trigger",
+            "name": "tgname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "table_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "table_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "table_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_internal!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_trigger",
+            "name": "tgisinternal"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "function_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "function_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "function_args!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "definition!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "6da9fcd7a2da94aa6b85bea32c85a4bfff72308a616c3359da38a29d53893e6a"
+}

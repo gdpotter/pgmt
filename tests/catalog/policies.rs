@@ -2,7 +2,8 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
-use pgmt::catalog::policy::{Policy, PolicyCommand, fetch};
+use pgmt::catalog::policy::{Policy, PolicyCommand};
+use pgmt::catalog::raw::policy as raw_policy;
 use pgmt::catalog::raw::table as raw_table;
 use pgmt::catalog::table::Table;
 use sqlx::postgres::PgConnection;
@@ -31,7 +32,7 @@ async fn test_fetch_policy_view_dependency() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load).await.unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -71,7 +72,9 @@ async fn test_fetch_basic_policy() {
         db.execute("CREATE POLICY user_policy ON users FOR ALL TO PUBLIC USING (true)")
             .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -106,7 +109,7 @@ async fn test_fetch_policy_with_roles() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load).await.unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -133,7 +136,9 @@ async fn test_fetch_policy_with_comment() {
         db.execute("COMMENT ON POLICY task_policy ON tasks IS 'Allows all users to see all tasks'")
             .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -159,7 +164,7 @@ async fn test_fetch_restrictive_policy() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load).await.unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -191,7 +196,9 @@ async fn test_fetch_policy_for_each_command() {
         db.execute("CREATE POLICY all_policy ON items FOR ALL TO PUBLIC USING (true)")
             .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 5);
 
@@ -234,7 +241,9 @@ async fn test_fetch_policy_with_using_and_check() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];
@@ -358,7 +367,9 @@ async fn test_fetch_multiple_policies_on_same_table() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 3);
 
@@ -397,7 +408,9 @@ async fn test_fetch_policies_across_schemas() {
         db.execute("CREATE POLICY public_policy ON public.data FOR ALL TO PUBLIC USING (true)")
             .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load)
+            .await
+            .unwrap();
 
         assert_eq!(policies.len(), 2);
 
@@ -427,7 +440,7 @@ async fn test_fetch_policy_column_dependencies() {
         )
         .await;
 
-        let policies = fetch(&mut *db.conn().await).await.unwrap();
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load).await.unwrap();
 
         assert_eq!(policies.len(), 1);
         let policy = &policies[0];

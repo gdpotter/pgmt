@@ -1,0 +1,114 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"oid!\",\n            p.polname AS \"name!\",\n            c.oid AS \"table_oid!\",\n            c.relnamespace AS \"table_namespace!\",\n            c.relname AS \"table_name!\",\n            p.polcmd::text AS \"command!\",\n            p.polpermissive AS \"permissive!\",\n            COALESCE(\n                ARRAY(\n                    SELECT rolname FROM pg_roles\n                    WHERE oid = ANY(p.polroles)\n                    ORDER BY rolname\n                ),\n                '{}'::text[]\n            ) AS \"roles!: Vec<String>\",\n            pg_catalog.pg_get_expr(p.polqual, p.polrelid) AS \"using_expr?\",\n            pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) AS \"with_check_expr?\"\n        FROM pg_policy p\n        JOIN pg_class c ON p.polrelid = c.oid\n        ORDER BY p.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "polname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "table_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "table_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "table_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "command!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "permissive!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "polpermissive"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "roles!: Vec<String>",
+        "type_info": "NameArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "using_expr?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "with_check_expr?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "df3e5d9ce7ceebd2f1b53a71173faa3b77832cd8f87413e33d66c55591aa8e32"
+}

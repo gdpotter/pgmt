@@ -1,6 +1,13 @@
 use crate::helpers::harness::with_test_db;
 use anyhow::Result;
-use pgmt::catalog::schema::fetch;
+use pgmt::catalog::raw::{schema as raw_schema, shared};
+use pgmt::catalog::schema::Schema;
+use sqlx::postgres::PgConnection;
+
+async fn fetch(conn: &mut PgConnection) -> anyhow::Result<Vec<Schema>> {
+    let shared = shared::fetch(&mut *conn).await?;
+    raw_schema::load(&shared)
+}
 
 #[tokio::test]
 async fn test_fetch_default_schema() -> Result<()> {

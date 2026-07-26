@@ -10,8 +10,9 @@ use pgmt::catalog::raw::exclusion::ExclusionReason;
 use pgmt::catalog::raw::shared;
 use pgmt::catalog::raw::{
     aggregate as raw_aggregate, cast as raw_cast, constraint as raw_constraint,
-    custom_type as raw_custom_type, domain as raw_domain, function as raw_function,
-    index as raw_index, operator as raw_operator, sequence as raw_sequence, table as raw_table,
+    custom_type as raw_custom_type, domain as raw_domain, extension as raw_extension,
+    function as raw_function, index as raw_index, operator as raw_operator, policy as raw_policy,
+    schema as raw_schema, sequence as raw_sequence, table as raw_table, trigger as raw_trigger,
     view as raw_view,
 };
 use sqlx::postgres::types::Oid;
@@ -981,6 +982,296 @@ async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> 
                 .any(|row| row.schema == "pg_catalog"),
             "expected pg_catalog constraints to be excluded as SystemSchema"
         );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_trigger_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute(
+            "CREATE FUNCTION touch() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql",
+        )
+        .await;
+        db.execute(
+            "CREATE TRIGGER users_touch BEFORE UPDATE ON users \
+             FOR EACH ROW EXECUTE FUNCTION touch()",
+        )
+        .await;
+        db.execute(
+            "CREATE TRIGGER adopted_touch BEFORE UPDATE ON adopted \
+             FOR EACH ROW EXECUTE FUNCTION touch()",
+        )
+        .await;
+        // A foreign key installs the internal triggers that enforce it.
+        db.execute("CREATE TABLE orders (id integer PRIMARY KEY, user_id integer REFERENCES users (id))")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_trigger::fetch(&mut conn).await?;
+        let converted = raw_trigger::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw trigger rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, trigger)| trigger.name == "users_touch")
+        );
+
+        // The trigger on the adopted table has no extension membership of its
+        // own: it is excluded through its parent table's.
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_touch")
+            .expect("a trigger on an extension-owned table should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "trigger");
+
+        // The foreign key's enforcement triggers belong to the constraint.
+        assert!(
+            converted
+                .excluded_for("InternalTrigger")
+                .any(|row| row.schema == "public"),
+            "expected a foreign key's internal triggers to be excluded"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_policy_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("ALTER TABLE users ENABLE ROW LEVEL SECURITY")
+            .await;
+        db.execute("CREATE POLICY users_self ON users USING (id > 0)")
+            .await;
+        db.execute("ALTER TABLE adopted ENABLE ROW LEVEL SECURITY")
+            .await;
+        db.execute("CREATE POLICY adopted_all ON adopted USING (id > 0)")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_policy::fetch(&mut conn).await?;
+        let converted = raw_policy::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.policies.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .policies
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw policy rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.policies.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, policy)| policy.name == "users_self")
+        );
+
+        // The policy on the adopted table has no extension membership of its
+        // own: it is excluded through its parent table's.
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_all")
+            .expect("a policy on an extension-owned table should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "policy");
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_namespace_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE SCHEMA app").await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let converted = raw_schema::convert(&shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = shared.namespaces.iter().map(|(oid, _)| oid.0).collect();
+
+        let residue: Vec<&str> = shared
+            .namespaces
+            .iter()
+            .filter(|(oid, _)| !accounted.contains(&oid.0))
+            .map(|(_, name)| name)
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "namespaces neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            shared.namespaces.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, schema)| schema.name == "app")
+        );
+        // `public` is a user schema: pgmt manages what it holds.
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, schema)| schema.name == "public")
+        );
+
+        let catalog = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "pg_catalog")
+            .expect("the catalog's own namespace should be excluded");
+        assert_eq!(catalog.reason, ExclusionReason::SystemSchema);
+        assert_eq!(catalog.kind, "schema");
+
+        // A schema an extension was installed into is still the user's.
+        db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA app")
+            .await;
+        let shared = shared::fetch(&mut conn).await?;
+        let converted = raw_schema::convert(&shared)?;
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, schema)| schema.name == "app"),
+            "an extension's schema is created by a schema file, not by CREATE EXTENSION"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_extension_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_extension::fetch(&mut conn).await?;
+        let converted = raw_extension::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw extension rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, extension)| extension.name == "citext")
+        );
+
+        // plpgsql is present in every database from initdb onward.
+        let plpgsql = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "plpgsql")
+            .expect("the built-in extension should be excluded");
+        assert_eq!(plpgsql.reason, ExclusionReason::BuiltInExtension);
+        assert_eq!(plpgsql.kind, "extension");
 
         Ok(())
     })

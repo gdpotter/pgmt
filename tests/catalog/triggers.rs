@@ -1,7 +1,9 @@
 use crate::helpers::harness::with_test_db;
+use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
-use pgmt::catalog::triggers::{Trigger, fetch};
+use pgmt::catalog::raw::trigger as raw_trigger;
+use pgmt::catalog::triggers::Trigger;
 
 #[tokio::test]
 async fn test_fetch_basic_triggers() {
@@ -25,7 +27,7 @@ async fn test_fetch_basic_triggers() {
 
         db.execute("CREATE TRIGGER update_timestamp_trigger BEFORE UPDATE ON test_table FOR EACH ROW EXECUTE FUNCTION update_timestamp()").await;
 
-        let triggers = fetch(&mut *db.conn().await).await.unwrap();
+        let triggers = load_converted(&mut *db.conn().await, raw_trigger::load).await.unwrap();
 
         assert_eq!(triggers.len(), 1);
         let trigger = &triggers[0];
@@ -70,7 +72,7 @@ async fn test_fetch_trigger_with_multiple_events() {
 
         db.execute("CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON test_table FOR EACH ROW EXECUTE FUNCTION audit_function()").await;
 
-        let triggers = fetch(&mut *db.conn().await).await.unwrap();
+        let triggers = load_converted(&mut *db.conn().await, raw_trigger::load).await.unwrap();
 
         let audit_trigger = triggers
             .iter()
@@ -103,7 +105,7 @@ async fn test_fetch_trigger_with_comment() {
         db.execute("COMMENT ON TRIGGER test_trigger ON test_table IS 'Test trigger comment'")
             .await;
 
-        let triggers = fetch(&mut *db.conn().await).await.unwrap();
+        let triggers = load_converted(&mut *db.conn().await, raw_trigger::load).await.unwrap();
 
         assert_eq!(triggers.len(), 1);
         let trigger = &triggers[0];
@@ -133,7 +135,7 @@ async fn test_fetch_trigger_with_when_condition() {
 
         db.execute("CREATE TRIGGER status_change_trigger AFTER UPDATE ON test_table FOR EACH ROW EXECUTE FUNCTION notify_status_change()").await;
 
-        let triggers = fetch(&mut *db.conn().await).await.unwrap();
+        let triggers = load_converted(&mut *db.conn().await, raw_trigger::load).await.unwrap();
 
         assert_eq!(triggers.len(), 1);
         let trigger = &triggers[0];

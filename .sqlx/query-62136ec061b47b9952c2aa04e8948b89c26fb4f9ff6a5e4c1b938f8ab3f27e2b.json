@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"policy_oid!\",\n            cls.relnamespace AS \"relation_namespace?\",\n            cls.relname AS \"relation_name?\",\n            cls.relkind::text AS \"relkind?\",\n            proc.oid AS \"function_oid?\",\n            proc.pronamespace AS \"function_namespace?\",\n            proc.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(proc.oid) AS \"function_args?\"\n        FROM pg_policy p\n        JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_policy'::regclass\n        LEFT JOIN pg_class cls ON d.refclassid = 'pg_class'::regclass AND d.refobjid = cls.oid\n        LEFT JOIN pg_proc proc ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = proc.oid\n        WHERE d.refobjsubid = 0\n          AND d.deptype = 'n'\n          AND (cls.oid IS NOT NULL OR proc.oid IS NOT NULL)\n        ORDER BY p.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "policy_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "relation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "relation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "relkind?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "function_oid?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "function_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "pronamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "function_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_proc",
+            "name": "proname"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "function_args?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "62136ec061b47b9952c2aa04e8948b89c26fb4f9ff6a5e4c1b938f8ab3f27e2b"
+}

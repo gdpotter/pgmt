@@ -1,40 +1,11 @@
-use anyhow::Result;
-use sqlx::postgres::PgConnection;
-use tracing::info;
+//! The logical schema: a namespace pgmt manages, and its comment.
+//!
+//! Loading lives in `catalog::raw::schema`, which converts the shared namespace
+//! map into these.
 
 #[derive(Debug, Clone)]
 pub struct Schema {
     pub name: String,
-    pub comment: Option<String>, // comment on the schema
-}
-
-impl Schema {}
-
-pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<Schema>> {
-    info!("Fetching schemas...");
-    let rows = sqlx::query!(
-        r#"
-        SELECT
-            n.nspname as "name!",
-            d.description as "comment?"
-        FROM pg_namespace n
-        LEFT JOIN pg_description d ON d.objoid = n.oid AND d.objsubid = 0
-        WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-          AND n.nspname NOT LIKE 'pg_temp_%'
-          AND n.nspname NOT LIKE 'pg_toast_temp_%'
-        ORDER BY n.nspname
-        "#
-    )
-    .fetch_all(&mut *conn)
-    .await?;
-
-    let schemas: Vec<Schema> = rows
-        .into_iter()
-        .map(|row| Schema {
-            name: row.name,
-            comment: row.comment,
-        })
-        .collect();
-
-    Ok(schemas)
+    /// Comment on the schema.
+    pub comment: Option<String>,
 }

@@ -33,6 +33,14 @@ pub enum ExclusionReason {
     /// foreign key's `conindid` merely points at the *referenced* table's index,
     /// which stays a user index of its own.
     ConstraintBackingIndex { constraint: String },
+    /// The trigger is PostgreSQL's own (`pg_trigger.tgisinternal`): it enforces a
+    /// foreign key or a deferred unique constraint, and the constraint that owns
+    /// it is what creates and drops it. A `CREATE CONSTRAINT TRIGGER` a user
+    /// wrote is not internal and stays in the catalog.
+    InternalTrigger,
+    /// The extension ships enabled in every database created from `template1`
+    /// (`plpgsql`), so no schema file creates or drops it.
+    BuiltInExtension,
     /// The sequence backs a `GENERATED ... AS IDENTITY` column (`pg_depend`
     /// `deptype = 'i'`): it is internal to the column and has no lifecycle of its
     /// own. A `SERIAL` column's sequence is *not* this — it is a standalone
@@ -47,6 +55,8 @@ impl ExclusionReason {
             ExclusionReason::SystemSchema => "SystemSchema",
             ExclusionReason::ExtensionOwned { .. } => "ExtensionOwned",
             ExclusionReason::ConstraintBackingIndex { .. } => "ConstraintBackingIndex",
+            ExclusionReason::InternalTrigger => "InternalTrigger",
+            ExclusionReason::BuiltInExtension => "BuiltInExtension",
             ExclusionReason::IdentityOwnedSequence { .. } => "IdentityOwnedSequence",
         }
     }

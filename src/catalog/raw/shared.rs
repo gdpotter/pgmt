@@ -342,6 +342,11 @@ pub async fn fetch_descriptions(conn: &mut PgConnection) -> Result<Descriptions>
     // there are thousands of them. Every object created after initdb — user
     // objects and extension members alike — is allocated an OID at or above
     // FirstNormalObjectId (16384), so that bound separates them.
+    //
+    // Namespaces are the exception: `public` is created by initdb with a pinned
+    // OID, yet its comment is a user's to set and pgmt's to manage, so every
+    // `pg_namespace` comment is kept regardless of OID. The handful of extra
+    // rows belong to schemas that are excluded as system schemas anyway.
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -352,6 +357,7 @@ pub async fn fetch_descriptions(conn: &mut PgConnection) -> Result<Descriptions>
         FROM pg_description d
         JOIN pg_class cl ON cl.oid = d.classoid
         WHERE d.objoid >= 16384
+           OR d.classoid = 'pg_namespace'::regclass
         ORDER BY cl.relname, d.objoid, d.objsubid
         "#
     )

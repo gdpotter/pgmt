@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            p.oid AS \"policy_oid!\",\n            c.relnamespace AS \"relation_namespace!\",\n            c.relname AS \"relation_name!\",\n            c.relkind::text AS \"relkind!\",\n            a.attname AS \"column_name!\"\n        FROM pg_policy p\n        JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_policy'::regclass\n        JOIN pg_class c ON d.refobjid = c.oid AND d.refclassid = 'pg_class'::regclass\n        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.refobjsubid\n        WHERE d.refobjsubid > 0\n          AND d.deptype = 'n'\n        ORDER BY p.oid, c.relname, a.attname\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "policy_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_policy",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "relation_namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "relation_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "relkind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "column_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "41a147ebaf82521e0c196b0ac40a8adf83671abb70ac1324721a6f3147258de0"
+}

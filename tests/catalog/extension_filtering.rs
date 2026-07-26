@@ -1,11 +1,12 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
+use pgmt::catalog::grant;
 use pgmt::catalog::raw::{
     constraint as raw_constraint, custom_type as raw_custom_type, function as raw_function,
-    index as raw_index, sequence as raw_sequence, table as raw_table, view as raw_view,
+    index as raw_index, policy as raw_policy, sequence as raw_sequence, table as raw_table,
+    trigger as raw_trigger, view as raw_view,
 };
-use pgmt::catalog::{grant, policy, triggers};
 
 #[tokio::test]
 async fn test_extension_functions_are_filtered() -> Result<()> {
@@ -265,13 +266,13 @@ async fn test_subobjects_of_extension_tables_are_filtered() -> Result<()> {
             "Indexes on extension-owned tables should be filtered"
         );
 
-        let trigger_list = triggers::fetch(&mut *db.conn().await).await?;
+        let trigger_list = load_converted(&mut *db.conn().await, raw_trigger::load).await?;
         assert!(
             !trigger_list.iter().any(|t| t.name == "ext_owned_trigger"),
             "Triggers on extension-owned tables should be filtered"
         );
 
-        let policies = policy::fetch(&mut *db.conn().await).await?;
+        let policies = load_converted(&mut *db.conn().await, raw_policy::load).await?;
         assert!(
             !policies.iter().any(|p| p.name == "ext_owned_policy"),
             "Policies on extension-owned tables should be filtered"

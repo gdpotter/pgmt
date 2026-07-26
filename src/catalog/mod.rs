@@ -100,7 +100,7 @@ impl Catalog {
         // to its search_path.
         let shared = raw::shared::fetch(&mut *conn).await?;
 
-        let schemas = schema::fetch(&mut *conn).await?;
+        let schemas = raw::schema::load(&shared)?;
         let tables = raw::table::load(&mut *conn, &shared).await?;
         let views = raw::view::load(&mut *conn, &shared).await?;
         let types = raw::custom_type::load(&mut *conn, &shared).await?;
@@ -112,9 +112,9 @@ impl Catalog {
         let sequences = raw::sequence::load(&mut *conn, &shared).await?;
         let indexes = raw::index::load(&mut *conn, &shared).await?;
         let constraints = raw::constraint::load(&mut *conn, &shared).await?;
-        let triggers = triggers::fetch(&mut *conn).await?;
-        let policies = policy::fetch(&mut *conn).await?;
-        let extensions = extension::fetch(&mut *conn).await?;
+        let triggers = raw::trigger::load(&mut *conn, &shared).await?;
+        let policies = raw::policy::load(&mut *conn, &shared).await?;
+        let extensions = raw::extension::load(&mut *conn, &shared).await?;
         let grants = grant::fetch(&mut *conn).await?;
 
         let mut forward = BTreeMap::new();

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            cl.relname AS \"class_name!\",\n            d.objoid AS \"objoid!\",\n            d.objsubid AS \"objsubid!\",\n            d.description AS \"description!\"\n        FROM pg_description d\n        JOIN pg_class cl ON cl.oid = d.classoid\n        WHERE d.objoid >= 16384\n        ORDER BY cl.relname, d.objoid, d.objsubid\n        ",
+  "query": "\n        SELECT\n            cl.relname AS \"class_name!\",\n            d.objoid AS \"objoid!\",\n            d.objsubid AS \"objsubid!\",\n            d.description AS \"description!\"\n        FROM pg_description d\n        JOIN pg_class cl ON cl.oid = d.classoid\n        WHERE d.objoid >= 16384\n           OR d.classoid = 'pg_namespace'::regclass\n        ORDER BY cl.relname, d.objoid, d.objsubid\n        ",
   "describe": {
     "columns": [
       {
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "bae70669c3143f8e921b572761b8443ba6aa6a8f04c811f680ccec5ed66c497e"
+  "hash": "9f53135bacd4caa13b442b68121c9a33db0c91258009635d27649f8651019e2c"
 }
