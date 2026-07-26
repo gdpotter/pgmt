@@ -15,15 +15,12 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{BUILT_IN_EXTENSIONS, Converted, Excluded, ExclusionReason};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::DependsOn;
 use crate::catalog::extension::Extension;
 use crate::catalog::id::DbObjectId;
-
-/// The extension `initdb` installs into every database from `template1`.
-const BUILT_IN_EXTENSIONS: [&str; 1] = ["plpgsql"];
 
 /// One `pg_extension` row, before names are resolved and OIDs are discarded.
 #[derive(Debug, Clone)]

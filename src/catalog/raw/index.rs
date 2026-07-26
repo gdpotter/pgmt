@@ -16,15 +16,12 @@ use sqlx::postgres::types::Oid;
 use std::collections::{BTreeMap, HashSet};
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::index::{Index, IndexColumn, IndexType};
 use crate::catalog::utils::is_system_schema;
-
-/// Schemas whose indexes are never pgmt's to manage.
-const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
 
 /// One `pg_index` row with its `pg_class` metadata, before names are resolved
 /// and OIDs are discarded.

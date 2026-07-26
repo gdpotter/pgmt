@@ -35,6 +35,7 @@ pub mod policy;
 pub mod schema;
 pub mod sequence;
 pub mod shared;
+pub mod snapshot;
 pub mod table;
 pub mod trigger;
 pub mod view;

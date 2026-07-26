@@ -14,6 +14,16 @@
 
 use sqlx::postgres::types::Oid;
 
+/// The schemas PostgreSQL owns, which no schema file creates or drops.
+///
+/// The fixed three; a converter that also has to account for the per-backend
+/// temporary namespaces (`pg_temp_N`, `pg_toast_temp_N`) matches those by
+/// prefix.
+pub const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
+
+/// The extension `initdb` installs into every database from `template1`.
+pub const BUILT_IN_EXTENSIONS: [&str; 1] = ["plpgsql"];
+
 /// Why a raw row did not become a logical object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExclusionReason {
@@ -146,5 +156,121 @@ impl<T> Converted<T> {
 impl<T> Default for Converted<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The exclusion rules above, spelled as SQL predicates.
+///
+/// A converter applies its rules in Rust, over the shared state
+/// (`ExtensionOwnership`, the namespace map); the identity snapshot applies the
+/// same rules inside one query, where none of that state is available. The two
+/// worlds cannot share code, so they share these spellings: every rule has one
+/// authoritative SQL form here, next to the [`ExclusionReason`] it mirrors, and
+/// the snapshot composes its branches out of them.
+///
+/// The sharing only flows this way. A raw fetch's own query is compile-time
+/// checked by `sqlx::query!`, whose SQL must be a literal, so a fragment cannot
+/// be interpolated back into it; where a raw fetch carries a rule in SQL (the
+/// constraint-backing subquery in `raw::index`, the relation-row-type test in
+/// `raw::custom_type`), the two spellings are bound by comment.
+pub mod sql {
+    use super::{BUILT_IN_EXTENSIONS, SYSTEM_SCHEMAS};
+
+    /// The system-schema names as an `IN` list, parenthesised.
+    fn system_schema_list() -> String {
+        let names: Vec<String> = SYSTEM_SCHEMAS
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect();
+        format!("({})", names.join(", "))
+    }
+
+    /// The schema named by `nspname_expr` is not one PostgreSQL owns.
+    ///
+    /// Mirrors [`super::ExclusionReason::SystemSchema`] as the converters apply
+    /// it: the three fixed catalog schemas.
+    pub fn not_in_system_schemas(nspname_expr: &str) -> String {
+        format!("{nspname_expr} NOT IN {}", system_schema_list())
+    }
+
+    /// The namespace named by `nspname_expr` is not PostgreSQL's own — including
+    /// the per-backend temporary namespaces, which exist for as long as a
+    /// session holds a temporary object.
+    ///
+    /// Mirrors `raw::schema::is_system_namespace`.
+    pub fn not_a_system_namespace(nspname_expr: &str) -> String {
+        format!(
+            "{} AND {nspname_expr} NOT LIKE 'pg_temp_%' AND {nspname_expr} NOT LIKE 'pg_toast_temp_%'",
+            not_in_system_schemas(nspname_expr)
+        )
+    }
+
+    /// No extension owns the object addressed by `(class, oid_expr)`.
+    ///
+    /// Mirrors `ExtensionOwnership::owner`, including its qualification by
+    /// catalog table: an OID identifies a row within one catalog, so an
+    /// unqualified test could match a row of another catalog that happens to
+    /// carry the same OID.
+    pub fn not_extension_owned(class: &str, oid_expr: &str) -> String {
+        format!(
+            "NOT EXISTS (\n    SELECT 1 FROM pg_depend dep\n    \
+             WHERE dep.objid = {oid_expr}\n      \
+             AND dep.classid = '{class}'::regclass\n      \
+             AND dep.refclassid = 'pg_extension'::regclass\n      \
+             AND dep.deptype = 'e'\n)"
+        )
+    }
+
+    /// No extension owns the relation named by `parent_oid_expr`, and therefore
+    /// none owns the constraint, index, trigger or policy hanging off it.
+    ///
+    /// Mirrors `ExtensionOwnership::owner_of_relation_subobject`: a sub-object of
+    /// a relation never gets a `deptype = 'e'` row of its own, so asking about
+    /// its own OID always answers "not owned" and leaks it.
+    pub fn parent_relation_not_extension_owned(parent_oid_expr: &str) -> String {
+        not_extension_owned("pg_class", parent_oid_expr)
+    }
+
+    /// The index named by `index_oid_expr` does not implement a constraint.
+    ///
+    /// Mirrors [`super::ExclusionReason::ConstraintBackingIndex`], and the
+    /// `backing_constraint` subquery `raw::index` fetches it with: only primary
+    /// key, unique and exclusion constraints own their index. A foreign key's
+    /// `conindid` merely points at the *referenced* table's index, which stays a
+    /// user index of its own.
+    pub fn not_a_constraint_backing_index(index_oid_expr: &str) -> String {
+        format!(
+            "NOT EXISTS (\n    SELECT 1 FROM pg_constraint con\n    \
+             WHERE con.conindid = {index_oid_expr}\n      \
+             AND con.contype IN ('p', 'u', 'x')\n)"
+        )
+    }
+
+    /// The sequence named by `sequence_oid_expr` does not back a
+    /// `GENERATED ... AS IDENTITY` column.
+    ///
+    /// Mirrors [`super::ExclusionReason::IdentityOwnedSequence`] and the
+    /// `deptype` split in `raw::sequence`: `'i'` is an identity column's
+    /// sequence, internal to the column; `'a'` is a `SERIAL` column's, a
+    /// standalone sequence the column merely defaults from.
+    pub fn not_an_identity_sequence(sequence_oid_expr: &str) -> String {
+        format!(
+            "NOT EXISTS (\n    SELECT 1 FROM pg_depend dep\n    \
+             WHERE dep.objid = {sequence_oid_expr}\n      \
+             AND dep.classid = 'pg_class'::regclass\n      \
+             AND dep.deptype = 'i'\n)"
+        )
+    }
+
+    /// The extension named by `extname_expr` is not one every database ships
+    /// with.
+    ///
+    /// Mirrors [`super::ExclusionReason::BuiltInExtension`].
+    pub fn not_a_built_in_extension(extname_expr: &str) -> String {
+        let names: Vec<String> = BUILT_IN_EXTENSIONS
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect();
+        format!("{extname_expr} NOT IN ({})", names.join(", "))
     }
 }

@@ -13,15 +13,12 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::cast::Cast;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::is_system_schema;
-
-/// Schemas whose types make a cast the server's rather than a user's.
-const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
 
 /// One `pg_cast` row, before names are resolved and OIDs are discarded.
 #[derive(Debug, Clone)]

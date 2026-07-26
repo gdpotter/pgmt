@@ -14,15 +14,12 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::custom_type::{CompositeAttribute, CustomType, EnumValue, TypeKind};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::resolve_type_dependency;
-
-/// Schemas whose types are never pgmt's to manage.
-const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
 
 /// One `pg_type` row of `typtype` enum, composite or range, before names are
 /// resolved and OIDs are discarded.

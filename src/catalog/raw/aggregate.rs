@@ -15,15 +15,12 @@ use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
 use tracing::info;
 
-use super::exclusion::{Converted, Excluded, ExclusionReason};
+use super::exclusion::{Converted, Excluded, ExclusionReason, SYSTEM_SCHEMAS};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::aggregate::Aggregate;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::is_system_schema;
-
-/// Schemas whose aggregates are never pgmt's to manage.
-const SYSTEM_SCHEMAS: [&str; 3] = ["pg_catalog", "information_schema", "pg_toast"];
 
 /// One `pg_aggregate` row joined to the `pg_proc` row that names it, before
 /// names are resolved and OIDs are discarded.

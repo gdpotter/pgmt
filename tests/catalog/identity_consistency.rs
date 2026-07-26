@@ -38,6 +38,16 @@ const SCHEMA: &[&str] = &[
         total numeric(10, 2) NOT NULL
     )"#,
     "CREATE INDEX orders_total_idx ON app.orders (total) WHERE total > 0",
+    // Both sequence shapes: an identity column's sequence is internal to the
+    // column and belongs to neither side, while a SERIAL column's is a sequence
+    // of its own that both sides must report. The exclusion constraint owns its
+    // backing index, which neither side reports as an index.
+    r#"CREATE TABLE app.tickets (
+        id integer GENERATED ALWAYS AS IDENTITY,
+        seq serial,
+        slot text,
+        EXCLUDE USING btree (slot WITH =)
+    )"#,
     "CREATE VIEW app.active_users AS SELECT id, email FROM app.users WHERE state = 'active'",
     r#"CREATE FUNCTION app.touch() RETURNS trigger AS $$
        BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql"#,
