@@ -224,7 +224,8 @@ pub fn branches() -> Vec<Branch> {
         .filter(sql::not_extension_owned("pg_proc", "p.oid")),
         // raw::custom_type — enums, composites and ranges. The row-type test
         // mirrors the one in that fetch's own query: a relation's row type is
-        // the relation, not a type a schema file wrote.
+        // the relation, not a type a schema file wrote, and only a standalone
+        // composite's own backing entry (relkind 'c') is not such a relation.
         Branch::new(
             "type",
             "pg_type t\n     JOIN pg_namespace n ON t.typnamespace = n.oid",
@@ -235,7 +236,7 @@ pub fn branches() -> Vec<Branch> {
         .filter(
             "NOT EXISTS (\n    SELECT 1 FROM pg_class c\n    \
              WHERE c.reltype = t.oid\n      \
-             AND c.relkind IN ('r', 'v', 'm', 'S')\n)",
+             AND c.relkind != 'c'\n)",
         )
         .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_type", "t.oid")),

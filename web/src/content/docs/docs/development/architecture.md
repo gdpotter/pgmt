@@ -15,14 +15,14 @@ pgmt is organized into focused modules:
 
 ## Catalog System (`src/catalog/`)
 
-Reads database structure from PostgreSQL's system catalogs (`pg_class`, `pg_attribute`, `pg_depend`, etc.).
+Reads database structure from PostgreSQL's system catalogs (`pg_class`, `pg_attribute`, `pg_depend`, etc.) in two layers: `catalog/raw/` fetches OID-keyed rows and converts them into the logical structs in `catalog/`, whose identity is name-based so two databases holding the same schema compare equal.
 
 - Fetches all database objects (tables, views, functions, indexes, etc.)
 - Tracks dependencies between objects
-- Supports comments via `pg_description`
-- Filters out system and extension-owned objects
+- Attaches comments from `pg_description` through an OID → identity index
+- Excludes system and extension-owned objects, each with a named reason
 
-**Key files:** `table.rs`, `view.rs`, `function.rs` for object-specific fetching; `id.rs` for dependency tracking.
+**Key files:** `raw/` for fetching and conversion (one module per object kind, plus `shared.rs` for the state every kind needs); `id.rs` for dependency tracking.
 
 ## Diff System (`src/diff/`)
 

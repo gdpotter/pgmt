@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            acl_rows.class AS \"class!\",\n            acl_rows.oid AS \"oid!\",\n            acl_rows.subid AS \"subid!\",\n            acl_rows.column_name AS \"column_name?\",\n            acl_rows.grantee AS \"grantee!\",\n            acl_rows.privilege AS \"privilege!\",\n            acl_rows.grantable AS \"grantable!\",\n            acl_rows.owner AS \"owner!\",\n            acl_rows.is_default_acl AS \"is_default_acl!\"\n        FROM (\n            SELECT\n                'pg_class'::text AS class,\n                c.oid AS oid,\n                0::int AS subid,\n                NULL::text AS column_name,\n                acl.grantee AS grantee,\n                acl.privilege_type AS privilege,\n                acl.is_grantable AS grantable,\n                c.relowner AS owner,\n                (c.relacl IS NULL) AS is_default_acl\n            FROM pg_class c\n            CROSS JOIN LATERAL aclexplode(COALESCE(\n                c.relacl,\n                acldefault(CASE WHEN c.relkind = 'S' THEN 'S' ELSE 'r' END::\"char\", c.relowner)\n            )) AS acl\n            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S')\n\n            UNION ALL\n\n            SELECT\n                'pg_class'::text,\n                a.attrelid,\n                a.attnum::int,\n                a.attname,\n                acl.grantee,\n                acl.privilege_type,\n                acl.is_grantable,\n                c.relowner,\n                false\n            FROM pg_attribute a\n            JOIN pg_class c ON c.oid = a.attrelid\n            CROSS JOIN LATERAL aclexplode(a.attacl) AS acl\n            WHERE c.relkind IN ('r', 'p', 'v', 'm')\n              AND a.attnum > 0\n              AND NOT a.attisdropped\n              AND a.attacl IS NOT NULL\n\n            UNION ALL\n\n            SELECT\n                'pg_proc'::text,\n                p.oid,\n                0::int,\n                NULL::text,\n                acl.grantee,\n                acl.privilege_type,\n                acl.is_grantable,\n                p.proowner,\n                (p.proacl IS NULL)\n            FROM pg_proc p\n            CROSS JOIN LATERAL aclexplode(COALESCE(\n                p.proacl, acldefault('f'::\"char\", p.proowner)\n            )) AS acl\n\n            UNION ALL\n\n            SELECT\n                'pg_namespace'::text,\n                n.oid,\n                0::int,\n                NULL::text,\n                acl.grantee,\n                acl.privilege_type,\n                acl.is_grantable,\n                n.nspowner,\n                (n.nspacl IS NULL)\n            FROM pg_namespace n\n            CROSS JOIN LATERAL aclexplode(COALESCE(\n                n.nspacl, acldefault('n'::\"char\", n.nspowner)\n            )) AS acl\n\n            UNION ALL\n\n            SELECT\n                'pg_type'::text,\n                t.oid,\n                0::int,\n                NULL::text,\n                acl.grantee,\n                acl.privilege_type,\n                acl.is_grantable,\n                t.typowner,\n                (t.typacl IS NULL)\n            FROM pg_type t\n            CROSS JOIN LATERAL aclexplode(COALESCE(\n                t.typacl, acldefault('T'::\"char\", t.typowner)\n            )) AS acl\n            WHERE t.typtype IN ('e', 'd', 'c', 'r')\n        ) AS acl_rows\n        ORDER BY acl_rows.class, acl_rows.oid, acl_rows.subid, acl_rows.grantee, acl_rows.privilege\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "class!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "subid!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "column_name?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "grantee!",
+        "type_info": "Oid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "privilege!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "grantable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner!",
+        "type_info": "Oid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_default_acl!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f06ad982670798d8d88c7fc26939db196b4cd88039b5825ad96009bd3d8356ce"
+}

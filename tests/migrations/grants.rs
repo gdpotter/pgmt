@@ -1018,3 +1018,53 @@ async fn test_recreated_function_reapplies_grant_and_public_revoke() -> Result<(
 
     Ok(())
 }
+
+/// Relation kinds the catalog does not model — partitioned tables and
+/// materialized views — carry no grants either, and a target that holds
+/// privileges on one is left alone rather than being revoked from.
+///
+/// Grants are resolved through the same OID index the objects are, so an object
+/// the catalog omits has no identity for a grant to attach to. Both sides of a
+/// diff therefore agree that there is nothing there, which is what keeps a
+/// privilege pgmt cannot express from being torn down as an unexpected one.
+#[tokio::test]
+async fn test_grants_on_unmodelled_relation_kinds_produce_no_steps() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA unmodelled").await;
+        db.execute("CREATE TABLE unmodelled.events (id INT, at DATE) PARTITION BY RANGE (at)")
+            .await;
+        db.execute("GRANT SELECT ON unmodelled.events TO test_app_user")
+            .await;
+        db.execute("GRANT INSERT (id) ON unmodelled.events TO test_app_user")
+            .await;
+        db.execute("CREATE TABLE unmodelled.source (id INT)").await;
+        db.execute("CREATE MATERIALIZED VIEW unmodelled.rollup AS SELECT id FROM unmodelled.source")
+            .await;
+        db.execute("GRANT SELECT ON unmodelled.rollup TO test_app_user")
+            .await;
+
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
+
+        let unmodelled_grants: Vec<_> = catalog
+            .grants
+            .iter()
+            .filter(|g| {
+                matches!(&g.target.object,
+                    pgmt::catalog::id::DbObjectId::Table { schema, name }
+                        | pgmt::catalog::id::DbObjectId::View { schema, name }
+                        | pgmt::catalog::id::DbObjectId::Type { schema, name }
+                    if schema == "unmodelled" && name != "source")
+            })
+            .collect();
+        assert!(
+            unmodelled_grants.is_empty(),
+            "grants on unmodelled relation kinds should not be in the catalog: {unmodelled_grants:?}"
+        );
+
+        // The diff of the catalog against itself is what a target already in the
+        // desired state produces: no REVOKE of the privileges pgmt cannot see.
+        let steps = pgmt::diff::grants::diff_grants(&catalog.grants, &catalog.grants);
+        assert!(steps.is_empty(), "unexpected grant steps: {steps:?}");
+    })
+    .await;
+}

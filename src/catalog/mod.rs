@@ -163,16 +163,17 @@ impl Catalog {
         let extensions = raw::extension::load_with_exclusions(&mut tx, &shared)
             .await?
             .collect_into("extension", &mut oid_indexes);
-        let grants = grant::fetch(&mut tx).await?;
+
+        // The whole load's OID → identity index. Grants are loaded through it
+        // rather than through filters of their own: an ACL row on an OID no
+        // converter registered is on an object the catalog does not hold, and
+        // is dropped for that one reason. The index is deliberately not stored
+        // on `Catalog` — an OID reaching a logical struct is what breaks
+        // cross-database comparison, so it dies here, at the firewall.
+        let oid_index = raw::merge_indexes(oid_indexes)?;
+        let grants = raw::grant::load(&mut tx, &oid_index).await?;
 
         tx.commit().await?;
-
-        // The whole load's OID → identity index, and the attachment point for
-        // OID-addressed state that is not yet resolved through it (ownership,
-        // grants). It is deliberately not stored on `Catalog`: an OID reaching a
-        // logical struct is what breaks cross-database comparison, so the index
-        // dies here, at the firewall.
-        let _merged_oid_index = raw::merge_indexes(oid_indexes)?;
 
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            NULLIF(t.typrelid, 0::oid) AS \"relation_oid?\"\n        FROM pg_type t\n        WHERE t.typtype IN ('e', 'c', 'r')\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.reltype = t.oid\n              AND c.relkind IN ('r', 'v', 'm', 'S')\n          )\n        ORDER BY t.oid\n        ",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            NULLIF(t.typrelid, 0::oid) AS \"relation_oid?\"\n        FROM pg_type t\n        WHERE t.typtype IN ('e', 'c', 'r')\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.reltype = t.oid\n              AND c.relkind != 'c'\n          )\n        ORDER BY t.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       null
     ]
   },
-  "hash": "a4372b5ed288f65abf4780c3db9c69f653373826444f1a3fb856090fc68cbb45"
+  "hash": "c422bc8269ab4f454327dd3febc5b031e8ae2969eadc010b1052852a38bb1e32"
 }

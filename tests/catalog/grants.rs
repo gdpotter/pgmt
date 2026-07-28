@@ -1,7 +1,7 @@
 use crate::helpers::harness::with_test_db;
 
 use pgmt::catalog::Catalog;
-use pgmt::catalog::grant::{GranteeType, fetch};
+use pgmt::catalog::grant::GranteeType;
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 
 #[tokio::test]
@@ -17,7 +17,7 @@ async fn test_fetch_table_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grants for our test table
         let table_grants: Vec<_> = grants
@@ -63,7 +63,7 @@ async fn test_fetch_column_grants() {
         db.execute("GRANT SELECT (ssn) ON test_col.users TO test_read_only")
             .await;
 
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         let column_grants: Vec<_> = grants
             .iter()
@@ -111,7 +111,7 @@ async fn test_fetch_schema_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grants for our test schema
         let schema_grants: Vec<_> = grants
@@ -145,7 +145,7 @@ async fn test_fetch_public_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grants for our test table
         let public_grants: Vec<_> = grants
@@ -178,7 +178,7 @@ async fn test_fetch_grant_with_grant_option() {
         .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grants for our test table
         let admin_grants: Vec<_> = grants
@@ -212,7 +212,7 @@ async fn test_fetch_function_grants() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grants for our test function
         let function_grants: Vec<_> = grants
@@ -241,7 +241,7 @@ async fn test_grant_dependencies() {
             .await;
 
         // Fetch and verify grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find grant for our test table
         let table_grant = grants
@@ -363,7 +363,7 @@ async fn test_function_grant_is_default_acl() {
             .await;
 
         // Fetch grants
-        let grants = fetch(&mut *db.conn().await).await.unwrap();
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
 
         // Find PUBLIC grant for func_with_defaults - should have is_default_acl = true
         let default_grant = grants
@@ -464,6 +464,128 @@ async fn test_catalog_contains_id() {
             name: "my_func".to_string(),
             arguments: "integer".to_string()  // Wrong arguments
         }));
+    })
+    .await;
+}
+
+/// A user type whose name begins with an underscore is a user type, not an
+/// array type. Grants on it were once dropped by a `typname NOT LIKE '\_%'`
+/// filter that took the leading underscore of PostgreSQL's array-type naming
+/// for a rule; arrays are now simply absent from the catalog, so no name
+/// pattern is consulted and `_internal_status` keeps its privileges.
+#[tokio::test]
+async fn test_grants_on_underscore_named_type_are_tracked() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA test_underscore_type").await;
+        db.execute("CREATE TYPE test_underscore_type._internal_status AS ENUM ('new', 'done')")
+            .await;
+        db.execute("GRANT USAGE ON TYPE test_underscore_type._internal_status TO test_app_user")
+            .await;
+
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
+
+        let usage = grants
+            .iter()
+            .find(|g| {
+                matches!(&g.target.object, DbObjectId::Type { schema, name }
+                if schema == "test_underscore_type" && name == "_internal_status")
+                    && matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+            })
+            .expect("underscore-named type should keep its USAGE grant");
+        assert!(usage.privileges.contains(&"USAGE".to_string()));
+
+        // The array type PostgreSQL created alongside it is not an object pgmt
+        // manages, so nothing carries its privileges either.
+        assert!(
+            !grants.iter().any(|g| {
+                matches!(&g.target.object, DbObjectId::Type { name, .. }
+                if name == "__internal_status")
+            }),
+            "the array type should not appear in the catalog's grants"
+        );
+    })
+    .await;
+}
+
+/// Range types are catalog objects like any other user type, and their
+/// privileges are tracked. Grant fetching once listed only enums, domains and
+/// composites, so a range type's ACL was invisible and a `GRANT USAGE` on one
+/// was silently lost.
+#[tokio::test]
+async fn test_grants_on_range_types_are_tracked() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA test_range_type").await;
+        db.execute("CREATE TYPE test_range_type.int_span AS RANGE (subtype = int4)")
+            .await;
+        db.execute("GRANT USAGE ON TYPE test_range_type.int_span TO test_app_user")
+            .await;
+
+        let catalog = Catalog::load_unfiltered(db.pool()).await.unwrap();
+
+        assert!(
+            catalog
+                .types
+                .iter()
+                .any(|t| t.schema == "test_range_type" && t.name == "int_span"),
+            "the range type itself should be in the catalog"
+        );
+
+        let usage = catalog
+            .grants
+            .iter()
+            .find(|g| {
+                matches!(&g.target.object, DbObjectId::Type { schema, name }
+                if schema == "test_range_type" && name == "int_span")
+                    && matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+            })
+            .expect("range type should keep its USAGE grant");
+        assert!(usage.privileges.contains(&"USAGE".to_string()));
+    })
+    .await;
+}
+
+/// A relation's row type is not a type anyone grants on: it exists because the
+/// relation does. Which `pg_type` rows are relation row types is decided by
+/// `pg_class.reltype` pointing at them, so a table's row type is recognised as
+/// one whatever it is called, and a standalone composite alongside it keeps its
+/// own privileges.
+#[tokio::test]
+async fn test_relation_row_types_are_not_granted_on() {
+    with_test_db(async |db| {
+        db.execute("CREATE SCHEMA test_row_type").await;
+        db.execute("CREATE TABLE test_row_type.thing (id INT)")
+            .await;
+        db.execute("CREATE TYPE test_row_type.point2d AS (x INT, y INT)")
+            .await;
+        db.execute("GRANT USAGE ON TYPE test_row_type.point2d TO test_app_user")
+            .await;
+        db.execute("GRANT SELECT ON test_row_type.thing TO test_app_user")
+            .await;
+
+        let grants = Catalog::load_unfiltered(db.pool()).await.unwrap().grants;
+
+        assert!(
+            grants.iter().any(|g| {
+                matches!(&g.target.object, DbObjectId::Type { schema, name }
+                if schema == "test_row_type" && name == "point2d")
+                    && matches!(&g.grantee, GranteeType::Role(n) if n == "test_app_user")
+            }),
+            "the standalone composite type should keep its USAGE grant"
+        );
+        assert!(
+            grants.iter().any(|g| {
+                matches!(&g.target.object, DbObjectId::Table { schema, name }
+                if schema == "test_row_type" && name == "thing")
+            }),
+            "the table should keep its SELECT grant"
+        );
+        assert!(
+            !grants.iter().any(|g| {
+                matches!(&g.target.object, DbObjectId::Type { schema, name }
+                if schema == "test_row_type" && name == "thing")
+            }),
+            "the table's row type must not appear as a grantable type"
+        );
     })
     .await;
 }

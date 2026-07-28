@@ -72,7 +72,6 @@ impl OidIndex {
         Ok(index)
     }
 
-    #[allow(dead_code)]
     pub fn get(&self, class: &'static str, oid: Oid) -> Option<&DbObjectId> {
         self.by_key.get(&(class, oid.0))
     }

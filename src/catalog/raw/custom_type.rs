@@ -284,8 +284,9 @@ pub fn convert(
 
 async fn fetch_types(conn: &mut PgConnection) -> Result<Vec<RawCustomType>> {
     // A relation's row type is not a type pgmt manages — it exists because the
-    // table, view, materialized view or sequence does, and is created and
-    // dropped with it.
+    // relation does, and is created and dropped with it. Every relkind but 'c'
+    // is such a relation: 'c' is the backing entry a standalone composite type
+    // owns, which is the one case where the `pg_type` row is the real object.
     //
     // `sqlx::query!` needs a string literal, so the rule cannot be interpolated
     // from one place: the identity snapshot's `type` branch (`raw::snapshot`)
@@ -304,7 +305,7 @@ async fn fetch_types(conn: &mut PgConnection) -> Result<Vec<RawCustomType>> {
           AND NOT EXISTS (
             SELECT 1 FROM pg_class c
             WHERE c.reltype = t.oid
-              AND c.relkind IN ('r', 'v', 'm', 'S')
+              AND c.relkind != 'c'
           )
         ORDER BY t.oid
         "#

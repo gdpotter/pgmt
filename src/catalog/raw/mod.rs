@@ -72,6 +72,7 @@ pub mod domain;
 pub mod exclusion;
 pub mod extension;
 pub mod function;
+pub mod grant;
 pub mod index;
 pub mod oid_index;
 pub mod operator;

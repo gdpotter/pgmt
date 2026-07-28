@@ -1,7 +1,7 @@
 use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
-use pgmt::catalog::grant;
+use pgmt::catalog::Catalog;
 use pgmt::catalog::raw::{
     constraint as raw_constraint, custom_type as raw_custom_type, function as raw_function,
     index as raw_index, policy as raw_policy, sequence as raw_sequence, table as raw_table,
@@ -135,7 +135,7 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         let views_before = load_converted(&mut *db.conn().await, raw_view::load).await?;
         let sequences_before = load_converted(&mut *db.conn().await, raw_sequence::load).await?;
         let indexes_before = load_converted(&mut *db.conn().await, raw_index::load).await?;
-        let grants_before = grant::fetch(&mut *db.conn().await).await?;
+        let grants_before = Catalog::load_unfiltered(db.pool()).await?.grants;
 
         // Create the uuid-ossp extension which may create various objects
         db.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
@@ -148,7 +148,7 @@ async fn test_extension_objects_comprehensive_filtering() -> Result<()> {
         let views_after = load_converted(&mut *db.conn().await, raw_view::load).await?;
         let sequences_after = load_converted(&mut *db.conn().await, raw_sequence::load).await?;
         let indexes_after = load_converted(&mut *db.conn().await, raw_index::load).await?;
-        let grants_after = grant::fetch(&mut *db.conn().await).await?;
+        let grants_after = Catalog::load_unfiltered(db.pool()).await?.grants;
 
         // All counts should remain the same - extension objects should be filtered out
         assert_eq!(
