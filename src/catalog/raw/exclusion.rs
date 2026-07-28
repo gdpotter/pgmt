@@ -6,6 +6,12 @@
 //! and a converter reports the excluded rows alongside the converted ones, so
 //! that raw rows = converted + excluded with nothing unaccounted for.
 //!
+//! One rule therefore has three faces here, and they are kept in one module so
+//! that changing it means changing them together: the [`ExclusionReason`] a
+//! converter records, the Rust predicate it decides with, and the SQL spelling
+//! in [`sql`] that the identity snapshot filters with. [`Converted`] is the
+//! accounting they add up to.
+//!
 //! These are *physical-layer* exclusions: rows that are not user schema at all.
 //! They are not the managed-universe scoping that
 //! `ObjectFilter::from_config` applies — that is config-driven, name-based, and

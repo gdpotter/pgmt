@@ -4,7 +4,7 @@
 //! the server-side functions that cannot be computed in Rust: the `format_type`
 //! names of the source and target types, which *are* a cast's identity, and the
 //! identity-argument string of the implementing function. Everything else —
-//! schema-name resolution, extension-ownership and built-in exclusion, type
+//! schema-name resolution, extension-ownership and system-schema exclusion, type
 //! classification, dependency derivation, comment attachment — happens in the
 //! converter, where the OIDs die.
 

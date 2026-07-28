@@ -471,8 +471,8 @@ async fn test_catalog_contains_id() {
 /// A user type whose name begins with an underscore is a user type, not an
 /// array type. Grants on it were once dropped by a `typname NOT LIKE '\_%'`
 /// filter that took the leading underscore of PostgreSQL's array-type naming
-/// for a rule; arrays are now simply absent from the catalog, so no name
-/// pattern is consulted and `_internal_status` keeps its privileges.
+/// for a rule. Arrays are absent from the catalog entirely, so no name pattern
+/// is consulted and `_internal_status` keeps its privileges.
 #[tokio::test]
 async fn test_grants_on_underscore_named_type_are_tracked() {
     with_test_db(async |db| {
