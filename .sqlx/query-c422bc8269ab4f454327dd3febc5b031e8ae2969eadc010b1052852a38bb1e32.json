@@ -1,10 +1,6 @@
 {
   "db_name": "PostgreSQL",
-<<<<<<<< HEAD:.sqlx/query-c422bc8269ab4f454327dd3febc5b031e8ae2969eadc010b1052852a38bb1e32.json
   "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            NULLIF(t.typrelid, 0::oid) AS \"relation_oid?\"\n        FROM pg_type t\n        WHERE t.typtype IN ('e', 'c', 'r')\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.reltype = t.oid\n              AND c.relkind != 'c'\n          )\n        ORDER BY t.oid\n        ",
-========
-  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            t.typtype::text AS \"typtype!\",\n            NULLIF(t.typrelid, 0::oid) AS \"relation_oid?\"\n        FROM pg_type t\n        WHERE t.typtype IN ('e', 'c', 'r')\n          AND NOT EXISTS (\n            SELECT 1 FROM pg_class c\n            WHERE c.oid = t.typrelid\n              AND c.relkind <> 'c'\n          )\n        ORDER BY t.oid\n        ",
->>>>>>>> 671928b (fix: exclude partitioned and foreign tables' row types from the catalog):.sqlx/query-fc0cb9b6ef0f341bc7fcf72563814cee2db39b8615b60e32caaa4d8152ea5948.json
   "describe": {
     "columns": [
       {
@@ -64,9 +60,5 @@
       null
     ]
   },
-<<<<<<<< HEAD:.sqlx/query-c422bc8269ab4f454327dd3febc5b031e8ae2969eadc010b1052852a38bb1e32.json
   "hash": "c422bc8269ab4f454327dd3febc5b031e8ae2969eadc010b1052852a38bb1e32"
-========
-  "hash": "fc0cb9b6ef0f341bc7fcf72563814cee2db39b8615b60e32caaa4d8152ea5948"
->>>>>>>> 671928b (fix: exclude partitioned and foreign tables' row types from the catalog):.sqlx/query-fc0cb9b6ef0f341bc7fcf72563814cee2db39b8615b60e32caaa4d8152ea5948.json
 }
