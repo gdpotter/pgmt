@@ -83,19 +83,19 @@ pub async fn load_with_exclusions(
 
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known.
-    let oids = OidIndex::from_pairs(
+    let index = OidIndex::from_pairs(
         class::PG_EXTENSION,
         converted
             .objects
             .iter()
             .map(|(oid, extension)| (*oid, extension.id())),
     )?;
-    let comments = oids.object_comments(&shared.descriptions, class::PG_EXTENSION);
+    let comments = index.object_comments(&shared.descriptions, class::PG_EXTENSION);
     for (_, extension) in &mut converted.objects {
         extension.comment = comments.get(&extension.id()).map(|text| text.to_string());
     }
 
-    converted.index = oids;
+    converted.index = index;
 
     Ok(converted.map(|(_, extension)| extension))
 }
@@ -127,8 +127,9 @@ pub fn convert(
         }
 
         // An extension installed into a schema of its own must be created after
-        // that schema. Nothing is recorded for `public`, which every database
-        // has from initdb onward.
+        // that schema. Nothing is recorded for `public`: it is present in every
+        // database from initdb onward, so the edge could never order anything.
+        // Recording it, as most converters do, is equally correct.
         let depends_on = if schema == "public" {
             Vec::new()
         } else {

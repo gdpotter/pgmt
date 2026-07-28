@@ -135,21 +135,21 @@ pub async fn load_with_exclusions(
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known. An
     // index's comment is addressed under `pg_class`, like any relation's.
-    let oids = OidIndex::from_pairs(
+    let index = OidIndex::from_pairs(
         class::PG_CLASS,
         converted
             .objects
             .iter()
-            .map(|(oid, index)| (*oid, index.id())),
+            .map(|(oid, entry)| (*oid, entry.id())),
     )?;
-    let comments = oids.object_comments(&shared.descriptions, class::PG_CLASS);
-    for (_, index) in &mut converted.objects {
-        index.comment = comments.get(&index.id()).map(|text| text.to_string());
+    let comments = index.object_comments(&shared.descriptions, class::PG_CLASS);
+    for (_, entry) in &mut converted.objects {
+        entry.comment = comments.get(&entry.id()).map(|text| text.to_string());
     }
 
-    converted.index = oids;
+    converted.index = index;
 
-    Ok(converted.map(|(_, index)| index))
+    Ok(converted.map(|(_, entry)| entry))
 }
 
 /// Resolve raw indexes into logical ones, keeping each index's OID beside it so

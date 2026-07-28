@@ -15,8 +15,8 @@ use tracing::info;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::id::DbObjectId;
 use crate::catalog::sequence::Sequence;
-use crate::catalog::utils::DependencyBuilder;
 
 /// One `pg_class` row of `relkind = 'S'` with its `pg_sequence` parameters,
 /// before names are resolved and OIDs are discarded.
@@ -181,7 +181,9 @@ pub fn convert(raw: &RawSequences, shared: &SharedCatalog) -> Result<Converted<(
         // depends on the sequence through its column default, and the reverse
         // edge would close a cycle. Ownership is restated by its own
         // `ALTER SEQUENCE ... OWNED BY` step.
-        let depends_on = DependencyBuilder::new(schema.to_string()).build();
+        let depends_on = vec![DbObjectId::Schema {
+            name: schema.to_string(),
+        }];
 
         converted.objects.push((
             row.oid,

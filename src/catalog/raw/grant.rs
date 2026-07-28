@@ -7,8 +7,8 @@
 //! the index sits on something no converter kept (an object in a system schema,
 //! an extension's, an index, a relation's row type, an array type), and its
 //! grants are dropped for exactly the reason the object was. That one rule
-//! replaces the six `deptype = 'e'` subqueries and the schema-name filters the
-//! per-kind grant queries each used to spell for themselves.
+//! stands in for every exclusion the object kinds apply, so nothing here
+//! restates a schema filter or an extension-ownership test of its own.
 //!
 //! `aclexplode` and `acldefault` stay in SQL: an `aclitem[]` has no client-side
 //! representation, and the default ACL of an object with no explicit one is

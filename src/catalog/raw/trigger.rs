@@ -108,19 +108,19 @@ pub async fn load_with_exclusions(
 
     // Identity first, then the index, then the OID-addressed state: a comment
     // can only be attached to an object whose identity is already known.
-    let oids = OidIndex::from_pairs(
+    let index = OidIndex::from_pairs(
         class::PG_TRIGGER,
         converted
             .objects
             .iter()
             .map(|(oid, trigger)| (*oid, trigger.id())),
     )?;
-    let comments = oids.object_comments(&shared.descriptions, class::PG_TRIGGER);
+    let comments = index.object_comments(&shared.descriptions, class::PG_TRIGGER);
     for (_, trigger) in &mut converted.objects {
         trigger.comment = comments.get(&trigger.id()).map(|text| text.to_string());
     }
 
-    converted.index = oids;
+    converted.index = index;
 
     Ok(converted.map(|(_, trigger)| trigger))
 }

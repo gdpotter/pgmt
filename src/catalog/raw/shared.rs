@@ -94,6 +94,7 @@ impl NamespaceMap {
         self.by_oid.len()
     }
 
+    /// Nothing calls this; a public `len` without it is a clippy lint.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_oid.is_empty()

@@ -269,7 +269,10 @@ pub fn convert(raw: &RawViews, shared: &SharedCatalog) -> Result<Converted<Conve
         // A view body references the same object once per column it uses.
         dedup_preserving_order(&mut entry.view.depends_on);
 
-        // The `public` schema is assumed to exist rather than depended on.
+        // The `public` schema is assumed to exist rather than depended on: it
+        // is present in every database from initdb onward, so the edge could
+        // never order anything. Recording it, as most converters do, is
+        // equally correct.
         if entry.view.schema != "public" {
             entry.view.depends_on.push(DbObjectId::Schema {
                 name: entry.view.schema.clone(),
