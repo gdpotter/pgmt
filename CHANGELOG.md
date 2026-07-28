@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Features
+
+- Podman is now supported as a container runtime for shadow databases — its rootless and rootful Docker-compatible sockets are probed automatically, after the standard Docker socket so Docker wins when both are present.
+
+### Bug Fixes
+
+- When no container runtime can be reached, pgmt now explains that the runtime is needed to provision the shadow database (separate from your dev database), gives per-runtime guidance, and points at the `shadow.url` fallback.
+- RLS policies defined in a module's schema file are now attributed to that module. They were previously attributed to no file at all, landing in the unmoduled base, where the policy's mandatory reference to its module's table was reported as a "base cannot depend on a module" error.
+- User-defined operators and casts created by a schema file are now attributed to that file during incremental apply; both were missing from file-to-object attribution entirely.
+
 ## 0.6.0 - 2026-07-23
 
 ### Features
