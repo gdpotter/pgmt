@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A partitioned table's row type is no longer mistaken for a composite type. It was rendered as a spurious `CREATE TYPE`, and privileges granted on the table itself were attributed to that phantom type.
 - Fix which objects incremental apply attributes to which schema file: user-defined operators, casts, range types and procedures were missing from attribution entirely, materialized views were given identities they never had, and a unique index vanished from attribution as soon as a foreign key referenced it. Misattribution showed up as objects silently assigned to the wrong file — and, on module projects, to the wrong module.
 - Privileges are now tracked only on objects pgmt actually models. Grants on a materialized view, a partitioned table, or the sequence behind an identity column were read into the catalog even though the object itself never was, so they surfaced as grants on something pgmt could not create — and could be emitted as a `REVOKE` against a target. Those privileges are now left alone.
+- `VARIADIC` (and any parameter mode) is now attributed to the correct parameter in function signatures; it was previously shifted onto the preceding parameter when comparing and displaying functions.
+- An index over a domain (e.g. an expression cast to one) now depends on the domain rather than a plain type, so migration ordering places it after the domain exists.
 
 ## 0.6.0 - 2026-07-23
 
