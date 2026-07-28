@@ -49,7 +49,6 @@ impl AttrTarget {
     // does not see that usage (matching the project's existing dead_code allows).
 
     /// The owning object's schema (empty for schema-less objects).
-    #[allow(dead_code)]
     pub fn schema(&self) -> String {
         self.schema_and_name().0
     }
@@ -61,7 +60,6 @@ impl AttrTarget {
     }
 
     /// The column name, if this targets a column/attribute.
-    #[allow(dead_code)]
     pub fn column_name(&self) -> Option<&str> {
         match &self.sub {
             Some(SubObject::Column { name }) => Some(name.as_str()),
