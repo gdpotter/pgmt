@@ -37,10 +37,15 @@ Correct logging is critical for UX. The default level is `warn`:
 
 Each object type needs:
 
-1. **Catalog module** (`src/catalog/object.rs`)
-   - `fetch()` function using PostgreSQL system catalogs
-   - Include `comment: Option<String>` field
+1. **Catalog modules** (`src/catalog/raw/object.rs` + `src/catalog/object.rs`)
+   - Raw fetch keeping OIDs, and a converter that resolves names, applies the
+     named exclusions, derives dependencies, and attaches comments through the
+     OID index
+   - Logical struct with name-based identity (no OIDs) and a
+     `comment: Option<String>` field
    - Implement `DependsOn` and `Commentable` traits
+   - Mirror the exclusions in the identity snapshot branch
+     (`src/catalog/raw/snapshot.rs`)
 
 2. **Diff logic** (`src/diff/object.rs`)
    - Compare old vs new states
@@ -53,7 +58,8 @@ Each object type needs:
 
 4. **Tests** (`tests/catalog/` and `tests/migrations/`)
 
-Look at `src/catalog/triggers.rs` for a pattern to follow.
+Look at `src/catalog/raw/trigger.rs` and `src/catalog/triggers.rs` for a pattern
+to follow.
 
 ## Testing
 
@@ -63,7 +69,7 @@ Look at `src/catalog/triggers.rs` for a pattern to follow.
 async fn test_fetch() {
     with_test_db(async |db| {
         db.execute("CREATE TABLE users (id INT)").await;
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = load_converted(&mut *db.conn().await, raw_table::load).await.unwrap();
         assert_eq!(tables.len(), 1);
     }).await;
 }

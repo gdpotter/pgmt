@@ -36,7 +36,7 @@ Requires PostgreSQL 13 or later.
 | Triggers               | ✅     | All timings and events, `WHEN` conditions, transition tables, column-specific `UPDATE OF`                                                                      |
 | Extensions             | ✅     | Extension-owned objects are excluded from management automatically                                                                                             |
 | Comments               | ✅     | On all supported objects, including columns and composite attributes                                                                                           |
-| Grants                 | ✅     | Tables, views, schemas, functions, sequences, types; column-level grants; `WITH GRANT OPTION`; only privilege deltas are emitted                               |
+| Grants                 | ✅     | Tables, views, schemas, functions, sequences, types; column-level grants; `WITH GRANT OPTION`; only privilege deltas are emitted. Privileges on objects pgmt doesn't manage are left alone |
 | RLS policies           | ✅     | All command types, permissive/restrictive, role targeting, `USING`/`WITH CHECK`                                                                                |
 | Roles                  | ❌     | By design — see [Roles and Permissions](/docs/guides/roles-and-permissions)                                                                                    |
 

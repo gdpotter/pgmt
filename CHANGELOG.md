@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - When no container runtime can be reached, pgmt now explains that the runtime is needed to provision the shadow database (separate from your dev database), gives per-runtime guidance, and points at the `shadow.url` fallback.
 - RLS policies defined in a module's schema file are now attributed to that module. They were previously attributed to no file at all, landing in the unmoduled base, where the policy's mandatory reference to its module's table was reported as a "base cannot depend on a module" error.
-- User-defined operators and casts created by a schema file are now attributed to that file during incremental apply; both were missing from file-to-object attribution entirely.
 - Privileges on a user-defined type whose name starts with an underscore, and on a range type, are now tracked. A filter meant to skip PostgreSQL's array types matched any leading underscore, and range types were left out of grant tracking altogether, so `GRANT USAGE` on either was silently dropped from generated schema files and migrations.
 - A partitioned table's row type is no longer mistaken for a composite type. It was rendered as a spurious `CREATE TYPE`, and privileges granted on the table itself were attributed to that phantom type.
-- Fix which objects incremental apply attributes to which schema file: range types and procedures were missing entirely, materialized views were given identities they never had, and a unique index vanished from attribution as soon as a foreign key referenced it. Misattribution showed up as objects silently assigned to the wrong file — and, on module projects, to the wrong module.
+- Fix which objects incremental apply attributes to which schema file: user-defined operators, casts, range types and procedures were missing from attribution entirely, materialized views were given identities they never had, and a unique index vanished from attribution as soon as a foreign key referenced it. Misattribution showed up as objects silently assigned to the wrong file — and, on module projects, to the wrong module.
+- Privileges are now tracked only on objects pgmt actually models. Grants on a materialized view, a partitioned table, or the sequence behind an identity column were read into the catalog even though the object itself never was, so they surfaced as grants on something pgmt could not create — and could be emitted as a `REVOKE` against a target. Those privileges are now left alone.
 
 ## 0.6.0 - 2026-07-23
 

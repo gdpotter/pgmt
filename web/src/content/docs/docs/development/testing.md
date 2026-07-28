@@ -29,18 +29,29 @@ cargo test --test cli          # CLI tests
 
 Test PostgreSQL introspection - verify we correctly read database structure.
 
+An object kind is loaded by its raw fetch plus converter, which needs the shared
+catalog state (namespaces, types, extension ownership, comments) resolved on the
+same connection. `load_converted` supplies it, so a test doesn't roll its own
+preamble.
+
 **Example:**
 
 ```rust
+use crate::helpers::raw::load_converted;
+use pgmt::catalog::raw::table as raw_table;
+
 #[tokio::test]
 async fn test_fetch_tables() {
     with_test_db(async |db| {
         db.execute("CREATE TABLE users (id INT)").await;
-        let tables = fetch(db.pool()).await.unwrap();
+        let tables = load_converted(&mut *db.conn().await, raw_table::load).await.unwrap();
         assert_eq!(tables.len(), 1);
     }).await;
 }
 ```
+
+For anything that spans kinds — grants, dependencies between object types —
+load the whole catalog instead with `Catalog::load_unfiltered(db.pool())`.
 
 ### Migration Tests (`tests/migrations/`)
 
@@ -124,8 +135,8 @@ async fn test_with_multiple_databases() {
             initial_db.execute("CREATE TABLE users (id INT)").await;
             target_db.execute("CREATE TABLE users (id INT, email TEXT)").await;
 
-            let initial_tables = fetch(initial_db.pool()).await.unwrap();
-            let target_tables = fetch(target_db.pool()).await.unwrap();
+            let initial = Catalog::load_unfiltered(initial_db.pool()).await.unwrap();
+            let target = Catalog::load_unfiltered(target_db.pool()).await.unwrap();
             // Compare states...
         }).await
     }).await;
