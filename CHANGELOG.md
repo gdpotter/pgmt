@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.6.1 - 2026-07-29
+
 ### Features
 
 - Podman is now supported as a container runtime for shadow databases — its rootless and rootful Docker-compatible sockets are probed automatically, after the standard Docker socket so Docker wins when both are present.
