@@ -77,6 +77,7 @@ pub mod index;
 pub mod oid_index;
 pub mod operator;
 pub mod policy;
+pub mod reference;
 pub mod schema;
 pub mod sequence;
 pub mod shared;

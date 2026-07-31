@@ -19,6 +19,7 @@ use tracing::info;
 use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
+use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::index::{Index, IndexColumn, IndexType};
@@ -69,28 +70,12 @@ pub struct RawIndexColumn {
     pub is_included: bool,
 }
 
-/// One `pg_depend` edge from an index to a type, routine or operator class its
-/// definition uses.
-#[derive(Debug, Clone)]
-pub struct RawIndexDependency {
-    pub index_oid: Oid,
-    /// Name of the `pg_catalog` table the reference addresses (`pg_type`,
-    /// `pg_proc`, `pg_opclass`).
-    pub ref_class: String,
-    pub ref_oid: Oid,
-
-    /// Referenced routine (`pg_proc`).
-    pub function_namespace: Option<Oid>,
-    pub function_name: Option<String>,
-    pub function_args: Option<String>,
-}
-
 /// Everything the index converter reads out of `pg_catalog`.
 #[derive(Debug, Clone, Default)]
 pub struct RawIndexes {
     pub indexes: Vec<RawIndex>,
     pub columns: Vec<RawIndexColumn>,
-    pub dependencies: Vec<RawIndexDependency>,
+    pub dependencies: Vec<RawReference>,
 }
 
 /// Fetch every index, index column and index dependency edge in the database,
@@ -275,10 +260,10 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
     }
 
     for row in &raw.dependencies {
-        let Some(&idx) = kept.get(&row.index_oid.0) else {
+        let Some(&idx) = kept.get(&row.source_oid.0) else {
             continue;
         };
-        if let Some(dep) = dependency(row, shared) {
+        if let Some(dep) = row.dependency(shared) {
             converted.objects[idx].1.depends_on.push(dep);
         }
     }
@@ -295,45 +280,6 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
         .sort_by(|(_, a), (_, b)| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
 
     Ok(converted)
-}
-
-/// The dependency one `pg_depend` edge of an index creates.
-///
-/// An extension-provided referent (pg_trgm's `gin_trgm_ops`, fuzzystrmatch's
-/// `soundex()`, citext) resolves to the extension itself: the object is filtered
-/// from the catalog, so the index must depend on what creates it. Operator
-/// classes are not catalog objects of their own, so an in-database one yields no
-/// dependency at all.
-fn dependency(row: &RawIndexDependency, shared: &SharedCatalog) -> Option<DbObjectId> {
-    let ref_class = class::intern(&row.ref_class);
-    if let Some(extension) = ref_class.and_then(|class| shared.extensions.owner(class, row.ref_oid))
-    {
-        return Some(DbObjectId::Extension {
-            name: extension.to_string(),
-        });
-    }
-
-    match row.ref_class.as_str() {
-        // The shared type map is what classifies a type reference: a reference to
-        // an array resolves to its element type, and a domain is a domain rather
-        // than a type. Rebuilding either from a join on `pg_type` here would give
-        // an index dependency identities no other object's dependencies use.
-        class::PG_TYPE => shared
-            .resolve_type(row.ref_oid)
-            .and_then(|referent| referent.dependency()),
-        class::PG_PROC => {
-            let schema = shared.namespaces.name(row.function_namespace?)?;
-            if is_system_schema(schema) {
-                return None;
-            }
-            Some(DbObjectId::Function {
-                schema: schema.to_string(),
-                name: row.function_name.clone()?,
-                arguments: row.function_args.clone().unwrap_or_default(),
-            })
-        }
-        _ => None,
-    }
 }
 
 /// The `WITH (...)` options of an index, from the `key=value` strings
@@ -492,7 +438,7 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
         .collect())
 }
 
-async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawIndexDependency>> {
+async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawReference>> {
     let rows = sqlx::query!(
         r#"
         SELECT DISTINCT
@@ -516,13 +462,17 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawIndexDepen
 
     Ok(rows
         .into_iter()
-        .map(|row| RawIndexDependency {
-            index_oid: row.index_oid,
+        .map(|row| RawReference {
+            source_oid: row.index_oid,
             ref_class: row.ref_class,
             ref_oid: row.ref_oid,
             function_namespace: row.function_namespace,
             function_name: row.function_name,
             function_args: row.function_args,
+            operator_namespace: None,
+            operator_name: None,
+            operator_left_type: None,
+            operator_right_type: None,
         })
         .collect())
 }

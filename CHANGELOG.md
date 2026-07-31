@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- A CHECK constraint, a domain CHECK constraint, a domain `DEFAULT`, and a trigger's `WHEN` condition now depend on the functions and operators their expressions call, so migrations create those first. A domain whose CHECK calls a function was created before the function existed and the migration failed with `function ... does not exist`.
+
 ## 0.6.1 - 2026-07-29
 
 ### Features

@@ -351,3 +351,45 @@ async fn test_fetch_multiple_domains() {
     })
     .await;
 }
+
+/// A domain's CHECK expression and its DEFAULT expression can name a function
+/// the domain row itself does not mention. Both are rendered inside CREATE
+/// DOMAIN, so both are dependencies of the domain.
+#[tokio::test]
+async fn test_fetch_domain_dependencies_from_its_expressions() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE FUNCTION is_positive(n integer) RETURNS boolean IMMUTABLE LANGUAGE sql \
+             AS $$ SELECT n > 0 $$",
+        )
+        .await;
+        db.execute(
+            "CREATE FUNCTION one() RETURNS integer IMMUTABLE LANGUAGE sql AS $$ SELECT 1 $$",
+        )
+        .await;
+        db.execute(
+            "CREATE DOMAIN counter AS INTEGER DEFAULT one() \
+             CONSTRAINT is_positive CHECK (is_positive(VALUE))",
+        )
+        .await;
+
+        let domains = fetch(&mut *db.conn().await).await.unwrap();
+        let counter = domains
+            .iter()
+            .find(|domain| domain.name == "counter")
+            .expect("the domain is in the catalog");
+
+        for (name, arguments) in [("is_positive", "n integer"), ("one", "")] {
+            assert!(
+                counter.depends_on().contains(&DbObjectId::Function {
+                    schema: "public".to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                }),
+                "expected an edge to {name}, got {:?}",
+                counter.depends_on()
+            );
+        }
+    })
+    .await;
+}

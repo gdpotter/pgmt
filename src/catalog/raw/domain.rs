@@ -14,8 +14,11 @@ use sqlx::postgres::types::Oid;
 use std::collections::BTreeMap;
 use tracing::info;
 
+use super::constraint::RawConstraintDependency;
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
+use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::domain::{Domain, DomainCheckConstraint};
 use crate::catalog::id::DbObjectId;
@@ -55,6 +58,14 @@ pub struct RawDomainCheckConstraint {
 pub struct RawDomains {
     pub domains: Vec<RawDomain>,
     pub check_constraints: Vec<RawDomainCheckConstraint>,
+    /// The `pg_depend` edges out of every constraint in the database; the
+    /// converter keeps the ones whose constraint is on a domain. Table and
+    /// domain constraints share `pg_constraint`, so they share one fetch
+    /// (`raw::constraint::fetch_dependencies`).
+    pub constraint_dependencies: Vec<RawConstraintDependency>,
+    /// The `pg_depend` edges the domain row itself carries — what its DEFAULT
+    /// expression names. `source_oid` is the domain's OID.
+    pub dependencies: Vec<RawReference>,
 }
 
 /// Fetch every domain and domain CHECK constraint in the database, unresolved
@@ -64,11 +75,66 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<RawDomains> {
     let domains = fetch_domains(&mut *conn).await?;
     info!("Fetching domain constraints...");
     let check_constraints = fetch_check_constraints(&mut *conn).await?;
+    let constraint_dependencies = super::constraint::fetch_dependencies(&mut *conn).await?;
+    info!("Fetching domain dependencies...");
+    let dependencies = fetch_dependencies(&mut *conn).await?;
 
     Ok(RawDomains {
         domains,
         check_constraints,
+        constraint_dependencies,
+        dependencies,
     })
+}
+
+/// The `pg_depend` edges a domain's own row carries: what its DEFAULT
+/// expression names.
+///
+/// Only `deptype = 'n'` rows are edges the definition created; a domain's
+/// automatic edges point at the things that own it.
+async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawReference>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT DISTINCT
+            d.objid AS "domain_oid!",
+            cl.relname AS "ref_class!",
+            d.refobjid AS "ref_oid!",
+            p.pronamespace AS "function_namespace?",
+            p.proname AS "function_name?",
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "function_args?",
+            o.oprnamespace AS "operator_namespace?",
+            o.oprname AS "operator_name?",
+            NULLIF(pg_catalog.format_type(o.oprleft, NULL), '-') AS "operator_left_type?",
+            NULLIF(pg_catalog.format_type(o.oprright, NULL), '-') AS "operator_right_type?"
+        FROM pg_depend d
+        JOIN pg_type t ON t.oid = d.objid AND t.typtype = 'd'
+        JOIN pg_class cl ON cl.oid = d.refclassid
+        LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid
+        LEFT JOIN pg_operator o ON d.refclassid = 'pg_operator'::regclass AND d.refobjid = o.oid
+        WHERE d.classid = 'pg_type'::regclass
+          AND d.deptype = 'n'
+          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass)
+        ORDER BY d.objid, cl.relname, d.refobjid
+        "#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RawReference {
+            source_oid: row.domain_oid,
+            ref_class: row.ref_class,
+            ref_oid: row.ref_oid,
+            function_namespace: row.function_namespace,
+            function_name: row.function_name,
+            function_args: row.function_args,
+            operator_namespace: row.operator_namespace,
+            operator_name: row.operator_name,
+            operator_left_type: row.operator_left_type,
+            operator_right_type: row.operator_right_type,
+        })
+        .collect())
 }
 
 /// Fetch domains and convert them into the logical catalog, with comments
@@ -119,6 +185,9 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
     let namespaces = &shared.namespaces;
     let constraints = check_constraints_by_domain(raw);
     let mut converted: Converted<(Oid, Domain)> = Converted::new();
+    // Where each surviving domain landed, so its constraints' dependency edges
+    // can be pushed onto it once the identities are resolved.
+    let mut kept: BTreeMap<u32, usize> = BTreeMap::new();
 
     for row in &raw.domains {
         let schema = namespaces
@@ -167,6 +236,7 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
             depends_on.push(dep);
         }
 
+        kept.insert(row.oid.0, converted.objects.len());
         converted.objects.push((
             row.oid,
             Domain {
@@ -181,6 +251,34 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
                 depends_on,
             },
         ));
+    }
+
+    // What a domain's DEFAULT and CHECK expressions name. Neither is an object
+    // of its own — both are rendered inside CREATE DOMAIN — so a function or
+    // operator either one calls has to be a dependency of the domain itself, or
+    // the domain is created before it exists and the CREATE fails.
+    let own = raw.dependencies.iter();
+    let from_constraints = raw.constraint_dependencies.iter().map(|row| {
+        // A domain constraint's edges are keyed by the domain it constrains, not
+        // by the constraint, which is not an object of the catalog.
+        (&row.reference, row.domain_oid)
+    });
+    for (reference, domain_oid) in own.map(|row| (row, row.source_oid)).chain(from_constraints) {
+        let Some(&idx) = kept.get(&domain_oid.0) else {
+            continue;
+        };
+        let (_, domain) = &mut converted.objects[idx];
+        if let Some(dep) = reference.dependency(shared)
+            && dep != domain.id()
+        {
+            domain.depends_on.push(dep);
+        }
+    }
+
+    for (_, domain) in &mut converted.objects {
+        // One constraint can name the same function or type more than once, and
+        // several constraints can name the same one.
+        dedup_preserving_order(&mut domain.depends_on);
     }
 
     // The raw fetch orders by OID; ordering by name is what callers see.

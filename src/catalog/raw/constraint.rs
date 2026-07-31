@@ -15,11 +15,13 @@
 use anyhow::{Context, Result, bail};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
+use std::collections::BTreeMap;
 use tracing::info;
 
 use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
+use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::constraint::{Constraint, ConstraintType};
 use crate::catalog::id::DbObjectId;
@@ -61,9 +63,94 @@ pub struct RawConstraint {
     pub predicate: Option<String>,
 }
 
-/// Fetch every non-primary-key table constraint in the database, unresolved and
-/// unfiltered.
-pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawConstraint>> {
+/// One `pg_depend` edge out of a `pg_constraint` row: what the constraint's
+/// expression names beyond the columns it constrains.
+///
+/// Table constraints and domain constraints share `pg_constraint`, so one fetch
+/// serves both converters; `domain_oid` is what tells a domain's rows apart.
+#[derive(Debug, Clone)]
+pub struct RawConstraintDependency {
+    /// `pg_constraint.contypid`: the constrained domain, `0` for a table
+    /// constraint.
+    pub domain_oid: Oid,
+    /// The edge; its `source_oid` is the constraint's own OID.
+    pub reference: RawReference,
+}
+
+/// Everything the constraint converter reads out of `pg_catalog`.
+#[derive(Debug, Clone, Default)]
+pub struct RawConstraints {
+    pub constraints: Vec<RawConstraint>,
+    pub dependencies: Vec<RawConstraintDependency>,
+}
+
+/// Fetch every non-primary-key table constraint in the database, and every
+/// dependency edge out of a constraint of any kind, unresolved and unfiltered.
+pub async fn fetch(conn: &mut PgConnection) -> Result<RawConstraints> {
+    Ok(RawConstraints {
+        constraints: fetch_constraints(&mut *conn).await?,
+        dependencies: fetch_dependencies(&mut *conn).await?,
+    })
+}
+
+/// The `pg_depend` edges out of every `pg_constraint` row, table and domain
+/// constraints alike.
+///
+/// Only `deptype = 'n'` rows are edges the expression created: a constraint's
+/// automatic (`'a'`) edge points back at the table or domain that owns it, which
+/// is a dependency in the opposite direction and would close a cycle if read as
+/// one.
+pub async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawConstraintDependency>> {
+    info!("Fetching constraint dependencies...");
+    let rows = sqlx::query!(
+        r#"
+        SELECT DISTINCT
+            c.oid AS "constraint_oid!",
+            c.contypid AS "domain_oid!",
+            cl.relname AS "ref_class!",
+            d.refobjid AS "ref_oid!",
+            p.pronamespace AS "function_namespace?",
+            p.proname AS "function_name?",
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "function_args?",
+            o.oprnamespace AS "operator_namespace?",
+            o.oprname AS "operator_name?",
+            NULLIF(pg_catalog.format_type(o.oprleft, NULL), '-') AS "operator_left_type?",
+            NULLIF(pg_catalog.format_type(o.oprright, NULL), '-') AS "operator_right_type?"
+        FROM pg_depend d
+        JOIN pg_constraint c ON c.oid = d.objid
+        JOIN pg_class cl ON cl.oid = d.refclassid
+        LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid
+        LEFT JOIN pg_operator o ON d.refclassid = 'pg_operator'::regclass AND d.refobjid = o.oid
+        WHERE d.classid = 'pg_constraint'::regclass
+          AND d.deptype = 'n'
+          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass)
+        ORDER BY c.oid, cl.relname, d.refobjid
+        "#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RawConstraintDependency {
+            domain_oid: row.domain_oid,
+            reference: RawReference {
+                source_oid: row.constraint_oid,
+                ref_class: row.ref_class,
+                ref_oid: row.ref_oid,
+                function_namespace: row.function_namespace,
+                function_name: row.function_name,
+                function_args: row.function_args,
+                operator_namespace: row.operator_namespace,
+                operator_name: row.operator_name,
+                operator_left_type: row.operator_left_type,
+                operator_right_type: row.operator_right_type,
+            },
+        })
+        .collect())
+}
+
+async fn fetch_constraints(conn: &mut PgConnection) -> Result<Vec<RawConstraint>> {
     info!("Fetching constraints...");
     let rows = sqlx::query!(
         r#"
@@ -248,12 +335,15 @@ pub async fn load_with_exclusions(
 /// Constraints on a system table and constraints whose table belongs to an
 /// extension are dropped here, each with its named reason.
 pub fn convert(
-    raw: &[RawConstraint],
+    raw: &RawConstraints,
     shared: &SharedCatalog,
 ) -> Result<Converted<(Oid, Constraint)>> {
     let mut converted: Converted<(Oid, Constraint)> = Converted::new();
+    // Where each surviving constraint landed, so its dependency edges can be
+    // pushed onto it once the identities are resolved.
+    let mut kept: BTreeMap<u32, usize> = BTreeMap::new();
 
-    for row in raw {
+    for row in &raw.constraints {
         let schema = shared
             .namespaces
             .name(row.table_namespace)
@@ -352,9 +442,7 @@ pub fn convert(
             other => bail!("Unknown constraint type: {}", other),
         };
 
-        // A self-referencing foreign key names its own table as the referent.
-        dedup_preserving_order(&mut depends_on);
-
+        kept.insert(row.oid.0, converted.objects.len());
         converted.objects.push((
             row.oid,
             Constraint {
@@ -366,6 +454,25 @@ pub fn convert(
                 depends_on,
             },
         ));
+    }
+
+    // What a CHECK expression calls: the function of `CHECK (is_valid(x))`, the
+    // type of a cast inside it. Nothing in the constraint row itself records
+    // these, and a constraint added before the function it calls fails to apply.
+    for row in &raw.dependencies {
+        let Some(&idx) = kept.get(&row.reference.source_oid.0) else {
+            continue;
+        };
+        if let Some(dep) = row.reference.dependency(shared) {
+            converted.objects[idx].1.depends_on.push(dep);
+        }
+    }
+
+    for (_, constraint) in &mut converted.objects {
+        // A self-referencing foreign key names its own table as the referent,
+        // and an expression naming the same function twice yields one edge per
+        // mention.
+        dedup_preserving_order(&mut constraint.depends_on);
     }
 
     // The raw fetch orders by OID; ordering by name is what callers see.
@@ -425,6 +532,14 @@ mod tests {
         }
     }
 
+    /// The raw fetch of a single constraint and no dependency edges.
+    fn only(constraint: RawConstraint) -> RawConstraints {
+        RawConstraints {
+            constraints: vec![constraint],
+            dependencies: Vec::new(),
+        }
+    }
+
     fn shared_with_app_schema() -> SharedCatalog {
         SharedCatalog {
             namespaces: NamespaceMap::from_pairs([(Oid(100), "app".to_string())]),
@@ -434,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_foreign_key_without_a_referent_is_an_error() {
-        let raw = [foreign_key(None, None)];
+        let raw = only(foreign_key(None, None));
         let error = convert(&raw, &shared_with_app_schema())
             .expect_err("a foreign key with no referenced table must not convert");
         assert!(
@@ -445,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_foreign_key_with_an_unknown_namespace_is_an_error() {
-        let raw = [foreign_key(Some(Oid(999)), Some("users"))];
+        let raw = only(foreign_key(Some(Oid(999)), Some("users")));
         let error = convert(&raw, &shared_with_app_schema())
             .expect_err("a foreign key whose referent has no namespace must not convert");
         assert!(
@@ -460,7 +575,7 @@ mod tests {
     fn test_self_referencing_foreign_key_depends_on_its_table_once() {
         let mut row = foreign_key(Some(Oid(100)), Some("orders"));
         row.columns = vec!["parent_id".to_string()];
-        let converted = convert(&[row], &shared_with_app_schema()).expect("converts");
+        let converted = convert(&only(row), &shared_with_app_schema()).expect("converts");
         let (_, constraint) = &converted.objects[0];
 
         let orders = DbObjectId::Table {
@@ -481,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_foreign_key_names_its_referent() {
-        let raw = [foreign_key(Some(Oid(100)), Some("users"))];
+        let raw = only(foreign_key(Some(Oid(100)), Some("users")));
         let converted = convert(&raw, &shared_with_app_schema()).expect("converts");
         let (_, constraint) = &converted.objects[0];
         assert!(constraint.depends_on.contains(&DbObjectId::Table {

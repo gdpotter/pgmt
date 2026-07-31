@@ -932,9 +932,10 @@ async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> 
             .map(|(oid, _)| oid.0)
             .chain(converted.excluded.iter().map(|row| row.oid.0))
             .collect();
-        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+        let all: BTreeSet<u32> = raw.constraints.iter().map(|row| row.oid.0).collect();
 
         let residue: Vec<&str> = raw
+            .constraints
             .iter()
             .filter(|row| !accounted.contains(&row.oid.0))
             .map(|row| row.name.as_str())
@@ -947,7 +948,7 @@ async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> 
         assert_eq!(accounted, all);
         assert_eq!(
             converted.objects.len() + converted.excluded.len(),
-            raw.len(),
+            raw.constraints.len(),
             "a row was counted twice"
         );
 
@@ -1019,9 +1020,10 @@ async fn test_every_raw_trigger_row_is_converted_or_excluded() -> Result<()> {
             .map(|(oid, _)| oid.0)
             .chain(converted.excluded.iter().map(|row| row.oid.0))
             .collect();
-        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+        let all: BTreeSet<u32> = raw.triggers.iter().map(|row| row.oid.0).collect();
 
         let residue: Vec<&str> = raw
+            .triggers
             .iter()
             .filter(|row| !accounted.contains(&row.oid.0))
             .map(|row| row.name.as_str())
@@ -1034,7 +1036,7 @@ async fn test_every_raw_trigger_row_is_converted_or_excluded() -> Result<()> {
         assert_eq!(accounted, all);
         assert_eq!(
             converted.objects.len() + converted.excluded.len(),
-            raw.len(),
+            raw.triggers.len(),
             "a row was counted twice"
         );
 

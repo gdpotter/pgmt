@@ -3,7 +3,7 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 use anyhow::Result;
 use pgmt::catalog::constraint::{Constraint, ConstraintType};
-use pgmt::catalog::id::DependsOn;
+use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::raw::constraint as raw_constraint;
 use sqlx::postgres::PgConnection;
 
@@ -254,6 +254,62 @@ async fn test_fetch_constraint_dependencies() -> Result<()> {
             matches!(dep, pgmt::catalog::id::DbObjectId::Table { schema, name }
                 if schema == "public" && name == "users")
         }));
+
+        Ok(())
+    })
+    .await
+}
+
+/// A CHECK expression can name a function or an operator that appears nowhere
+/// in the `pg_constraint` row itself; both are dependencies of the constraint.
+#[tokio::test]
+async fn test_fetch_check_constraint_dependencies_from_its_expression() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE FUNCTION is_positive(n integer) RETURNS boolean IMMUTABLE LANGUAGE sql \
+             AS $$ SELECT n > 0 $$",
+        )
+        .await;
+        db.execute(
+            "CREATE OPERATOR === (leftarg = integer, rightarg = integer, \
+             procedure = int4eq, commutator = ===)",
+        )
+        .await;
+        db.execute(
+            "CREATE TABLE readings (value integer, \
+             CONSTRAINT value_positive CHECK (is_positive(value)), \
+             CONSTRAINT reflexive CHECK (value === value))",
+        )
+        .await;
+
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
+        let by_name = |name: &str| {
+            constraints
+                .iter()
+                .find(|constraint| constraint.name == name)
+                .unwrap_or_else(|| panic!("constraint {name} is in the catalog"))
+                .depends_on()
+                .to_vec()
+        };
+
+        assert!(
+            by_name("value_positive").contains(&DbObjectId::Function {
+                schema: "public".to_string(),
+                name: "is_positive".to_string(),
+                arguments: "n integer".to_string(),
+            }),
+            "expected an edge to is_positive, got {:?}",
+            by_name("value_positive")
+        );
+        assert!(
+            by_name("reflexive").contains(&DbObjectId::Operator {
+                schema: "public".to_string(),
+                name: "===".to_string(),
+                arguments: "integer, integer".to_string(),
+            }),
+            "expected an edge to ===, got {:?}",
+            by_name("reflexive")
+        );
 
         Ok(())
     })

@@ -11,10 +11,13 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::PgConnection;
 use sqlx::postgres::types::Oid;
+use std::collections::BTreeMap;
 use tracing::info;
 
+use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
+use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
 use crate::catalog::DependsOn;
 use crate::catalog::id::DbObjectId;
@@ -41,12 +44,76 @@ pub struct RawTrigger {
     pub definition: String,
 }
 
+/// Everything the trigger converter reads out of `pg_catalog`.
+#[derive(Debug, Clone, Default)]
+pub struct RawTriggers {
+    pub triggers: Vec<RawTrigger>,
+    /// The `pg_depend` edges out of each trigger row: the trigger function, and
+    /// whatever its WHEN clause names. `source_oid` is the trigger's OID.
+    pub dependencies: Vec<RawReference>,
+}
+
 /// Fetch every trigger on a table, view or materialized view, unresolved and
 /// unfiltered.
 ///
 /// The relation kinds are the shape of what pgmt models, so they are selected
 /// here; which of those triggers are pgmt's to manage is the converter's call.
-pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawTrigger>> {
+pub async fn fetch(conn: &mut PgConnection) -> Result<RawTriggers> {
+    Ok(RawTriggers {
+        triggers: fetch_triggers(&mut *conn).await?,
+        dependencies: fetch_dependencies(&mut *conn).await?,
+    })
+}
+
+/// The `pg_depend` edges out of every `pg_trigger` row.
+///
+/// `tgfoid` is one of them, but so is every routine or operator the WHEN clause
+/// names, which appears nowhere else in the trigger row.
+async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawReference>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT DISTINCT
+            d.objid AS "trigger_oid!",
+            cl.relname AS "ref_class!",
+            d.refobjid AS "ref_oid!",
+            p.pronamespace AS "function_namespace?",
+            p.proname AS "function_name?",
+            pg_catalog.pg_get_function_identity_arguments(p.oid) AS "function_args?",
+            o.oprnamespace AS "operator_namespace?",
+            o.oprname AS "operator_name?",
+            NULLIF(pg_catalog.format_type(o.oprleft, NULL), '-') AS "operator_left_type?",
+            NULLIF(pg_catalog.format_type(o.oprright, NULL), '-') AS "operator_right_type?"
+        FROM pg_depend d
+        JOIN pg_class cl ON cl.oid = d.refclassid
+        LEFT JOIN pg_proc p ON d.refclassid = 'pg_proc'::regclass AND d.refobjid = p.oid
+        LEFT JOIN pg_operator o ON d.refclassid = 'pg_operator'::regclass AND d.refobjid = o.oid
+        WHERE d.classid = 'pg_trigger'::regclass
+          AND d.deptype = 'n'
+          AND d.refclassid IN ('pg_type'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass)
+        ORDER BY d.objid, cl.relname, d.refobjid
+        "#
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RawReference {
+            source_oid: row.trigger_oid,
+            ref_class: row.ref_class,
+            ref_oid: row.ref_oid,
+            function_namespace: row.function_namespace,
+            function_name: row.function_name,
+            function_args: row.function_args,
+            operator_namespace: row.operator_namespace,
+            operator_name: row.operator_name,
+            operator_left_type: row.operator_left_type,
+            operator_right_type: row.operator_right_type,
+        })
+        .collect())
+}
+
+async fn fetch_triggers(conn: &mut PgConnection) -> Result<Vec<RawTrigger>> {
     info!("Fetching triggers...");
     let rows = sqlx::query!(
         r#"
@@ -132,10 +199,13 @@ pub async fn load_with_exclusions(
 /// Triggers on a system table, triggers whose table belongs to an extension, and
 /// the internal triggers that enforce constraints are dropped here, each with its
 /// named reason.
-pub fn convert(raw: &[RawTrigger], shared: &SharedCatalog) -> Result<Converted<(Oid, Trigger)>> {
+pub fn convert(raw: &RawTriggers, shared: &SharedCatalog) -> Result<Converted<(Oid, Trigger)>> {
     let mut converted: Converted<(Oid, Trigger)> = Converted::new();
+    // Where each surviving trigger landed, so its dependency edges can be
+    // pushed onto it once the identities are resolved.
+    let mut kept: BTreeMap<u32, usize> = BTreeMap::new();
 
-    for row in raw {
+    for row in &raw.triggers {
         let schema = shared
             .namespaces
             .name(row.table_namespace)
@@ -198,6 +268,7 @@ pub fn convert(raw: &[RawTrigger], shared: &SharedCatalog) -> Result<Converted<(
             },
         ];
 
+        kept.insert(row.oid.0, converted.objects.len());
         converted.objects.push((
             row.oid,
             Trigger {
@@ -212,6 +283,23 @@ pub fn convert(raw: &[RawTrigger], shared: &SharedCatalog) -> Result<Converted<(
                 definition: row.definition.clone(),
             },
         ));
+    }
+
+    // What the WHEN clause names. `tgfoid` is already an edge above; anything a
+    // WHEN condition calls appears only in `pg_depend`, and a trigger created
+    // before it fails with `function ... does not exist`.
+    for row in &raw.dependencies {
+        let Some(&idx) = kept.get(&row.source_oid.0) else {
+            continue;
+        };
+        if let Some(dep) = row.dependency(shared) {
+            converted.objects[idx].1.depends_on.push(dep);
+        }
+    }
+
+    for (_, trigger) in &mut converted.objects {
+        // The trigger function is both `tgfoid` and a `pg_depend` edge.
+        dedup_preserving_order(&mut trigger.depends_on);
     }
 
     // The raw fetch orders by OID; ordering by name is what callers see.
