@@ -920,6 +920,15 @@ async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> 
             .await;
         db.execute("ALTER TABLE adopted ADD CONSTRAINT adopted_id_positive CHECK (id > 0)")
             .await;
+        // The SystemSchema reason, from a constraint the fixture owns: whether
+        // PostgreSQL's own catalog tables carry constraints varies by server
+        // version, and 13 has none. `information_schema` is a system schema and,
+        // unlike `pg_catalog`, accepts a table.
+        db.execute(
+            "CREATE TABLE information_schema.probe \
+             (id integer, CONSTRAINT probe_id_positive CHECK (id > 0))",
+        )
+        .await;
 
         let mut conn = db.conn().await;
         let shared = shared::fetch(&mut conn).await?;
@@ -974,12 +983,11 @@ async fn test_every_raw_constraint_row_is_converted_or_excluded() -> Result<()> 
         );
         assert_eq!(adopted.kind, "constraint");
 
-        // The catalog's own tables carry CHECK constraints, all system rows.
         assert!(
             converted
                 .excluded_for("SystemSchema")
-                .any(|row| row.schema == "pg_catalog"),
-            "expected pg_catalog constraints to be excluded as SystemSchema"
+                .any(|row| row.name == "probe_id_positive"),
+            "expected a constraint in a system schema to be excluded as SystemSchema"
         );
 
         Ok(())
@@ -1310,6 +1318,11 @@ async fn test_the_load_reports_what_its_converter_excluded() -> Result<()> {
         db.execute("ALTER TABLE adopted ENABLE ROW LEVEL SECURITY")
             .await;
         db.execute("CREATE POLICY adopted_all ON adopted USING (id > 0)")
+            .await;
+        // The constraint converter's exclusion, through the extension-owned
+        // parent: PostgreSQL 13's catalog tables carry no constraints of their
+        // own to supply one.
+        db.execute("ALTER TABLE adopted ADD CONSTRAINT adopted_id_positive CHECK (id > 0)")
             .await;
 
         let mut conn = db.conn().await;

@@ -254,9 +254,8 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
     }
 
     // What a domain's DEFAULT and CHECK expressions name. Neither is an object
-    // of its own — both are rendered inside CREATE DOMAIN — so a function or
-    // operator either one calls has to be a dependency of the domain itself, or
-    // the domain is created before it exists and the CREATE fails.
+    // of its own — both are rendered inside CREATE DOMAIN — so what either one
+    // calls is a dependency of the domain itself.
     let own = raw.dependencies.iter();
     let from_constraints = raw.constraint_dependencies.iter().map(|row| {
         // A domain constraint's edges are keyed by the domain it constrains, not
