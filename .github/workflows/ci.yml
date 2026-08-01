@@ -71,8 +71,10 @@ jobs:
     name: Test (PostgreSQL ${{ matrix.pg_version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        pg_version: [13-alpine, 14-alpine, 15-alpine, 16-alpine, 17-alpine, 18-alpine]
+        pg_version:
+          [13-alpine, 14-alpine, 15-alpine, 16-alpine, 17-alpine, 18-alpine, 19beta2-alpine]
     
     services:
       postgres:
