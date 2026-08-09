@@ -18,6 +18,7 @@ use tracing::info;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::collation::CollationRef;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::table::{Column, IdentityKind, PrimaryKey, Table};
 use crate::render::quote_ident;
@@ -51,6 +52,15 @@ pub struct RawColumn {
     pub attidentity: Option<String>,
     pub not_null: bool,
     pub attndims: i32,
+    /// `attcollation` and the column type's own `typcollation`, unresolved.
+    /// A collation equal to the type's default is the absence of a choice, and
+    /// comparing the OIDs is what tells the two apart — a user collation that
+    /// happens to be named "default" is still a choice.
+    pub attcollation: Oid,
+    pub type_collation: Oid,
+    /// `attcollation`'s namespace and name, unresolved.
+    pub collation_namespace: Option<Oid>,
+    pub collation_name: Option<String>,
 }
 
 /// One primary-key constraint, with its columns already aggregated in key order.
@@ -304,6 +314,28 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Converted<Conv
             _ => row.formatted_type.clone(),
         };
 
+        // Only a collation that differs from the column type's own is a choice
+        // the column made; `text` inheriting the database default is not.
+        let collation = (row.attcollation != Oid(0) && row.attcollation != row.type_collation)
+            .then(|| {
+                row.collation_namespace
+                    .zip(row.collation_name.as_ref())
+                    .and_then(|(namespace, name)| {
+                        Some(CollationRef {
+                            schema: shared.namespaces.name(namespace)?.to_string(),
+                            name: name.clone(),
+                        })
+                    })
+            })
+            .flatten();
+        // A user-defined collation must exist before the table that uses it;
+        // the collations PostgreSQL ships are not managed objects.
+        if let Some(collation) = &collation
+            && !is_system_schema(&collation.schema)
+        {
+            depends_on.push(collation.id());
+        }
+
         let is_stored_generated = row.attgenerated.as_deref() == Some("s");
         converted.objects[idx].table.columns.push(Column {
             name: row.name.clone(),
@@ -320,6 +352,7 @@ pub fn convert(raw: &RawTables, shared: &SharedCatalog) -> Result<Converted<Conv
                 None
             },
             identity: IdentityKind::from_attidentity(row.attidentity.as_deref()),
+            collation,
             comment: None,
             depends_on,
         });
@@ -448,12 +481,18 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawColumn>> {
             a.attgenerated::text AS "attgenerated?",
             a.attidentity::text AS "attidentity?",
             a.attnotnull AS "not_null!",
-            COALESCE(a.attndims, 0)::int AS "attndims!: i32"
+            COALESCE(a.attndims, 0)::int AS "attndims!: i32",
+            a.attcollation AS "attcollation!",
+            t.typcollation AS "type_collation!",
+            coll.collnamespace AS "collation_namespace?",
+            coll.collname AS "collation_name?"
         FROM pg_attribute a
         JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
+        JOIN pg_type t ON t.oid = a.atttypid
         LEFT JOIN pg_attrdef ad
           ON ad.adrelid = a.attrelid
          AND ad.adnum = a.attnum
+        LEFT JOIN pg_collation coll ON coll.oid = a.attcollation AND a.attcollation != 0
         WHERE a.attnum > 0
           AND NOT a.attisdropped
         ORDER BY a.attrelid, a.attnum
@@ -475,6 +514,10 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawColumn>> {
             attidentity: row.attidentity,
             not_null: row.not_null,
             attndims: row.attndims,
+            attcollation: row.attcollation,
+            type_collation: row.type_collation,
+            collation_namespace: row.collation_namespace,
+            collation_name: row.collation_name,
         })
         .collect())
 }

@@ -5,8 +5,8 @@ use pgmt::catalog::collation::CollationProvider;
 use pgmt::catalog::id::DbObjectId;
 use pgmt::catalog::target::AttrTarget;
 use pgmt::diff::operations::{
-    CollationOperation, CommentOperation, DomainOperation, MigrationStep, SqlRenderer,
-    TableOperation,
+    CollationOperation, ColumnAction, CommentOperation, DomainOperation, MigrationStep,
+    SqlRenderer, TableOperation,
 };
 
 /// Index of the first step matching a predicate, for ordering assertions.
@@ -565,5 +565,332 @@ async fn test_mixed_case_collation_name_quotes_correctly() -> Result<()> {
             },
         )
         .await?;
+    Ok(())
+}
+
+/// Regression test: `CREATE TABLE ... (col text COLLATE ...)` in a schema file
+/// used to silently lose the COLLATE clause because column collation was never
+/// fetched — the generated CREATE TABLE recreated the column with the default
+/// collation. The clause must round-trip, and the collation must be created
+/// before the table that uses it.
+#[tokio::test]
+async fn test_create_table_with_collated_column_round_trips() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+                "CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci)",
+            ],
+            |steps, final_catalog| -> Result<()> {
+                let collation_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Collation(CollationOperation::Create { .. }))
+                });
+                let table_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Create { .. }))
+                });
+                assert!(
+                    collation_idx < table_idx,
+                    "CREATE COLLATION must come before the table using it"
+                );
+
+                let create_sql = &steps[table_idx].to_sql()[0].sql;
+                assert!(
+                    create_sql.contains("\"name\" text COLLATE \"public\".\"ci\""),
+                    "CREATE TABLE must carry the COLLATE clause: {create_sql}"
+                );
+
+                let collation = final_catalog.tables[0].columns[1]
+                    .collation
+                    .as_ref()
+                    .expect("column keeps its collation after apply");
+                assert_eq!(collation.schema, "public");
+                assert_eq!(collation.name, "ci");
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// A plain text column must produce no COLLATE clause and no diff noise.
+#[tokio::test]
+async fn test_plain_text_column_produces_no_collation_diff() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE notes (id integer PRIMARY KEY, body text)"],
+            &[],
+            &[],
+            |steps, final_catalog| -> Result<()> {
+                assert!(
+                    steps.is_empty(),
+                    "identical plain-text table must diff empty, got: {steps:?}"
+                );
+                assert!(final_catalog.tables[0].columns[1].collation.is_none());
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_add_collation_to_existing_column() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+            ],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text)"],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci)"],
+            |steps, final_catalog| -> Result<()> {
+                let alter_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, ColumnAction::AlterType { .. })))
+                });
+                let sql = &steps[alter_idx].to_sql()[0].sql;
+                assert_eq!(
+                    sql,
+                    "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"name\" TYPE text COLLATE \"public\".\"ci\";"
+                );
+
+                let collation = final_catalog.tables[0].columns[1]
+                    .collation
+                    .as_ref()
+                    .expect("column gains the collation");
+                assert_eq!(collation.name, "ci");
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_change_column_collation() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE COLLATION ci_a (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+                "CREATE COLLATION ci_b (provider = icu, locale = 'und-u-ks-level1', deterministic = false)",
+            ],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci_a)"],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci_b)"],
+            |steps, final_catalog| -> Result<()> {
+                let alter_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, ColumnAction::AlterType { .. })))
+                });
+                let sql = &steps[alter_idx].to_sql()[0].sql;
+                assert!(
+                    sql.contains("TYPE text COLLATE \"public\".\"ci_b\""),
+                    "collation change re-states the type with the new collation: {sql}"
+                );
+
+                let collation = final_catalog.tables[0].columns[1]
+                    .collation
+                    .as_ref()
+                    .expect("column carries the new collation");
+                assert_eq!(collation.name, "ci_b");
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Removing an explicit collation reverts the column to its type's default:
+/// PostgreSQL recomputes collation from the TYPE clause, so a bare
+/// `TYPE text` (no COLLATE) resets attcollation to the default (verified
+/// against a real server).
+#[tokio::test]
+async fn test_remove_column_collation() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+            ],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci)"],
+            &["CREATE TABLE users (id integer PRIMARY KEY, name text)"],
+            |steps, final_catalog| -> Result<()> {
+                let alter_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, ColumnAction::AlterType { .. })))
+                });
+                let sql = &steps[alter_idx].to_sql()[0].sql;
+                assert_eq!(
+                    sql,
+                    "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"name\" TYPE text;"
+                );
+
+                assert!(
+                    final_catalog.tables[0].columns[1].collation.is_none(),
+                    "column reverts to the type's default collation"
+                );
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_add_column_with_collation() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+                "CREATE TABLE users (id integer PRIMARY KEY)",
+            ],
+            &[],
+            &["ALTER TABLE users ADD COLUMN name text COLLATE ci"],
+            |steps, final_catalog| -> Result<()> {
+                let alter_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Alter { actions, .. })
+                        if actions.iter().any(|a| matches!(a, ColumnAction::Add { .. })))
+                });
+                let sql = &steps[alter_idx].to_sql()[0].sql;
+                assert!(
+                    sql.contains("ADD COLUMN \"name\" text COLLATE \"public\".\"ci\""),
+                    "ADD COLUMN must carry the COLLATE clause: {sql}"
+                );
+
+                let collation = final_catalog.tables[0].columns[1]
+                    .collation
+                    .as_ref()
+                    .expect("added column keeps its collation");
+                assert_eq!(collation.name, "ci");
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// System collations round-trip too: `COLLATE "C"` is legitimate user SQL and
+/// must survive apply even though pg_catalog collations add no managed
+/// dependency (and thus no CREATE COLLATION step).
+#[tokio::test]
+async fn test_column_with_system_collation_round_trips() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &["CREATE TABLE users (id integer PRIMARY KEY, code text COLLATE \"C\")"],
+            |steps, final_catalog| -> Result<()> {
+                assert!(
+                    !steps
+                        .iter()
+                        .any(|s| matches!(s, MigrationStep::Collation(_))),
+                    "no collation steps expected for pg_catalog collations"
+                );
+
+                let table_idx = position(steps, |s| {
+                    matches!(s, MigrationStep::Table(TableOperation::Create { .. }))
+                });
+                let sql = &steps[table_idx].to_sql()[0].sql;
+                assert!(
+                    sql.contains("\"code\" text COLLATE \"pg_catalog\".\"C\""),
+                    "system collation must be rendered: {sql}"
+                );
+
+                let collation = final_catalog.tables[0].columns[1]
+                    .collation
+                    .as_ref()
+                    .expect("system collation round-trips");
+                assert_eq!(collation.schema, "pg_catalog");
+                assert_eq!(collation.name, "C");
+                Ok(())
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// A table whose column directly uses a collation must drop/recreate around a
+/// collation attribute change — proving the column-level dependency edge feeds
+/// the existing cascade machinery without any cascade-specific code.
+#[tokio::test]
+async fn test_collation_change_cascades_table_with_collated_column() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+    let (initial_db, target_db) = helper.setup_migration_test().await;
+
+    initial_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)")
+        .await;
+    initial_db
+        .execute("CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci)")
+        .await;
+
+    target_db
+        .execute("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level1', deterministic = false)")
+        .await;
+    target_db
+        .execute("CREATE TABLE users (id integer PRIMARY KEY, name text COLLATE ci)")
+        .await;
+
+    let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
+    let steps = helper
+        .run_migration_pipeline(&initial_catalog, &target_catalog)
+        .await?;
+
+    let drop_table = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Table(TableOperation::Drop { name, .. }) if name == "users"),
+    );
+    let drop_collation = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Collation(CollationOperation::Drop { name, .. }) if name == "ci"),
+    );
+    let create_collation = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Collation(CollationOperation::Create { collation }) if collation.name == "ci"),
+    );
+    let create_table = position(
+        &steps,
+        |s| matches!(s, MigrationStep::Table(TableOperation::Create { name, .. }) if name == "users"),
+    );
+    assert!(
+        drop_table < drop_collation,
+        "dependent table must drop before the collation"
+    );
+    assert!(drop_collation < create_collation);
+    assert!(
+        create_collation < create_table,
+        "table must be recreated after the collation"
+    );
+
+    helper.execute_migration(&initial_db, &steps).await?;
+    let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+    assert_eq!(
+        final_catalog.collations[0].locale.as_deref(),
+        Some("und-u-ks-level1")
+    );
+    let rediff = helper
+        .run_migration_pipeline(&final_catalog, &target_catalog)
+        .await?;
+    assert!(
+        rediff.is_empty(),
+        "re-diff after applying the cascade must be empty, got: {rediff:?}"
+    );
+
+    initial_db.cleanup().await;
+    target_db.cleanup().await;
     Ok(())
 }

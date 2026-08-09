@@ -467,6 +467,7 @@ mod tests {
                 default: None,
                 generated: None,
                 identity: None,
+                collation: None,
                 comment: None,
                 depends_on: vec![],
                 not_null: false,

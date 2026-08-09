@@ -4,6 +4,7 @@
 //! catalog query keeps OIDs and attnums, and the converter resolves them into
 //! the name-based identities this module's structs carry.
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,11 @@ pub struct Column {
     /// sequence is internal to the column (pg_depend 'i'), not a standalone
     /// catalog object.
     pub identity: Option<IdentityKind>,
+    /// Explicit collation, schema-qualified. `None` when the column uses its
+    /// type's default collation, so plain `text` columns never carry a
+    /// `COLLATE` clause. System collations (pg_catalog."C", etc.) are stored
+    /// and rendered but add no managed dependency.
+    pub collation: Option<CollationRef>,
     pub comment: Option<String>,
     /// Dependencies for this column (e.g., functions used in generated expression)
     pub depends_on: Vec<DbObjectId>,
@@ -157,6 +163,7 @@ mod tests {
                 default: None,
                 generated: None,
                 identity: None,
+                collation: None,
                 comment: None,
                 depends_on: vec![],
                 not_null,
