@@ -543,11 +543,11 @@ fn test_shadow_merge_mode_switch_url_to_docker_clears_url() {
 fn test_object_exclude_accepts_both_key_spellings() {
     // `exclude.schemas` is the documented key (mirrors include.schemas);
     // `exclude_schemas` is the legacy spelling accepted via serde alias.
-    let new_style: ConfigInput = serde_yaml::from_str(
+    let new_style: ConfigInput = serde_norway::from_str(
         "objects:\n  exclude:\n    schemas: [\"pg_*\"]\n    tables: [\"cache_*\"]\n",
     )
     .unwrap();
-    let legacy: ConfigInput = serde_yaml::from_str(
+    let legacy: ConfigInput = serde_norway::from_str(
         "objects:\n  exclude:\n    exclude_schemas: [\"pg_*\"]\n    exclude_tables: [\"cache_*\"]\n",
     )
     .unwrap();
@@ -560,7 +560,7 @@ fn test_object_exclude_accepts_both_key_spellings() {
 
 #[test]
 fn test_shadow_url_reset_mode_resolution() {
-    let config_input: ConfigInput = serde_yaml::from_str(
+    let config_input: ConfigInput = serde_norway::from_str(
         "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n    reset: branch\n",
     )
     .unwrap();
@@ -573,7 +573,7 @@ fn test_shadow_url_reset_mode_resolution() {
     }
 
     // Omitted reset defaults to the conservative clean mode.
-    let config_input: ConfigInput = serde_yaml::from_str(
+    let config_input: ConfigInput = serde_norway::from_str(
         "databases:\n  dev_url: postgres://localhost/dev\n  shadow:\n    url: postgres://ci/shadow\n",
     )
     .unwrap();

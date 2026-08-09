@@ -23,7 +23,7 @@ use crate::commands::apply::ExecutionMode;
 use crate::commands::diff_output::DiffFormat;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 

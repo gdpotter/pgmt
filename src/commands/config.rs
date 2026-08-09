@@ -1,7 +1,7 @@
 use crate::config::{Config, ConfigInput, DevUrlArgs, TargetUrlArgs};
 use anyhow::{Result, anyhow};
 use serde_json;
-use serde_yaml;
+use serde_norway;
 use std::path::Path;
 
 /// Config subcommands
@@ -160,7 +160,7 @@ fn set_config_value(config_file: &str, key: &str, value: &str) -> Result<()> {
     }
 
     let config_str = std::fs::read_to_string(config_path)?;
-    let mut config_input: ConfigInput = serde_yaml::from_str(&config_str)?;
+    let mut config_input: ConfigInput = serde_norway::from_str(&config_str)?;
 
     // Parse the key and update the appropriate field
     let parts: Vec<&str> = key.split('.').collect();
@@ -264,7 +264,7 @@ fn set_config_value(config_file: &str, key: &str, value: &str) -> Result<()> {
     }
 
     // Write updated config back to file
-    let yaml_str = serde_yaml::to_string(&config_input)?;
+    let yaml_str = serde_norway::to_string(&config_input)?;
     std::fs::write(config_path, yaml_str)?;
 
     Ok(())
@@ -318,7 +318,7 @@ fn list_config_values(
             println!("{}", serde_json::to_string_pretty(&config_map)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&config_map)?);
+            println!("{}", serde_norway::to_string(&config_map)?);
         }
         OutputFormat::Text => {
             println!("Current Configuration:");
@@ -365,7 +365,7 @@ fn validate_config_file(config_file: &str) -> Result<()> {
     // Try to parse as YAML
     let config_str = std::fs::read_to_string(config_path)?;
     let config_input: ConfigInput =
-        serde_yaml::from_str(&config_str).map_err(|e| anyhow!("Invalid YAML syntax: {}", e))?;
+        serde_norway::from_str(&config_str).map_err(|e| anyhow!("Invalid YAML syntax: {}", e))?;
 
     // Try to resolve with defaults to ensure all fields are valid
     let _resolved = ConfigBuilder::new()

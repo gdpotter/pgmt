@@ -21,7 +21,7 @@ impl CliTestHelper {
     /// Create a new CLI test environment with temporary project and databases
     pub async fn new() -> Self {
         // Load .env file for test environment configuration
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
 
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let project_root = temp_dir.path().to_path_buf();
@@ -166,7 +166,7 @@ docker:
     /// Create an interactive session for testing prompts using expectrl
     /// Use this for commands that require user input
     #[cfg(not(windows))]
-    pub async fn interactive_command(&self, args: &[&str]) -> Result<expectrl::Session> {
+    pub async fn interactive_command(&self, args: &[&str]) -> Result<expectrl::session::OsSession> {
         use std::process::Command;
 
         // Use the pre-built binary instead of cargo run for better reliability

@@ -9,7 +9,7 @@ use pgmt::config::builder::ConfigBuilder;
 use pgmt::config::types::ConfigInput;
 
 fn resolve_yaml(yaml: &str) -> Result<pgmt::config::Config> {
-    let input: ConfigInput = serde_yaml::from_str(yaml)?;
+    let input: ConfigInput = serde_norway::from_str(yaml)?;
     ConfigBuilder::new().with_file(input).resolve()
 }
 

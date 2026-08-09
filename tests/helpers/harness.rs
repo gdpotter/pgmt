@@ -112,7 +112,7 @@ impl TestDatabase {
 impl PgTestInstance {
     pub async fn new() -> Self {
         // Load .env file for test environment configuration
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
 
         let base_url = std::env::var("DATABASE_URL")
             .expect("DATABASE_URL environment variable is required for testing. Run: ./scripts/test-setup.sh");

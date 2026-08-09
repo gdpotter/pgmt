@@ -25,7 +25,7 @@ pub fn load_config(config_file: &str) -> Result<(ConfigInput, std::path::PathBuf
 
     let config_input = if Path::new(config_file).exists() {
         let contents = std::fs::read_to_string(config_file)?;
-        serde_yaml::from_str(&contents)?
+        serde_norway::from_str(&contents)?
     } else {
         ConfigInput::default()
     };

@@ -2,7 +2,7 @@ use crate::helpers::cli::with_cli_helper;
 use anyhow::Result;
 
 #[cfg(not(windows))]
-use expectrl::Eof;
+use expectrl::{Eof, Expect};
 
 #[cfg(not(windows))]
 #[tokio::test]

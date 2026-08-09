@@ -901,7 +901,7 @@ async fn test_init_workflow_detected_pg_version() -> Result<()> {
 
     // Verify config contains detected version (should be converted to major version)
     let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
-    let parsed: pgmt::config::types::ConfigInput = serde_yaml::from_str(&config_content)?;
+    let parsed: pgmt::config::types::ConfigInput = serde_norway::from_str(&config_content)?;
     let docker = parsed
         .databases
         .and_then(|d| d.shadow)
@@ -1045,7 +1045,7 @@ async fn test_init_workflow_explicit_pg_version_precedence() -> Result<()> {
 
     // Verify config uses explicit version (16), not detected (15)
     let config_content = fs::read_to_string(project_path.join("pgmt.yaml"))?;
-    let parsed: pgmt::config::types::ConfigInput = serde_yaml::from_str(&config_content)?;
+    let parsed: pgmt::config::types::ConfigInput = serde_norway::from_str(&config_content)?;
     let docker = parsed
         .databases
         .and_then(|d| d.shadow)

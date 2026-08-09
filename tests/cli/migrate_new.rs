@@ -4,7 +4,7 @@ use predicates::prelude::*;
 use std::fs;
 
 #[cfg(not(windows))]
-use expectrl::Eof;
+use expectrl::{Eof, Expect};
 
 /// Tests for the migrate new command demonstrating both non-interactive and interactive approaches
 mod migrate_new_tests {

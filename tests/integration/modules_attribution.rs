@@ -35,7 +35,7 @@ fn write_schema_files(root: &std::path::Path) -> Result<()> {
 
 fn modules_config(yaml_modules: &str) -> Result<pgmt::config::Config> {
     let yaml = format!("directories:\n  schema_dir: schema\n{}", yaml_modules);
-    let input: ConfigInput = serde_yaml::from_str(&yaml)?;
+    let input: ConfigInput = serde_norway::from_str(&yaml)?;
     ConfigBuilder::new().with_file(input).resolve()
 }
 

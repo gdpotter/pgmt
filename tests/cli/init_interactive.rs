@@ -14,7 +14,7 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn test_init_interactive_help() -> anyhow::Result<()> {
     use crate::helpers::cli::with_cli_helper;
-    use expectrl::Eof;
+    use expectrl::{Eof, Expect};
 
     with_cli_helper(async |helper| {
         // Test init help command interactively
@@ -301,7 +301,7 @@ async fn test_gather_uses_existing_config_as_defaults() -> Result<()> {
 
     // port 1 is never listening: the best-effort extension detection must
     // fail fast and silently rather than block the gather
-    let existing: pgmt::config::types::ConfigInput = serde_yaml::from_str(
+    let existing: pgmt::config::types::ConfigInput = serde_norway::from_str(
         r#"
 databases:
   dev_url: postgres://localhost:1/reinit_db

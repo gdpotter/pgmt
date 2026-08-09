@@ -71,7 +71,7 @@ pub fn generate_config_file(
         }
     }
 
-    let yaml = serde_yaml::to_string(&merged)?;
+    let yaml = serde_norway::to_string(&merged)?;
     let config_path = project_dir.join(CONFIG_FILENAME);
     std::fs::write(config_path, format!("{CONFIG_HEADER}\n{yaml}"))?;
 
@@ -287,7 +287,7 @@ mod tests {
 
         // Should use detected version, NOT auto: true
         let parsed: crate::config::types::ConfigInput =
-            serde_yaml::from_str(&content).expect("generated pgmt.yaml should parse");
+            serde_norway::from_str(&content).expect("generated pgmt.yaml should parse");
         let docker = parsed
             .databases
             .and_then(|d| d.shadow)
@@ -326,7 +326,7 @@ mod tests {
 
         // Should use explicit version (16), not detected version (15)
         let parsed: crate::config::types::ConfigInput =
-            serde_yaml::from_str(&content).expect("generated pgmt.yaml should parse");
+            serde_norway::from_str(&content).expect("generated pgmt.yaml should parse");
         let docker = parsed
             .databases
             .and_then(|d| d.shadow)
@@ -368,7 +368,7 @@ mod tests {
 
         // The generated YAML must parse back into a Docker shadow config.
         let parsed: crate::config::types::ConfigInput =
-            serde_yaml::from_str(&content).expect("generated pgmt.yaml should parse");
+            serde_norway::from_str(&content).expect("generated pgmt.yaml should parse");
         let docker = parsed
             .databases
             .and_then(|d| d.shadow)
@@ -401,7 +401,7 @@ mod tests {
 
         let content = std::fs::read_to_string(temp_dir.join("pgmt.yaml")).unwrap();
         let parsed: crate::config::types::ConfigInput =
-            serde_yaml::from_str(&content).expect("generated pgmt.yaml should parse");
+            serde_norway::from_str(&content).expect("generated pgmt.yaml should parse");
 
         assert_eq!(
             parsed,
@@ -423,7 +423,7 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         // An existing pgmt.yaml with hand-maintained additions.
-        let existing: crate::config::types::ConfigInput = serde_yaml::from_str(
+        let existing: crate::config::types::ConfigInput = serde_norway::from_str(
             r#"
 databases:
   dev_url: postgres://localhost/old_db
@@ -454,7 +454,7 @@ migration:
         generate_config_file(&options, Some(&existing), &temp_dir).unwrap();
 
         let content = std::fs::read_to_string(temp_dir.join("pgmt.yaml")).unwrap();
-        let parsed: crate::config::types::ConfigInput = serde_yaml::from_str(&content).unwrap();
+        let parsed: crate::config::types::ConfigInput = serde_norway::from_str(&content).unwrap();
 
         // Re-answered fields updated
         let databases = parsed.databases.expect("databases");
@@ -537,7 +537,7 @@ mod substrate_tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let existing: crate::config::types::ConfigInput = serde_yaml::from_str(
+        let existing: crate::config::types::ConfigInput = serde_norway::from_str(
             "objects:\n  exclude:\n    schemas: [flyway_schema_history, tiger]\n",
         )
         .unwrap();
@@ -554,7 +554,7 @@ mod substrate_tests {
         generate_config_file(&options, Some(&existing), &temp_dir).unwrap();
 
         let content = std::fs::read_to_string(temp_dir.join("pgmt.yaml")).unwrap();
-        let parsed: crate::config::types::ConfigInput = serde_yaml::from_str(&content).unwrap();
+        let parsed: crate::config::types::ConfigInput = serde_norway::from_str(&content).unwrap();
         let schemas = parsed
             .objects
             .and_then(|o| o.exclude)
