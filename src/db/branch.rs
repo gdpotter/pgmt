@@ -15,7 +15,7 @@ use sqlx::{Executor, PgPool};
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::render::quote_ident;
 
@@ -63,7 +63,7 @@ pub async fn create_branch(admin: &PgPool, source_db: &str) -> Result<String> {
                 e
             )
         })?;
-    debug!(
+    info!(
         "Branched shadow {} from {} in {:?}",
         branch,
         source_db,

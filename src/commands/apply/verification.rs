@@ -1,6 +1,6 @@
 use anyhow::Result;
 use sqlx::PgPool;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
@@ -11,7 +11,7 @@ pub async fn verify_final_state(
     expected_catalog: &Catalog,
     config: &Config,
 ) -> Result<()> {
-    debug!("Verifying final database state...");
+    info!("Verifying final database state...");
 
     // Load the current dev database catalog after changes, scoped the same
     // way as the diff; expected may come from any caller, so filter it too

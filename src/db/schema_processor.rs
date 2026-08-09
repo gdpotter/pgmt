@@ -92,7 +92,7 @@ impl SchemaProcessor {
         }
 
         // Step 2: Load and order schema files
-        debug!("📁 Loading schema files from: {}", schema_dir.display());
+        info!("📁 Loading schema files from: {}", schema_dir.display());
         let loader = SchemaLoader::new(SchemaLoaderConfig::new(schema_dir.to_path_buf()));
         let schema_files = loader.load_ordered_schema_files().with_context(|| {
             format!(
@@ -106,7 +106,7 @@ impl SchemaProcessor {
             )
         })?;
 
-        debug!(
+        info!(
             "📁 Loaded {} schema files with dependency information",
             schema_files.len()
         );
@@ -121,7 +121,7 @@ impl SchemaProcessor {
             .await
             .context("Failed to load initial catalog identity")?;
 
-        debug!(
+        info!(
             "Creating file-to-object mappings by applying {} schema files incrementally",
             schema_files.len()
         );
@@ -157,14 +157,14 @@ impl SchemaProcessor {
             previous_identity = current_identity;
         }
 
-        debug!(
+        info!(
             "File-to-object mapping complete: {} files mapped to {} total objects",
             file_mapping.file_objects.len(),
             file_mapping.object_files.len()
         );
 
         // Step 5: Load full catalog once at the end for diff operations
-        debug!("Loading full catalog for diff operations");
+        info!("Loading full catalog for diff operations");
         // Physical-world load: every consumer (apply, watch, debug) scopes
         // this catalog with the objects filter before diffing or reporting.
         let final_catalog = Catalog::load_unfiltered(&self.pool)
@@ -172,7 +172,7 @@ impl SchemaProcessor {
             .context("Failed to load final catalog")?;
 
         // Step 6: Create file-based dependency augmentation
-        debug!("Creating file-based dependency augmentation");
+        info!("Creating file-based dependency augmentation");
         let augmentation = create_dependency_augmentation(&file_mapping, &schema_files)
             .context("Failed to create dependency augmentation from file mappings")?;
 

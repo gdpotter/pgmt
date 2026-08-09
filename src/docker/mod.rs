@@ -337,7 +337,7 @@ impl DockerManager {
             .clone()
             .unwrap_or_else(|| format!("pgmt_shadow_{}", uuid::Uuid::new_v4().simple()));
 
-        debug!("🚀 Starting PostgreSQL container: {}", container_name);
+        info!("🚀 Starting PostgreSQL container: {}", container_name);
 
         // Check if container already exists and is running
         if let Some(existing_info) = self
@@ -894,7 +894,7 @@ impl DockerManager {
                 "Local image {} does not match platform {:?}, pulling",
                 image, platform
             ),
-            Err(_) => debug!("Pulling PostgreSQL image: {}", image),
+            Err(_) => info!("Pulling PostgreSQL image: {}", image),
         }
 
         // Pull the image
