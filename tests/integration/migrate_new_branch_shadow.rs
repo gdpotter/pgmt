@@ -20,7 +20,7 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_migrate_new_branch_shadow_does_not_reuse_dirty_branch() -> Result<()> {
-    let _branch_guard = crate::helpers::BRANCH_TEST_LOCK.lock().await;
+    let _shadow_guard = crate::helpers::shadow_guard().await;
     with_test_db(async |db| {
         // A connection-free source database for `reset: branch` to copy from
         // (the harness keeps an open pool on its own database, so it can't be a

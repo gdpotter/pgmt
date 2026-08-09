@@ -21,15 +21,13 @@ use std::future::Future;
 /// }
 /// ```
 /// `cleanup_all_containers` drains the process-global container registry, so
-/// two parallel tests would remove each other's still-running containers.
-/// Serialize every test that uses the helper.
-static DOCKER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
+/// this excludes every test holding shadow state, not just the other tests
+/// that clean up. Tests using this helper must not take the read guard too.
 pub async fn with_docker_cleanup<F>(test: F)
 where
     F: Future<Output = ()>,
 {
-    let _guard = DOCKER_TEST_LOCK.lock().await;
+    let _guard = crate::helpers::shadow_cleanup_guard().await;
 
     // Run the test
     test.await;
