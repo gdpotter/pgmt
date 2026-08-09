@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- `--verbose` now reports progress while the schema is applied to the shadow database. That phase is the longest part of a run on a large schema and previously logged nothing above debug, so `--verbose` went silent for as long as it took and offered no way to tell a slow run from a hung one. Starting or pulling the shadow container, and verifying the final state, are likewise reported now.
+
 ### Performance
 
 - `pgmt migrate apply` no longer queries the target once per migration file. It read the section-tracking table twice and derived the re-anchor cursor twice for every migration it walked, so a no-op deploy against a remote database cost four round trips per migration — roughly 45 seconds for a project with a hundred migrations. Those reads are now a single up-front query, and the cursor is derived only when a committed re-anchor actually needs it.
