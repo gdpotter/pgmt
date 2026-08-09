@@ -2,6 +2,7 @@ use crate::helpers::harness::with_test_db;
 use crate::helpers::raw::load_converted;
 
 use anyhow::Result;
+use pgmt::catalog::collation::CollationRef;
 use pgmt::catalog::custom_type::{CustomType, TypeKind};
 use pgmt::catalog::id::{DbObjectId, DependsOn};
 use pgmt::catalog::identity::CatalogIdentity;
@@ -706,6 +707,47 @@ async fn test_identity_snapshot_includes_range_types() {
     .await;
 }
 
+#[tokio::test]
+async fn test_composite_attribute_with_explicit_collation() {
+    with_test_db(async |db| {
+        db.execute(
+            "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+        )
+        .await;
+        db.execute("CREATE TYPE tagged AS (label text COLLATE ci, note text)")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        assert_eq!(types.len(), 1);
+        let type_ = &types[0];
+
+        // The explicitly collated attribute carries a qualified CollationRef.
+        assert_eq!(type_.composite_attributes[0].name, "label");
+        assert_eq!(
+            type_.composite_attributes[0].collation,
+            Some(CollationRef {
+                schema: "public".to_string(),
+                name: "ci".to_string(),
+            })
+        );
+
+        // A plain text attribute uses its type's default collation: no ref.
+        assert_eq!(type_.composite_attributes[1].name, "note");
+        assert_eq!(type_.composite_attributes[1].collation, None);
+
+        // The user-defined collation is a managed dependency of the type.
+        assert!(
+            type_.depends_on().contains(&DbObjectId::Collation {
+                schema: "public".to_string(),
+                name: "ci".to_string(),
+            }),
+            "composite type should depend on the collation, got: {:?}",
+            type_.depends_on()
+        );
+    })
+    .await;
+}
+
 /// A composite carries one dependency edge per attribute, so two attributes of
 /// the same type must not leave the type in `depends_on` twice.
 #[tokio::test]
@@ -731,6 +773,38 @@ async fn test_composite_with_repeated_attribute_type_depends_on_it_once() {
             1,
             "expected one edge to money_amount, got {:?}",
             transfer.depends_on
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_composite_attribute_with_system_collation() {
+    with_test_db(async |db| {
+        db.execute("CREATE TYPE tagged AS (label text COLLATE \"C\", note text)")
+            .await;
+
+        let types = fetch(&mut *db.conn().await).await.unwrap();
+        let type_ = &types[0];
+
+        // A system collation is stored (so it renders) ...
+        assert_eq!(
+            type_.composite_attributes[0].collation,
+            Some(CollationRef {
+                schema: "pg_catalog".to_string(),
+                name: "C".to_string(),
+            })
+        );
+
+        // ... but adds no managed dependency: pg_catalog collations are not
+        // pgmt-managed objects.
+        assert!(
+            !type_
+                .depends_on()
+                .iter()
+                .any(|d| matches!(d, DbObjectId::Collation { .. })),
+            "system collation must not add a managed dependency, got: {:?}",
+            type_.depends_on()
         );
     })
     .await;

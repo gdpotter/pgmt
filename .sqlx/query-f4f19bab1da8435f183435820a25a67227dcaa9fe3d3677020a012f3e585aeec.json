@@ -1,0 +1,117 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            t.oid AS \"type_oid!\",\n            a.attnum AS \"attnum!\",\n            a.attname AS \"name!\",\n            a.atttypid AS \"attribute_type_oid!\",\n            pg_catalog.format_type(a.atttypid, a.atttypmod) AS \"formatted_type!\",\n            a.attcollation AS \"attcollation!\",\n            attr_t.typcollation AS \"type_collation!\",\n            coll.collnamespace AS \"collation_namespace?\",\n            coll.collname AS \"collation_name?\"\n        FROM pg_type t\n        JOIN pg_class c ON t.typrelid = c.oid\n        JOIN pg_attribute a ON a.attrelid = c.oid\n        JOIN pg_type attr_t ON attr_t.oid = a.atttypid\n        LEFT JOIN pg_collation coll ON coll.oid = a.attcollation AND a.attcollation != 0\n        WHERE t.typtype = 'c'\n          AND a.attnum > 0\n          AND NOT a.attisdropped\n        ORDER BY t.oid, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "attnum!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnum"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "attribute_type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "atttypid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "formatted_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "attcollation!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attcollation"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "type_collation!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typcollation"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "collation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "collation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f4f19bab1da8435f183435820a25a67227dcaa9fe3d3677020a012f3e585aeec"
+}
