@@ -201,3 +201,173 @@ fn test_complex_dependency_chain() {
     let type_deps = augmentation.additional_dependencies.get(&type_id).unwrap();
     assert!(type_deps.contains(&schema_id));
 }
+
+/// Every object a schema file creates is attributed to that file, for every
+/// object kind the identity snapshot reports.
+///
+/// Attribution is derived from OID boundaries recorded between files and a
+/// single snapshot at the end, so a kind whose catalog is missing from the
+/// boundary query would have its objects allocated past the last boundary and
+/// attributed to no file at all — which on a module project silently lands them
+/// in the unmoduled base. Asserting per-kind ownership is what catches that.
+#[tokio::test]
+async fn test_each_file_owns_the_objects_it_creates() -> anyhow::Result<()> {
+    use pgmt::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+    use std::fs;
+
+    with_test_db(async |db| {
+        let project = tempfile::TempDir::new()?;
+        let schema = project.path().join("schema");
+        fs::create_dir_all(&schema)?;
+
+        let files: [(&str, &str); 6] = [
+            ("01_schema.sql", "CREATE SCHEMA app;"),
+            (
+                "02_types.sql",
+                "-- require: 01_schema.sql\n\
+                 CREATE TYPE app.status AS ENUM ('on', 'off');\n\
+                 CREATE DOMAIN app.email AS text;\n\
+                 CREATE SEQUENCE app.counter;",
+            ),
+            (
+                "03_tables.sql",
+                "-- require: 02_types.sql\n\
+                 CREATE TABLE app.users (\n\
+                   id integer PRIMARY KEY,\n\
+                   email app.email,\n\
+                   state app.status,\n\
+                   CONSTRAINT users_id_positive CHECK (id > 0)\n\
+                 );",
+            ),
+            (
+                "04_indexes.sql",
+                "-- require: 03_tables.sql\n\
+                 CREATE INDEX users_state_idx ON app.users (state);",
+            ),
+            (
+                "05_functions.sql",
+                "-- require: 03_tables.sql\n\
+                 CREATE FUNCTION app.touch() RETURNS trigger AS $$\n\
+                 BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;",
+            ),
+            (
+                "06_attached.sql",
+                "-- require: 05_functions.sql\n\
+                 CREATE TRIGGER users_touch BEFORE UPDATE ON app.users\n\
+                   FOR EACH ROW EXECUTE FUNCTION app.touch();\n\
+                 ALTER TABLE app.users ENABLE ROW LEVEL SECURITY;\n\
+                 CREATE POLICY users_self ON app.users USING (id > 0);\n\
+                 CREATE VIEW app.active AS SELECT id FROM app.users;",
+            ),
+        ];
+        for (name, body) in files {
+            fs::write(schema.join(name), body)?;
+        }
+
+        let processor = SchemaProcessor::new(
+            db.pool().clone(),
+            SchemaProcessorConfig {
+                verbose: false,
+                clean_before_apply: false,
+                objects: Default::default(),
+            },
+        );
+        let processed = processor.process_schema_directory(&schema).await?;
+        let owner = &processed.file_mapping.object_files;
+
+        let expected: Vec<(DbObjectId, &str)> = vec![
+            (
+                DbObjectId::Schema {
+                    name: "app".to_string(),
+                },
+                "01_schema.sql",
+            ),
+            (
+                DbObjectId::Type {
+                    schema: "app".to_string(),
+                    name: "status".to_string(),
+                },
+                "02_types.sql",
+            ),
+            (
+                DbObjectId::Domain {
+                    schema: "app".to_string(),
+                    name: "email".to_string(),
+                },
+                "02_types.sql",
+            ),
+            (
+                DbObjectId::Sequence {
+                    schema: "app".to_string(),
+                    name: "counter".to_string(),
+                },
+                "02_types.sql",
+            ),
+            (
+                DbObjectId::Table {
+                    schema: "app".to_string(),
+                    name: "users".to_string(),
+                },
+                "03_tables.sql",
+            ),
+            (
+                DbObjectId::Constraint {
+                    schema: "app".to_string(),
+                    table: "users".to_string(),
+                    name: "users_id_positive".to_string(),
+                },
+                "03_tables.sql",
+            ),
+            (
+                DbObjectId::Index {
+                    schema: "app".to_string(),
+                    name: "users_state_idx".to_string(),
+                },
+                "04_indexes.sql",
+            ),
+            (
+                DbObjectId::Function {
+                    schema: "app".to_string(),
+                    name: "touch".to_string(),
+                    arguments: String::new(),
+                },
+                "05_functions.sql",
+            ),
+            (
+                DbObjectId::Trigger {
+                    schema: "app".to_string(),
+                    table: "users".to_string(),
+                    name: "users_touch".to_string(),
+                },
+                "06_attached.sql",
+            ),
+            (
+                DbObjectId::Policy {
+                    schema: "app".to_string(),
+                    table: "users".to_string(),
+                    name: "users_self".to_string(),
+                },
+                "06_attached.sql",
+            ),
+            (
+                DbObjectId::View {
+                    schema: "app".to_string(),
+                    name: "active".to_string(),
+                },
+                "06_attached.sql",
+            ),
+        ];
+
+        for (id, file) in expected {
+            assert_eq!(
+                owner.get(&id).map(String::as_str),
+                Some(file),
+                "{id:?} should be owned by {file}, mapping has {:?}",
+                owner.get(&id)
+            );
+        }
+
+        Ok(())
+    })
+    .await
+}

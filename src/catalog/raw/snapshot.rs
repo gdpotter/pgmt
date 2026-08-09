@@ -26,6 +26,47 @@
 //!   then never found in the catalog it is diffed against.
 
 use super::exclusion::sql;
+use anyhow::Result;
+use sqlx::PgPool;
+
+/// One row of the snapshot: a kind tag, the coordinates a
+/// [`crate::catalog::id::DbObjectId`] of that kind is built from, and the OID
+/// the object was allocated. Every coordinate is text, and the ones a kind does
+/// not have are null.
+///
+/// Turning a row back into an identity is [`crate::catalog::identity`]'s job —
+/// the OID stops here, as it does for every other raw fetch.
+#[derive(sqlx::FromRow)]
+pub struct Row {
+    #[sqlx(rename = "type")]
+    pub kind: String,
+    pub schema: Option<String>,
+    pub name: String,
+    #[sqlx(rename = "tbl")]
+    pub table: Option<String>,
+    pub args: Option<String>,
+    pub oid: i64,
+}
+
+/// Every object identity in the database, in one round trip.
+pub async fn fetch(pool: &PgPool) -> Result<Vec<Row>> {
+    // The query is composed entirely from the branch definitions below —
+    // catalog table names and predicates written in this repository, with no
+    // value from the database or the user reaching it.
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(query()))
+        .fetch_all(pool)
+        .await?)
+}
+
+/// The current OID boundary mark (see [`marks_query`]).
+pub async fn current_mark(pool: &PgPool) -> Result<i64> {
+    let mark: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(marks_query()))
+        .fetch_one(pool)
+        .await?;
+    // Every catalog empty is not a state a live database can be in; treat the
+    // absence as "nothing allocated yet" rather than failing.
+    Ok(mark.unwrap_or(0))
+}
 
 /// The columns every branch projects, in order. They are what a
 /// [`crate::catalog::id::DbObjectId`] is built from: the kind tag, then the
@@ -37,6 +78,8 @@ const COLUMNS: [&str; 5] = ["type", "schema", "name", "tbl", "args"];
 pub struct Branch {
     kind: &'static str,
     from: String,
+    oid_catalog: &'static str,
+    oid: String,
     schema: String,
     name: String,
     table: String,
@@ -47,10 +90,19 @@ pub struct Branch {
 impl Branch {
     /// A branch for `kind`, reading the catalog tables in `from` (a `FROM` body,
     /// joins included). Every identity column defaults to `NULL`.
-    fn new(kind: &'static str, from: &str) -> Self {
+    ///
+    /// `oid_catalog` is the catalog table this kind's own OID is allocated
+    /// from, and `oid` the expression selecting it. They are one declaration
+    /// because the boundary marks ([`marks_query`]) and the snapshot's `oid`
+    /// column must range over exactly the same catalogs: a mark that ignores a
+    /// catalog some branch reports from would place that kind's objects beyond
+    /// the last boundary and attribute them to no file at all.
+    fn new(kind: &'static str, from: &str, oid_catalog: &'static str, oid: &str) -> Self {
         Self {
             kind,
             from: from.to_string(),
+            oid_catalog,
+            oid: oid.to_string(),
             schema: "NULL".to_string(),
             name: "NULL".to_string(),
             table: "NULL".to_string(),
@@ -91,7 +143,7 @@ impl Branch {
     /// union's column types must not depend on which branch happens to come
     /// first.
     fn sql(&self) -> String {
-        let projections: Vec<String> = [
+        let mut projections: Vec<String> = [
             format!("'{}'", self.kind),
             self.schema.clone(),
             self.name.clone(),
@@ -102,6 +154,9 @@ impl Branch {
         .zip(COLUMNS)
         .map(|(expr, column)| format!("    ({expr})::text AS \"{column}\""))
         .collect();
+        // Widened to int8: OIDs are unsigned 32-bit, so the whole range is
+        // representable and comparisons keep their order.
+        projections.push(format!("    ({})::int8 AS \"oid\"", self.oid));
 
         let mut sql = format!("SELECT\n{}\nFROM {}", projections.join(",\n"), self.from);
         if !self.predicates.is_empty() {
@@ -125,13 +180,41 @@ pub fn query() -> String {
         .join("\n\nUNION ALL\n\n")
 }
 
+/// The current OID boundary mark: the highest OID allocated in any catalog a
+/// branch reports from.
+///
+/// Taken between schema files, consecutive marks bracket the objects a file
+/// created — `(previous, current]` — which is what attributes objects to files
+/// without re-reading the whole catalog after every one. Each `max(oid)` is a
+/// backward scan of that catalog's OID index, so the whole query is a handful
+/// of index lookups regardless of how large the schema has grown.
+///
+/// Reading it as a mark relies on OIDs being handed out in increasing order,
+/// which holds for a database that has not wrapped the 32-bit counter. The
+/// callers run against a shadow branch created moments earlier, so the counter
+/// they observe is the source database's, untouched by pgmt.
+pub fn marks_query() -> String {
+    let mut catalogs: Vec<&'static str> = branches().iter().map(|b| b.oid_catalog).collect();
+    catalogs.sort_unstable();
+    catalogs.dedup();
+
+    let maxima: Vec<String> = catalogs
+        .iter()
+        .map(|catalog| format!("    SELECT max(oid) AS m FROM {catalog}"))
+        .collect();
+    format!(
+        "SELECT max(m)::int8 AS mark FROM (\n{}\n) s",
+        maxima.join("\n    UNION ALL\n")
+    )
+}
+
 /// One branch per object kind the catalog models, each mirroring the converter
 /// of the same name in this module's siblings.
 pub fn branches() -> Vec<Branch> {
     vec![
         // raw::schema — the namespace map minus PostgreSQL's own namespaces.
         // `public` is dropped on top of that, for the snapshot only.
-        Branch::new("schema", "pg_namespace n")
+        Branch::new("schema", "pg_namespace n", "pg_namespace", "n.oid")
             .name("n.nspname")
             .filter(sql::not_a_system_namespace("n.nspname"))
             .filter("n.nspname <> 'public'"),
@@ -139,6 +222,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "table",
             "pg_class c\n     JOIN pg_namespace n ON c.relnamespace = n.oid",
+            "pg_class",
+            "c.oid",
         )
         .schema("n.nspname")
         .name("c.relname")
@@ -149,6 +234,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "view",
             "pg_class c\n     JOIN pg_namespace n ON c.relnamespace = n.oid",
+            "pg_class",
+            "c.oid",
         )
         .schema("n.nspname")
         .name("c.relname")
@@ -159,6 +246,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "sequence",
             "pg_class c\n     JOIN pg_namespace n ON c.relnamespace = n.oid",
+            "pg_class",
+            "c.oid",
         )
         .schema("n.nspname")
         .name("c.relname")
@@ -179,6 +268,8 @@ pub fn branches() -> Vec<Branch> {
              JOIN pg_namespace n ON i.relnamespace = n.oid\n     \
              JOIN pg_class t ON idx.indrelid = t.oid\n     \
              JOIN pg_namespace tn ON t.relnamespace = tn.oid",
+            "pg_class",
+            "i.oid",
         )
         .schema("n.nspname")
         .name("i.relname")
@@ -192,6 +283,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "function",
             "pg_proc p\n     JOIN pg_namespace n ON p.pronamespace = n.oid",
+            "pg_proc",
+            "p.oid",
         )
         .schema("n.nspname")
         .name("p.proname")
@@ -203,6 +296,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "procedure",
             "pg_proc p\n     JOIN pg_namespace n ON p.pronamespace = n.oid",
+            "pg_proc",
+            "p.oid",
         )
         .schema("n.nspname")
         .name("p.proname")
@@ -215,6 +310,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "aggregate",
             "pg_proc p\n     JOIN pg_namespace n ON p.pronamespace = n.oid",
+            "pg_proc",
+            "p.oid",
         )
         .schema("n.nspname")
         .name("p.proname")
@@ -229,6 +326,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "type",
             "pg_type t\n     JOIN pg_namespace n ON t.typnamespace = n.oid",
+            "pg_type",
+            "t.oid",
         )
         .schema("n.nspname")
         .name("t.typname")
@@ -244,6 +343,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "domain",
             "pg_type t\n     JOIN pg_namespace n ON t.typnamespace = n.oid",
+            "pg_type",
+            "t.oid",
         )
         .schema("n.nspname")
         .name("t.typname")
@@ -257,6 +358,8 @@ pub fn branches() -> Vec<Branch> {
             "pg_constraint co\n     \
              JOIN pg_class cl ON co.conrelid = cl.oid\n     \
              JOIN pg_namespace n ON cl.relnamespace = n.oid",
+            "pg_constraint",
+            "co.oid",
         )
         .schema("n.nspname")
         .name("co.conname")
@@ -271,6 +374,8 @@ pub fn branches() -> Vec<Branch> {
             "pg_trigger tg\n     \
              JOIN pg_class c ON tg.tgrelid = c.oid\n     \
              JOIN pg_namespace n ON c.relnamespace = n.oid",
+            "pg_trigger",
+            "tg.oid",
         )
         .schema("n.nspname")
         .name("tg.tgname")
@@ -285,6 +390,8 @@ pub fn branches() -> Vec<Branch> {
             "pg_policy pol\n     \
              JOIN pg_class c ON pol.polrelid = c.oid\n     \
              JOIN pg_namespace n ON c.relnamespace = n.oid",
+            "pg_policy",
+            "pol.oid",
         )
         .schema("n.nspname")
         .name("pol.polname")
@@ -297,6 +404,8 @@ pub fn branches() -> Vec<Branch> {
         Branch::new(
             "operator",
             "pg_operator o\n     JOIN pg_namespace n ON o.oprnamespace = n.oid",
+            "pg_operator",
+            "o.oid",
         )
         .schema("n.nspname")
         .name("o.oprname")
@@ -324,6 +433,8 @@ pub fn branches() -> Vec<Branch> {
              JOIN pg_type tt ON ca.casttarget = tt.oid\n     \
              JOIN pg_type tte ON tte.oid = COALESCE(NULLIF(tt.typelem, 0), tt.oid)\n     \
              JOIN pg_namespace ttn ON tte.typnamespace = ttn.oid",
+            "pg_cast",
+            "ca.oid",
         )
         .name("pg_catalog.format_type(ca.castsource, NULL)")
         .table("pg_catalog.format_type(ca.casttarget, NULL)")
@@ -334,7 +445,7 @@ pub fn branches() -> Vec<Branch> {
         ))
         .filter(sql::not_extension_owned("pg_cast", "ca.oid")),
         // raw::extension
-        Branch::new("extension", "pg_extension e")
+        Branch::new("extension", "pg_extension e", "pg_extension", "e.oid")
             .name("e.extname")
             .filter(sql::not_a_built_in_extension("e.extname")),
     ]
@@ -355,6 +466,65 @@ mod tests {
                     branch.kind
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_every_branch_projects_its_oid() {
+        for branch in branches() {
+            assert!(
+                branch.sql().contains("AS \"oid\""),
+                "branch {} does not project its oid",
+                branch.kind
+            );
+        }
+    }
+
+    /// A branch's declared OID catalog must be the one its OID expression
+    /// actually reads from.
+    ///
+    /// The boundary marks are derived from those declarations, so a branch that
+    /// names the wrong catalog leaves its kind's OIDs outside every mark: the
+    /// file that created such an object closes its boundary beneath it and the
+    /// object is attributed to whichever file comes next — or to none, if it was
+    /// the last one. Whether an end-to-end test notices depends on which kind a
+    /// file happens to create last, so the binding is checked here directly by
+    /// resolving the expression's alias against the branch's own FROM body.
+    #[test]
+    fn test_declared_oid_catalog_matches_the_expression() {
+        /// Every `<catalog> <alias>` binding in a FROM body, joins included.
+        fn aliases(from: &str) -> std::collections::BTreeMap<&str, &str> {
+            let tokens: Vec<&str> = from.split_whitespace().collect();
+            let mut bound = std::collections::BTreeMap::new();
+            if tokens.len() >= 2 {
+                bound.insert(tokens[1], tokens[0]);
+            }
+            for (i, token) in tokens.iter().enumerate() {
+                if token.eq_ignore_ascii_case("JOIN") && i + 2 < tokens.len() {
+                    bound.insert(tokens[i + 2], tokens[i + 1]);
+                }
+            }
+            bound
+        }
+
+        for branch in branches() {
+            let alias = branch
+                .oid
+                .split_once('.')
+                .unwrap_or_else(|| panic!("branch {}: oid is not <alias>.oid", branch.kind))
+                .0;
+            let bound = aliases(&branch.from);
+            let reads = bound.get(alias).unwrap_or_else(|| {
+                panic!(
+                    "branch {}: oid expression {} names alias {alias}, which its FROM does not bind",
+                    branch.kind, branch.oid
+                )
+            });
+            assert_eq!(
+                *reads, branch.oid_catalog,
+                "branch {} selects {} (from {reads}) but declares {}",
+                branch.kind, branch.oid, branch.oid_catalog
+            );
         }
     }
 

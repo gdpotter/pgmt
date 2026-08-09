@@ -16,6 +16,7 @@ use crate::catalog::identity::{self, CatalogIdentity};
 use crate::config::types::Objects;
 use crate::db::cleaner;
 use crate::db::schema_executor::SchemaFileExecutor;
+use crate::schema_loader::SchemaFile;
 use crate::schema_loader::{SchemaLoader, SchemaLoaderConfig};
 use std::collections::BTreeMap;
 
@@ -114,12 +115,18 @@ impl SchemaProcessor {
         // Step 3: Create executor for applying files
         let executor = SchemaFileExecutor::new(self.pool.clone(), self.config.verbose);
 
-        // Step 4: Process files incrementally, tracking what each file creates
-        // Use lightweight CatalogIdentity for fast per-file tracking (single query vs 50+)
-        let mut file_mapping = FileToObjectMapping::new();
-        let mut previous_identity = CatalogIdentity::load(&self.pool)
+        // Step 4: Apply the files, recording an OID boundary after each.
+        //
+        // Attribution is derived from those boundaries and ONE snapshot at the
+        // end: a file's objects are the ones whose OID falls in the half-open
+        // range its boundary closes. Snapshotting after every file instead
+        // would re-read the whole catalog N times over a catalog that is itself
+        // growing, which is quadratic in the size of the schema; a boundary is a
+        // handful of OID-index lookups whatever the schema's size.
+        let mut boundaries: Vec<(i64, &SchemaFile)> = Vec::with_capacity(schema_files.len());
+        let start_mark = identity::current_oid_mark(&self.pool)
             .await
-            .context("Failed to load initial catalog identity")?;
+            .context("Failed to read the initial OID boundary")?;
 
         info!(
             "Creating file-to-object mappings by applying {} schema files incrementally",
@@ -128,7 +135,7 @@ impl SchemaProcessor {
 
         for (index, file) in schema_files.iter().enumerate() {
             debug!(
-                "  [{}/{}] Applying {} and taking snapshot",
+                "  [{}/{}] Applying {}",
                 index + 1,
                 schema_files.len(),
                 file.relative_path
@@ -137,24 +144,31 @@ impl SchemaProcessor {
             // Execute the schema file (SchemaFileExecutor provides detailed error messages)
             executor.execute_schema_file(file).await?;
 
-            // Load lightweight identity after applying this file (single UNION ALL query)
-            let current_identity = CatalogIdentity::load(&self.pool).await.with_context(|| {
-                format!(
-                    "Failed to load catalog identity after applying {}",
-                    file.relative_path
-                )
-            })?;
+            let mark = identity::current_oid_mark(&self.pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to read the OID boundary after applying {}",
+                        file.relative_path
+                    )
+                })?;
+            boundaries.push((mark, file));
+        }
 
-            // Find objects created by this file
-            let new_objects = identity::find_new_objects(&previous_identity, &current_identity);
-
-            // Track the mapping
-            for object_id in new_objects {
+        let mut file_mapping = FileToObjectMapping::new();
+        for (oid, object_id) in CatalogIdentity::load_with_oids(&self.pool)
+            .await
+            .context("Failed to load catalog identities for file attribution")?
+        {
+            // Objects at or below the starting boundary predate this run — the
+            // shadow's own substrate — and belong to no file. Everything else
+            // falls to the first file whose boundary reaches it.
+            if oid <= start_mark {
+                continue;
+            }
+            if let Some((_, file)) = boundaries.iter().find(|(mark, _)| oid <= *mark) {
                 file_mapping.add_object(file.relative_path.clone(), object_id);
             }
-
-            // Update previous identity for next iteration
-            previous_identity = current_identity;
         }
 
         info!(
