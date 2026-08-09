@@ -77,6 +77,11 @@ pub struct RawViewDependency {
     pub operator_name: Option<String>,
     pub operator_left_type: Option<String>,
     pub operator_right_type: Option<String>,
+
+    /// Referenced collation (`pg_collation`), from a COLLATE clause in the
+    /// view body.
+    pub collation_namespace: Option<Oid>,
+    pub collation_name: Option<String>,
 }
 
 /// Everything the view converter reads out of `pg_catalog`.
@@ -341,6 +346,19 @@ fn dependency(row: &RawViewDependency, shared: &SharedCatalog) -> Option<DbObjec
         });
     }
 
+    // A COLLATE clause in the view body. The collations PostgreSQL ships
+    // ("default", "C", "POSIX", one per libc locale) are not managed objects.
+    if let (Some(namespace), Some(name)) = (row.collation_namespace, &row.collation_name) {
+        let schema = namespaces.name(namespace)?;
+        if is_system_schema(schema) {
+            return None;
+        }
+        return Some(DbObjectId::Collation {
+            schema: schema.to_string(),
+            name: name.clone(),
+        });
+    }
+
     if let (Some(namespace), Some(name)) = (row.operator_namespace, &row.operator_name) {
         let schema = namespaces.name(namespace)?;
         if is_system_schema(schema) {
@@ -508,7 +526,10 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawViewDepend
             op.oprnamespace AS "operator_namespace?",
             op.oprname AS "operator_name?",
             CASE WHEN op.oprleft = 0 THEN NULL ELSE format_type(op.oprleft, NULL) END AS "operator_left_type?",
-            CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS "operator_right_type?"
+            CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS "operator_right_type?",
+
+            coll.collnamespace AS "collation_namespace?",
+            coll.collname AS "collation_name?"
 
         FROM pg_rewrite r
         JOIN pg_class vc ON vc.oid = r.ev_class AND vc.relkind = 'v'
@@ -528,6 +549,10 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawViewDepend
         LEFT JOIN pg_operator op
           ON d.refclassid = 'pg_operator'::regclass::oid
          AND d.refobjid = op.oid
+
+        LEFT JOIN pg_collation coll
+          ON d.refclassid = 'pg_collation'::regclass::oid
+         AND d.refobjid = coll.oid
 
         ORDER BY r.ev_class, refcl.relname, d.refobjid, d.refobjsubid
         "#
@@ -551,6 +576,8 @@ async fn fetch_dependencies(conn: &mut PgConnection) -> Result<Vec<RawViewDepend
             operator_name: row.operator_name,
             operator_left_type: row.operator_left_type,
             operator_right_type: row.operator_right_type,
+            collation_namespace: row.collation_namespace,
+            collation_name: row.collation_name,
         })
         .collect())
 }

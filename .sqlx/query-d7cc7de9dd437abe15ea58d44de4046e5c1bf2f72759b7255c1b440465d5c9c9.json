@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            r.ev_class AS \"view_oid!\",\n            refcl.relname AS \"ref_class!\",\n            d.refobjid AS \"ref_oid!\",\n\n            cls.relkind::text AS \"relation_kind?\",\n            cls.relnamespace AS \"relation_namespace?\",\n            cls.relname AS \"relation_name?\",\n\n            proc.pronamespace AS \"function_namespace?\",\n            proc.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(proc.oid) AS \"function_args?\",\n\n            op.oprnamespace AS \"operator_namespace?\",\n            op.oprname AS \"operator_name?\",\n            CASE WHEN op.oprleft = 0 THEN NULL ELSE format_type(op.oprleft, NULL) END AS \"operator_left_type?\",\n            CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS \"operator_right_type?\"\n\n        FROM pg_rewrite r\n        JOIN pg_class vc ON vc.oid = r.ev_class AND vc.relkind = 'v'\n        JOIN pg_depend d\n          ON d.classid = 'pg_rewrite'::regclass::oid\n         AND d.objid = r.oid\n        JOIN pg_class refcl ON refcl.oid = d.refclassid\n\n        LEFT JOIN pg_class cls\n          ON d.refclassid = 'pg_class'::regclass::oid\n         AND d.refobjid = cls.oid\n\n        LEFT JOIN pg_proc proc\n          ON d.refclassid = 'pg_proc'::regclass::oid\n         AND d.refobjid = proc.oid\n\n        LEFT JOIN pg_operator op\n          ON d.refclassid = 'pg_operator'::regclass::oid\n         AND d.refobjid = op.oid\n\n        ORDER BY r.ev_class, refcl.relname, d.refobjid, d.refobjsubid\n        ",
+  "query": "\n        SELECT\n            r.ev_class AS \"view_oid!\",\n            refcl.relname AS \"ref_class!\",\n            d.refobjid AS \"ref_oid!\",\n\n            cls.relkind::text AS \"relation_kind?\",\n            cls.relnamespace AS \"relation_namespace?\",\n            cls.relname AS \"relation_name?\",\n\n            proc.pronamespace AS \"function_namespace?\",\n            proc.proname AS \"function_name?\",\n            pg_catalog.pg_get_function_identity_arguments(proc.oid) AS \"function_args?\",\n\n            op.oprnamespace AS \"operator_namespace?\",\n            op.oprname AS \"operator_name?\",\n            CASE WHEN op.oprleft = 0 THEN NULL ELSE format_type(op.oprleft, NULL) END AS \"operator_left_type?\",\n            CASE WHEN op.oprright = 0 THEN NULL ELSE format_type(op.oprright, NULL) END AS \"operator_right_type?\",\n\n            coll.collnamespace AS \"collation_namespace?\",\n            coll.collname AS \"collation_name?\"\n\n        FROM pg_rewrite r\n        JOIN pg_class vc ON vc.oid = r.ev_class AND vc.relkind = 'v'\n        JOIN pg_depend d\n          ON d.classid = 'pg_rewrite'::regclass::oid\n         AND d.objid = r.oid\n        JOIN pg_class refcl ON refcl.oid = d.refclassid\n\n        LEFT JOIN pg_class cls\n          ON d.refclassid = 'pg_class'::regclass::oid\n         AND d.refobjid = cls.oid\n\n        LEFT JOIN pg_proc proc\n          ON d.refclassid = 'pg_proc'::regclass::oid\n         AND d.refobjid = proc.oid\n\n        LEFT JOIN pg_operator op\n          ON d.refclassid = 'pg_operator'::regclass::oid\n         AND d.refobjid = op.oid\n\n        LEFT JOIN pg_collation coll\n          ON d.refclassid = 'pg_collation'::regclass::oid\n         AND d.refobjid = coll.oid\n\n        ORDER BY r.ev_class, refcl.relname, d.refobjid, d.refobjsubid\n        ",
   "describe": {
     "columns": [
       {
@@ -125,6 +125,28 @@
         "name": "operator_right_type?",
         "type_info": "Text",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "collation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "collation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
       }
     ],
     "parameters": {
@@ -143,8 +165,10 @@
       false,
       false,
       null,
-      null
+      null,
+      false,
+      false
     ]
   },
-  "hash": "3a031705b724a2b6671365333d4dcc0cd93e3177c471cf4c2ef44e2d521f10f6"
+  "hash": "d7cc7de9dd437abe15ea58d44de4046e5c1bf2f72759b7255c1b440465d5c9c9"
 }

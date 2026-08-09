@@ -9,7 +9,7 @@ _Last updated: June 2026_
 
 ## Current State
 
-pgmt supports most PostgreSQL schema objects: tables, views, functions, aggregates, operators, casts, triggers, indexes, constraints, custom types, domains, sequences, extensions, RLS policies, comments, and grants. See [Supported Features](/docs/reference/supported-features) for the complete list.
+pgmt supports most PostgreSQL schema objects: tables, views, functions, aggregates, operators, casts, triggers, indexes, constraints, custom types, domains, collations, sequences, extensions, RLS policies, comments, and grants. See [Supported Features](/docs/reference/supported-features) for the complete list.
 
 ## Future Directions
 
