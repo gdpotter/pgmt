@@ -21,6 +21,7 @@ use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::collation::CollationRef;
 use crate::catalog::id::DbObjectId;
 use crate::catalog::index::{Index, IndexColumn, IndexType};
 
@@ -63,7 +64,10 @@ pub struct RawIndexColumn {
     /// system schema or on a system table, which the converter excludes:
     /// rendering every system index costs more than the whole load.
     pub expression: Option<String>,
-    pub collation: Option<String>,
+    /// `indcollation`'s namespace and name for this key, unresolved, and only
+    /// when it differs from what the key would inherit.
+    pub collation_namespace: Option<Oid>,
+    pub collation_name: Option<String>,
     pub opclass: Option<String>,
     pub ordering: String,
     pub nulls_ordering: String,
@@ -250,9 +254,25 @@ pub fn convert(raw: &RawIndexes, shared: &SharedCatalog) -> Result<Converted<(Oi
         // Only btree indexes order their keys; for every other access method the
         // direction and null placement are meaningless and are not rendered.
         let is_btree = index.index_type == IndexType::Btree;
+        let collation = row
+            .collation_namespace
+            .zip(row.collation_name.as_ref())
+            .and_then(|(namespace, name)| {
+                Some(CollationRef {
+                    schema: shared.namespaces.name(namespace)?.to_string(),
+                    name: name.clone(),
+                })
+            });
+        // A user-defined key collation must exist before the index that uses
+        // it; the collations PostgreSQL ships are not managed objects.
+        if let Some(collation) = &collation
+            && !is_system_schema(&collation.schema)
+        {
+            index.depends_on.push(collation.id());
+        }
         index.columns.push(IndexColumn {
             expression,
-            collation: row.collation.clone(),
+            collation,
             opclass: row.opclass.clone(),
             ordering: is_btree.then(|| row.ordering.clone()),
             nulls_ordering: is_btree.then(|| row.nulls_ordering.clone()),
@@ -385,11 +405,8 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
                  AND tn.nspname NOT LIKE 'pg_toast_temp_%'
                 THEN pg_catalog.pg_get_indexdef(idx.indexrelid, col_pos, true)
             END AS "expression?",
-            CASE
-                WHEN c.collname IS NOT NULL AND c.collname != 'default'
-                THEN quote_ident(cn.nspname) || '.' || quote_ident(c.collname)
-                ELSE NULL
-            END AS "collation?",
+            c.collnamespace AS "collation_namespace?",
+            c.collname AS "collation_name?",
             CASE
                 WHEN op.opcname IS NOT NULL
                 THEN quote_ident(opn.nspname) || '.' || quote_ident(op.opcname)
@@ -413,8 +430,25 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
         LEFT JOIN pg_attribute a ON a.attrelid = idx.indrelid
                                  AND a.attnum = idx.indkey[col_pos-1]
                                  AND idx.indkey[col_pos-1] > 0
-        LEFT JOIN pg_collation c ON a.attcollation = c.oid
-        LEFT JOIN pg_namespace cn ON c.collnamespace = cn.oid
+        -- Per-key collation lives in pg_index.indcollation (oidvector,
+        -- 0-indexed), NOT in the underlying column's attcollation — an explicit
+        -- `CREATE INDEX ... (col COLLATE "x")` override only shows up there.
+        -- Record it only when it differs from what the key would inherit:
+        -- the column's own collation for plain column keys, the database
+        -- default collation for expression keys (an expression's true derived
+        -- collation is not reachable from SQL; recording any non-default
+        -- collation is round-trip stable because re-fetching the applied index
+        -- yields the same value).
+        LEFT JOIN pg_collation c
+            ON c.oid = idx.indcollation[col_pos-1]
+            AND idx.indcollation[col_pos-1] != 0
+            AND (
+                CASE
+                    WHEN idx.indkey[col_pos-1] > 0
+                        THEN idx.indcollation[col_pos-1] IS DISTINCT FROM a.attcollation
+                    ELSE idx.indcollation[col_pos-1] != 'pg_catalog."default"'::regcollation
+                END
+            )
         LEFT JOIN pg_opclass op ON col_pos <= array_length(idx.indclass, 1)
                                 AND idx.indclass[col_pos-1] = op.oid
         LEFT JOIN pg_namespace opn ON op.opcnamespace = opn.oid
@@ -430,7 +464,8 @@ async fn fetch_columns(conn: &mut PgConnection) -> Result<Vec<RawIndexColumn>> {
             index_oid: row.index_oid,
             position: row.position,
             expression: row.expression,
-            collation: row.collation,
+            collation_namespace: row.collation_namespace,
+            collation_name: row.collation_name,
             opclass: row.opclass,
             ordering: row.ordering,
             nulls_ordering: row.nulls_ordering,
