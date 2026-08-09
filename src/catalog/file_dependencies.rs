@@ -8,7 +8,7 @@ use crate::catalog::id::DbObjectId;
 use crate::schema_loader::SchemaFile;
 use anyhow::Result;
 use std::collections::BTreeMap;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Maps file paths to the database objects they create
 #[derive(Debug, Clone)]
@@ -117,7 +117,7 @@ pub fn create_dependency_augmentation(
                 }
             }
 
-            info!(
+            debug!(
                 "  Added {} -> {} dependencies from file {} requiring {}",
                 objects_in_file.len(),
                 objects_in_required_file.len(),
