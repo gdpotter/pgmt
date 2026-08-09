@@ -269,6 +269,18 @@ impl ModuleRuntime {
     /// (two-phase): its acquisition delta lives in migration V itself,
     /// so wholeness only finalizes once V's sections have run.
     pub async fn cross_re_anchors_through(&mut self, ceiling: Option<u64>) -> Result<()> {
+        // No committed re-anchor is in range, so there is nothing for the
+        // cursor to decide. This MUST stay above the cursor read: the apply
+        // loop calls this once per migration file, so deriving a cursor no
+        // re-anchor consults is a round trip per migration.
+        if !self
+            .re_anchors
+            .iter()
+            .any(|ra| ceiling.is_none_or(|c| ra.version <= c))
+        {
+            return Ok(());
+        }
+
         // The cursor is derived, not cached: the highest baseline version on
         // the target. Read once at entry — re-anchors are processed in
         // ascending version order and each commit writes a baseline row above
@@ -301,14 +313,18 @@ impl ModuleRuntime {
         version: u64,
         acquirable: &BTreeSet<(Option<String>, Option<String>)>,
     ) -> Result<Option<PendingCrossing>> {
-        let cursor = self.store.consumed_through_cursor().await?;
-        let Some(re_anchor) = self
-            .re_anchors
-            .iter()
-            .find(|ra| ra.version == version && cursor.is_none_or(|w| ra.version > w))
-        else {
+        // Find the candidate BEFORE deriving the cursor: with no re-anchor at
+        // this version there is nothing for the cursor to decide, and the apply
+        // loop calls this once per migration file. Re-anchor versions are
+        // unique (one baseline file per version), so the version alone
+        // identifies the candidate and the cursor only has to rule it out.
+        let Some(re_anchor) = self.re_anchors.iter().find(|ra| ra.version == version) else {
             return Ok(None);
         };
+        let cursor = self.store.consumed_through_cursor().await?;
+        if cursor.is_some_and(|w| re_anchor.version <= w) {
+            return Ok(None); // already consumed, or moot (≤ the provision baseline)
+        }
         Ok(Some(self.gate_re_anchor(re_anchor, acquirable).await?))
     }
 

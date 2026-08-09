@@ -1,8 +1,9 @@
 use crate::config::types::TrackingTable;
 use crate::migration::section_parser::MigrationSection;
-use crate::migration_tracking::{calculate_checksum, version_to_db};
+use crate::migration_tracking::{calculate_checksum, version_from_db, version_to_db};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 /// pgmt version stamped onto section rows at registration.
@@ -366,6 +367,87 @@ pub(crate) async fn insert_satisfied_section(
     Ok(())
 }
 
+/// One recorded section row, as stored in `{tracking}_sections`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StoredSection {
+    pub section_name: String,
+    pub status: String,
+    pub checksum: Option<String>,
+    pub mode: Option<String>,
+    pub section_order: i32,
+    pub module: Option<String>,
+}
+
+/// Must name EVERY field of [`StoredSection`] — `FromRow` resolves fields by
+/// column name, so an omitted one is a decode error at runtime, not a compile
+/// error.
+const STORED_SECTION_COLUMNS: &str = "section_name, status, checksum, mode, section_order, module";
+
+/// The recorded section rows for one `(version, is_baseline)` coordinate.
+///
+/// For a caller that walks every migration version, use
+/// [`RecordedSections::load_migrations`] instead — this issues one query per
+/// call.
+pub async fn fetch_section_rows(
+    pool: &PgPool,
+    tracking_table: &TrackingTable,
+    version: u64,
+    is_baseline: bool,
+) -> Result<Vec<StoredSection>> {
+    let rows = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {STORED_SECTION_COLUMNS}
+             FROM {} WHERE migration_version = $1 AND is_baseline = $2",
+        format_sections_table_name(tracking_table)
+    )))
+    .bind(version_to_db(version)?)
+    .bind(is_baseline)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Every recorded MIGRATION section row on the target (`is_baseline = FALSE`),
+/// grouped by version and read in a SINGLE query.
+///
+/// This is a snapshot: it is sound only for a caller that reads a version's
+/// rows before writing any of them, and never re-reads a version it has since
+/// written.
+pub struct RecordedSections(BTreeMap<u64, Vec<StoredSection>>);
+
+impl RecordedSections {
+    pub async fn load_migrations(pool: &PgPool, tracking_table: &TrackingTable) -> Result<Self> {
+        #[derive(sqlx::FromRow)]
+        struct VersionedSection {
+            migration_version: i64,
+            #[sqlx(flatten)]
+            section: StoredSection,
+        }
+
+        let rows: Vec<VersionedSection> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT migration_version, {STORED_SECTION_COLUMNS}
+                 FROM {} WHERE NOT is_baseline",
+            format_sections_table_name(tracking_table)
+        )))
+        .fetch_all(pool)
+        .await
+        .context("Failed to read the recorded migration sections")?;
+
+        let mut by_version: BTreeMap<u64, Vec<StoredSection>> = BTreeMap::new();
+        for row in rows {
+            by_version
+                .entry(version_from_db(row.migration_version))
+                .or_default()
+                .push(row.section);
+        }
+        Ok(Self(by_version))
+    }
+
+    /// The rows recorded for `version` — empty when the version has none.
+    pub fn for_version(&self, version: u64) -> &[StoredSection] {
+        self.0.get(&version).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// A completed section is immutable at section granularity; an unapplied
 /// (pending/failed/running) one may be fixed in the repo and re-run. Validate
 /// the CURRENT file's sections against the rows registered for this version and
@@ -383,15 +465,18 @@ pub(crate) async fn insert_satisfied_section(
 ///
 /// Returns whether any checksummed section row was found — when none were, the
 /// caller falls back to the legacy file-level checksum bail.
+///
+/// `rows` are the recorded rows for this `(version, is_baseline)` coordinate,
+/// supplied by the caller ([`fetch_section_rows`] for a single coordinate,
+/// [`RecordedSections`] when walking many).
 pub async fn validate_and_sync_section_checksums(
     pool: &PgPool,
     tracking_table: &TrackingTable,
     version: u64,
     is_baseline: bool,
     file_sections: &[MigrationSection],
+    rows: &[StoredSection],
 ) -> Result<bool> {
-    use std::collections::BTreeMap;
-
     let sections_table = format_sections_table_name(tracking_table);
     let kind = if is_baseline { "baseline" } else { "migration" };
     // Recovery hints must carry --baseline when the drifted row IS a baseline
@@ -413,27 +498,16 @@ pub async fn validate_and_sync_section_checksums(
         );
     }
 
-    // (section_name, status, checksum, mode, section_order, module)
-    type StoredSectionRow = (
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        i32,
-        Option<String>,
-    );
-    let rows: Vec<StoredSectionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT section_name, status, checksum, mode, section_order, module
-             FROM {} WHERE migration_version = $1 AND is_baseline = $2",
-        sections_table
-    )))
-    .bind(version_to_db(version)?)
-    .bind(is_baseline)
-    .fetch_all(pool)
-    .await?;
-
     let mut has_checksummed = false;
-    for (name, status, stored_checksum, stored_mode, stored_order, stored_module) in rows {
+    for row in rows {
+        let StoredSection {
+            section_name: name,
+            status,
+            checksum: stored_checksum,
+            mode: stored_mode,
+            section_order: stored_order,
+            module: stored_module,
+        } = row;
         // Legacy row: no stored checksum → always passes.
         let Some(stored_checksum) = stored_checksum else {
             continue;
@@ -459,7 +533,7 @@ pub async fn validate_and_sync_section_checksums(
         };
 
         if completed {
-            if &stored_checksum != checksum {
+            if stored_checksum != checksum {
                 anyhow::bail!(
                     "section '{name}' of {kind} {version} was modified after it was applied.\n\
                      Expected checksum: {stored_checksum}\n\
@@ -469,7 +543,7 @@ pub async fn validate_and_sync_section_checksums(
                      re-stamp the stored checksum: pgmt migrate resolve --restamp {version}/{name}{baseline_flag}."
                 );
             }
-            if stored_order != *order {
+            if *stored_order != *order {
                 anyhow::bail!(
                     "section '{name}' of {kind} {version} was reordered after it was applied \
                      (was position {stored_order}, now {order}). Applied sections are immutable. \
@@ -477,7 +551,7 @@ pub async fn validate_and_sync_section_checksums(
                      accept it with `pgmt migrate resolve --restamp {version}{baseline_flag}`."
                 );
             }
-            if let Some(sm) = &stored_mode
+            if let Some(sm) = stored_mode
                 && sm != mode
             {
                 anyhow::bail!(
@@ -493,7 +567,7 @@ pub async fn validate_and_sync_section_checksums(
                      for further changes."
                 );
             }
-        } else if &stored_checksum != checksum {
+        } else if stored_checksum != checksum {
             // Fix-in-repo recovery: an unapplied section may be edited and
             // re-run. Bring the row up to date before it executes.
             println!("section '{name}' changed since registration; updating");
@@ -507,7 +581,7 @@ pub async fn validate_and_sync_section_checksums(
             .bind(*module)
             .bind(version_to_db(version)?)
             .bind(is_baseline)
-            .bind(&name)
+            .bind(name)
             .execute(pool)
             .await?;
         }
@@ -585,27 +659,17 @@ pub async fn record_sections_satisfied(
     Ok(())
 }
 
-/// Status of every recorded section for a version. Empty for legacy rows
-/// (recorded on completion by older pgmt, before per-section registration).
-pub async fn section_statuses(
-    pool: &PgPool,
-    tracking_table: &TrackingTable,
-    migration_version: u64,
-    is_baseline: bool,
-) -> Result<std::collections::BTreeMap<String, SectionStatus>> {
-    let sections_table = format_sections_table_name(tracking_table);
-
-    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT section_name, status FROM {} WHERE migration_version = $1 AND is_baseline = $2",
-        sections_table
-    )))
-    .bind(version_to_db(migration_version)?)
-    .bind(is_baseline)
-    .fetch_all(pool)
-    .await?;
-
-    rows.into_iter()
-        .map(|(name, status)| Ok((name, SectionStatus::from_str(&status)?)))
+/// Status of every recorded section for a version, derived from rows the caller
+/// already holds. Empty for legacy rows (recorded on completion by older pgmt,
+/// before per-section registration).
+pub fn section_statuses(rows: &[StoredSection]) -> Result<BTreeMap<String, SectionStatus>> {
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.section_name.clone(),
+                SectionStatus::from_str(&row.status)?,
+            ))
+        })
         .collect()
 }
 

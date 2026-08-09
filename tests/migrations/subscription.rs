@@ -365,3 +365,45 @@ async fn test_legacy_upgrade_backfills_synthetic_sections_once() {
     })
     .await;
 }
+
+/// The crossing loop must not touch the database when the repo ships no
+/// re-anchor: `migrate apply` calls both entry points once per migration file,
+/// so a consumed-through cursor read that no re-anchor consults would cost a
+/// round trip per migration.
+///
+/// Proven by closing the pool first — any query at all would then fail.
+#[tokio::test]
+async fn test_crossing_loop_reads_nothing_without_re_anchors() {
+    with_test_db(async |db| {
+        let tt = tracking();
+        pgmt::migration_tracking::ensure_tracking_table_exists(db.pool(), &tt)
+            .await
+            .unwrap();
+        ensure_section_tracking_table(db.pool(), &tt).await.unwrap();
+
+        // No baselines on disk → no committed re-anchors.
+        let baselines = tempfile::TempDir::new().unwrap();
+        let mut runtime = pgmt::modules::ModuleRuntime::load(db.pool(), &tt, baselines.path())
+            .await
+            .unwrap();
+
+        db.pool().close().await;
+
+        runtime
+            .cross_re_anchors_through(Some(1_200))
+            .await
+            .expect("a bounded sweep with no re-anchors must not query");
+        runtime
+            .cross_re_anchors_through(None)
+            .await
+            .expect("the final sweep with no re-anchors must not query");
+        assert!(
+            runtime
+                .gate_re_anchor_at(1_200, &BTreeSet::new())
+                .await
+                .expect("gating a version with no re-anchor must not query")
+                .is_none()
+        );
+    })
+    .await;
+}

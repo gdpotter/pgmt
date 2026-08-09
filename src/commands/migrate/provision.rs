@@ -404,6 +404,13 @@ async fn register_and_apply_baseline(
         crate::migration::parse_migration_sections(Path::new(source), baseline_sql)?;
     crate::migration::validate_sections(&full_sections)
         .with_context(|| format!("Invalid section configuration in baseline ({})", source))?;
+    let recorded = crate::migration_tracking::section_tracking::fetch_section_rows(
+        pool,
+        &config.migration.tracking_table,
+        version,
+        true,
+    )
+    .await?;
     let had_checksummed =
         crate::migration_tracking::section_tracking::validate_and_sync_section_checksums(
             pool,
@@ -411,6 +418,7 @@ async fn register_and_apply_baseline(
             version,
             true,
             &full_sections,
+            &recorded,
         )
         .await?;
 

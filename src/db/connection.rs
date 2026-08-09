@@ -36,13 +36,24 @@ pub fn mask_url_password(url: &str) -> String {
     url.to_string()
 }
 
+/// Pool options shared by every pgmt pool.
+///
+/// `test_before_acquire` is OFF: sqlx's default pings the connection on every
+/// acquire, so each statement costs two round trips instead of one against a
+/// remote database. pgmt runs its statements sequentially and reports failures
+/// rather than retrying blindly, so a connection that died while idle should
+/// surface as the query error it is instead of being silently swapped out.
+fn pgmt_pool_options() -> PgPoolOptions {
+    PgPoolOptions::new().test_before_acquire(false)
+}
+
 /// Connect to a database with a 5-second timeout and enriched error messages
 ///
 /// Use this for one-shot connections where retry logic is not needed.
 /// The `label` describes the database role (e.g., "development database", "target database")
 /// and is included in error messages along with the masked URL.
 pub async fn connect_to_database(url: &str, label: &str) -> Result<PgPool> {
-    PgPoolOptions::new()
+    pgmt_pool_options()
         .acquire_timeout(Duration::from_secs(5))
         .connect(url)
         .await
@@ -86,7 +97,7 @@ pub async fn connect_with_retry_config(url: &str, config: &ConnectionConfig) -> 
     let mut last_error = None;
 
     for attempt in 0..=config.max_retries {
-        match PgPool::connect(url).await {
+        match pgmt_pool_options().connect(url).await {
             Ok(pool) => {
                 if attempt > 0 {
                     info!(
@@ -143,7 +154,7 @@ pub async fn connect_with_retry_config_quiet(
         .log_slow_statements(LevelFilter::Off, Duration::from_secs(0));
 
     for attempt in 0..=config.max_retries {
-        let result = PgPoolOptions::new()
+        let result = pgmt_pool_options()
             .connect_with(connect_options.clone())
             .await;
 

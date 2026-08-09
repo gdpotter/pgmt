@@ -4,7 +4,7 @@ use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
 use crate::migration_tracking::section_tracking::{
-    section_statuses, validate_and_sync_section_checksums,
+    RecordedSections, section_statuses, validate_and_sync_section_checksums,
 };
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
@@ -303,6 +303,13 @@ pub(crate) async fn apply_pending_migrations(
         .map(|(v, checksum, _)| (version_from_db(v), checksum))
         .collect();
 
+    // Every recorded migration section row in ONE query, rather than one read
+    // per migration file. The snapshot's precondition holds here: the loop
+    // reads a version's rows within that version's own iteration and before
+    // anything writes them, and no iteration writes another version's rows.
+    let recorded_sections =
+        RecordedSections::load_migrations(pool, &config.migration.tracking_table).await?;
+
     // Apply unapplied migrations
     for migration in migrations {
         // Crossing loop, phase order: consume every re-anchor STRICTLY
@@ -418,6 +425,7 @@ pub(crate) async fn apply_pending_migrations(
                 migration.version,
                 false,
                 &sections,
+                recorded_sections.for_version(migration.version),
             )
             .await?;
             if stored_file_checksum != &checksum {
@@ -460,13 +468,7 @@ pub(crate) async fn apply_pending_migrations(
             .unwrap_or_else(|| runtime.established().clone());
 
         let statuses = if registered.is_some() {
-            section_statuses(
-                pool,
-                &config.migration.tracking_table,
-                migration.version,
-                false,
-            )
-            .await?
+            section_statuses(recorded_sections.for_version(migration.version))?
         } else {
             Default::default()
         };

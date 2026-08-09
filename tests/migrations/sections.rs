@@ -5,7 +5,8 @@ use pgmt::config::types::TrackingTable;
 use pgmt::migration::section_parser::MigrationSection;
 use pgmt::migration::{parse_migration_sections, validate_sections};
 use pgmt::migration_tracking::section_tracking::{
-    SectionStatus, ensure_section_tracking_table, get_section_status, initialize_sections,
+    RecordedSections, SectionStatus, ensure_section_tracking_table, get_section_status,
+    initialize_sections, section_statuses,
 };
 use pgmt::progress::SectionReporter;
 use std::path::Path;
@@ -325,6 +326,63 @@ CREATE INDEX CONCURRENTLY idx_items_name ON items(name);
         .await?;
 
         assert!(index_exists, "Index should exist");
+
+        Ok(())
+    })
+    .await
+}
+
+/// One load of the section table serves every version the apply loop walks:
+/// rows group by version, the baseline row space is excluded, and a version
+/// with no recorded sections reads as empty rather than as an error.
+#[tokio::test]
+async fn test_recorded_sections_groups_every_version_in_one_load() -> Result<()> {
+    with_test_db(async |db| {
+        let migration_sql = r#"
+-- pgmt:section name="first"
+SELECT 1;
+
+-- pgmt:section name="second"
+SELECT 2;
+"#;
+        let sections = parse_migration_sections(Path::new("test.sql"), migration_sql)?;
+        validate_sections(&sections)?;
+
+        let tracking_table = TrackingTable::default();
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+        initialize_sections(db.pool(), &tracking_table, 10, false, &ordered(&sections)).await?;
+        initialize_sections(
+            db.pool(),
+            &tracking_table,
+            20,
+            false,
+            &ordered(&sections[..1]),
+        )
+        .await?;
+        // A baseline row at a version that also hosts migration rows: the
+        // migration prefetch must not pick it up.
+        initialize_sections(db.pool(), &tracking_table, 10, true, &ordered(&sections)).await?;
+
+        let recorded = RecordedSections::load_migrations(db.pool(), &tracking_table).await?;
+
+        let names = |version: u64| -> Vec<String> {
+            recorded
+                .for_version(version)
+                .iter()
+                .map(|s| s.section_name.clone())
+                .collect()
+        };
+        assert_eq!(names(10), vec!["first".to_string(), "second".to_string()]);
+        assert_eq!(names(20), vec!["first".to_string()]);
+        assert!(
+            recorded.for_version(30).is_empty(),
+            "a version with no recorded sections reads as empty, not as an error"
+        );
+
+        // The statuses the classifier consumes come from those same rows.
+        let statuses = section_statuses(recorded.for_version(10))?;
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.get("first"), Some(&SectionStatus::Pending));
 
         Ok(())
     })
