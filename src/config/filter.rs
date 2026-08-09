@@ -157,15 +157,15 @@ impl ObjectFilter {
 
         // Keep the dependency maps consistent with the filtered object set —
         // consumers like `pgmt debug dependencies` iterate them directly.
-        let stale: Vec<_> = catalog
+        //
+        // Resolve through a prebuilt id set rather than `contains_id`, which
+        // scans: one scan per dependency key is O(keys x objects), and on a
+        // schema with tens of thousands of objects that alone runs for tens of
+        // seconds of pure CPU.
+        let present = catalog.object_ids();
+        catalog
             .forward_deps
-            .keys()
-            .filter(|id| !catalog.contains_id(id))
-            .cloned()
-            .collect();
-        for id in stale {
-            catalog.forward_deps.remove(&id);
-        }
+            .retain(|id, _| catalog::Catalog::id_present_in(&present, id));
         catalog.rebuild_reverse_deps();
 
         catalog

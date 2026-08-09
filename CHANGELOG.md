@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `pgmt migrate apply` no longer queries the target once per migration file. It read the section-tracking table twice and derived the re-anchor cursor twice for every migration it walked, so a no-op deploy against a remote database cost four round trips per migration — roughly 45 seconds for a project with a hundred migrations. Those reads are now a single up-front query, and the cursor is derived only when a committed re-anchor actually needs it.
 - Database connections no longer ping the server before every statement (sqlx's `test_before_acquire` default), which was doubling the round-trip cost of every query pgmt issues against a remote target.
+- Scoping a catalog to the managed universe no longer scans the object lists once per dependency entry. On a large schema this pruning ran for tens of seconds of pure CPU — around a quarter of the total time of `pgmt apply`, with no query to attribute it to.
 
 ## 0.6.2 - 2026-07-31
 

@@ -193,3 +193,79 @@ async fn test_temporary_objects_belong_to_neither_side() -> Result<()> {
     })
     .await
 }
+
+/// `Catalog::object_ids` + `Catalog::id_present_in` must answer exactly what
+/// `Catalog::contains_id` answers.
+///
+/// `contains_id` scans a vector per question, so callers with many questions
+/// (filtering the dependency maps, cascade expansion, plan ordering) resolve
+/// against a prebuilt id set instead. That set is assembled kind by kind and
+/// the sub-object resolution rule is spelled out in both places, so a newly
+/// tracked kind left out of `object_ids` — or a sub-object rule that drifts —
+/// would silently prune live dependencies. Neither is compile-time checked.
+#[tokio::test]
+async fn test_id_present_in_agrees_with_contains_id() -> Result<()> {
+    with_test_db(async |db| {
+        for statement in SCHEMA {
+            db.execute(statement).await;
+        }
+
+        let catalog = Catalog::load_unfiltered(db.pool()).await?;
+        let present = catalog.object_ids();
+
+        // Every stored object is reachable both ways. An empty catalog would
+        // make the loops below vacuous, so require real content first.
+        assert!(
+            present.len() > 20,
+            "fixture should populate many kinds, got {}",
+            present.len()
+        );
+        for id in &present {
+            assert!(
+                catalog.contains_id(id),
+                "object_ids yielded {id:?}, which contains_id denies"
+            );
+            assert!(
+                Catalog::id_present_in(&present, id),
+                "id_present_in denies {id:?}, which it produced"
+            );
+        }
+
+        // The dependency keys are the real caller: every one of them must get
+        // the same verdict from both, including comment and column ids, which
+        // resolve through a parent rather than being members of the set.
+        for id in catalog.forward_deps.keys() {
+            assert_eq!(
+                Catalog::id_present_in(&present, id),
+                catalog.contains_id(id),
+                "verdicts differ for dependency key {id:?}"
+            );
+        }
+
+        // Absent ids agree too, including through the sub-object rules.
+        let missing = DbObjectId::Table {
+            schema: "app".to_string(),
+            name: "no_such_table".to_string(),
+        };
+        for id in [
+            missing.clone(),
+            DbObjectId::Comment {
+                object_id: Box::new(missing.clone()),
+            },
+            DbObjectId::Column {
+                schema: "app".to_string(),
+                table: "no_such_table".to_string(),
+                column: "whatever".to_string(),
+            },
+        ] {
+            assert!(!catalog.contains_id(&id), "{id:?} should be absent");
+            assert!(
+                !Catalog::id_present_in(&present, &id),
+                "{id:?} should be absent"
+            );
+        }
+
+        Ok(())
+    })
+    .await
+}

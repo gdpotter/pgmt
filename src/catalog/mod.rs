@@ -9,7 +9,7 @@ use crate::diff::{
     views as views_diff,
 };
 use sqlx::{Acquire, PgPool};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 pub mod aggregate;
 pub mod attached;
@@ -734,6 +734,60 @@ impl Catalog {
             DbObjectId::Comment { object_id } => self.contains_id(object_id),
             // Column resolves to its parent table for containment checks
             DbObjectId::Column { schema, table, .. } => self.find_table(schema, table).is_some(),
+        }
+    }
+
+    /// The identity of every object the catalog stores.
+    ///
+    /// [`Self::contains_id`] answers one containment question by scanning the
+    /// matching vector, so a caller asking it once per element of another
+    /// collection is quadratic. Such a caller builds this set once and asks
+    /// [`Self::id_present_in`] instead.
+    ///
+    /// Sub-object ids (comments, columns) are NOT members: they have no stored
+    /// object of their own and resolve through their parent, which is
+    /// `id_present_in`'s job.
+    pub fn object_ids(&self) -> HashSet<DbObjectId> {
+        let mut ids = HashSet::new();
+        // Every kind the catalog stores, by the same `DependsOn::id()` the rest
+        // of the system identifies objects with.
+        // A schema depends on nothing, so it carries no `DependsOn` impl to
+        // borrow an identity from; `contains_id` matches it by name alone.
+        ids.extend(self.schemas.iter().map(|s| DbObjectId::Schema {
+            name: s.name.clone(),
+        }));
+        ids.extend(self.tables.iter().map(DependsOn::id));
+        ids.extend(self.views.iter().map(DependsOn::id));
+        ids.extend(self.types.iter().map(DependsOn::id));
+        ids.extend(self.domains.iter().map(DependsOn::id));
+        ids.extend(self.functions.iter().map(DependsOn::id));
+        ids.extend(self.aggregates.iter().map(DependsOn::id));
+        ids.extend(self.operators.iter().map(DependsOn::id));
+        ids.extend(self.casts.iter().map(DependsOn::id));
+        ids.extend(self.sequences.iter().map(DependsOn::id));
+        ids.extend(self.indexes.iter().map(DependsOn::id));
+        ids.extend(self.constraints.iter().map(DependsOn::id));
+        ids.extend(self.triggers.iter().map(DependsOn::id));
+        ids.extend(self.policies.iter().map(DependsOn::id));
+        ids.extend(self.extensions.iter().map(DependsOn::id));
+        ids.extend(self.grants.iter().map(DependsOn::id));
+        ids
+    }
+
+    /// [`Self::contains_id`]'s verdict, answered against a set from
+    /// [`Self::object_ids`].
+    ///
+    /// The two MUST agree for every id — sub-object resolution is spelled out
+    /// in both places (a comment is present iff its target is; a column iff its
+    /// table is), and `test_id_present_in_agrees_with_contains_id` pins that.
+    pub fn id_present_in(ids: &HashSet<DbObjectId>, id: &DbObjectId) -> bool {
+        match id {
+            DbObjectId::Comment { object_id } => Self::id_present_in(ids, object_id),
+            DbObjectId::Column { schema, table, .. } => ids.contains(&DbObjectId::Table {
+                schema: schema.clone(),
+                name: table.clone(),
+            }),
+            other => ids.contains(other),
         }
     }
 }
