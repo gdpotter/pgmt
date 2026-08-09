@@ -4,6 +4,7 @@
 //! and migration operations to ensure identical SQL output.
 
 use crate::catalog::index::Index;
+use crate::render::collation::collate_clause;
 use crate::render::quote_ident;
 
 /// Render a complete CREATE INDEX statement for the given index.
@@ -47,10 +48,8 @@ pub fn render_create_index(index: &Index) -> String {
         .map(|col| {
             let mut spec = col.expression.clone();
 
-            // Add collation if specified
-            if let Some(ref collation) = col.collation {
-                spec.push_str(&format!(" COLLATE {}", collation));
-            }
+            // Add collation if the key overrides its inherited collation
+            spec.push_str(&collate_clause(col.collation.as_ref()));
 
             // Add operator class if specified
             if let Some(ref opclass) = col.opclass {
@@ -182,6 +181,42 @@ mod tests {
         assert_eq!(
             sql,
             "CREATE INDEX \"customers_search_idx\" ON \"public\".\"customers\" USING gist ((first_name || ' ' || last_name || ' ' || email_address) gist_trgm_ops);"
+        );
+    }
+
+    #[test]
+    fn test_render_index_with_collation_override() {
+        let index = Index {
+            schema: "public".to_string(),
+            name: "users_name_ci_idx".to_string(),
+            table_schema: "public".to_string(),
+            table_name: "users".to_string(),
+            index_type: IndexType::Btree,
+            is_unique: false,
+            is_clustered: false,
+            is_valid: true,
+            columns: vec![IndexColumn {
+                expression: "name".to_string(),
+                collation: Some(crate::catalog::collation::CollationRef {
+                    schema: "app".to_string(),
+                    name: "german_ci".to_string(),
+                }),
+                opclass: None,
+                ordering: Some("ASC".to_string()),
+                nulls_ordering: Some("NULLS LAST".to_string()),
+            }],
+            include_columns: vec![],
+            predicate: None,
+            tablespace: None,
+            storage_parameters: vec![],
+            comment: None,
+            depends_on: vec![],
+        };
+
+        let sql = render_create_index(&index);
+        assert_eq!(
+            sql,
+            "CREATE INDEX \"users_name_ci_idx\" ON \"public\".\"users\" USING btree (name COLLATE \"app\".\"german_ci\");"
         );
     }
 

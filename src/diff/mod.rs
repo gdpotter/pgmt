@@ -1,6 +1,7 @@
 pub mod aggregates;
 pub mod cascade;
 pub mod casts;
+pub mod collations;
 pub mod columns;
 pub mod comments;
 pub mod constraints;
@@ -23,9 +24,9 @@ pub mod views;
 
 use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::catalog::{
-    Catalog, aggregate::Aggregate, cast::Cast, constraint::Constraint, custom_type::CustomType,
-    domain::Domain, extension::Extension, function::Function, index::Index, operator::Operator,
-    sequence::Sequence, table::Table, view::View,
+    Catalog, aggregate::Aggregate, cast::Cast, collation::Collation, constraint::Constraint,
+    custom_type::CustomType, domain::Domain, extension::Extension, function::Function,
+    index::Index, operator::Operator, sequence::Sequence, table::Table, view::View,
 };
 use crate::diff::operations::MigrationStep;
 pub use planning::PlannedStep;
@@ -91,6 +92,13 @@ pub fn diff_all(old: &Catalog, new: &Catalog) -> Vec<MigrationStep> {
         &new.types,
         CustomType::id,
         custom_types::diff,
+    ));
+
+    out.extend(diff_list(
+        &old.collations,
+        &new.collations,
+        Collation::id,
+        collations::diff,
     ));
 
     out.extend(diff_list(

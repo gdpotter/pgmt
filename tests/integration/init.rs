@@ -772,6 +772,7 @@ async fn test_init_empty_database_has_no_objects() -> Result<()> {
 /// This ensures GRANT statements in the schema don't fail due to missing roles
 #[tokio::test]
 async fn test_init_sql_file_import_with_roles() -> Result<()> {
+    let _shadow_guard = crate::helpers::shadow_guard().await;
     use pgmt::commands::init::import::import_schema;
     use pgmt::config::types::ShadowDatabase;
 

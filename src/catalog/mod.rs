@@ -2,11 +2,11 @@ use crate::catalog::file_dependencies::FileDependencyAugmentation;
 use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::diff::operations::MigrationStep;
 use crate::diff::{
-    aggregates as aggregates_diff, casts as casts_diff, constraints as constraints_diff,
-    custom_types as custom_types_diff, domains as domains_diff, functions as functions_diff,
-    indexes as indexes_diff, operators as operators_diff, policies as policies_diff,
-    sequences as sequences_diff, tables as tables_diff, triggers as triggers_diff,
-    views as views_diff,
+    aggregates as aggregates_diff, casts as casts_diff, collations as collations_diff,
+    constraints as constraints_diff, custom_types as custom_types_diff, domains as domains_diff,
+    functions as functions_diff, indexes as indexes_diff, operators as operators_diff,
+    policies as policies_diff, sequences as sequences_diff, tables as tables_diff,
+    triggers as triggers_diff, views as views_diff,
 };
 use sqlx::{Acquire, PgPool};
 use std::collections::{BTreeMap, HashSet};
@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashSet};
 pub mod aggregate;
 pub mod attached;
 pub mod cast;
+pub mod collation;
 pub mod constraint;
 pub mod custom_type;
 pub mod domain;
@@ -42,6 +43,7 @@ pub struct Catalog {
     pub views: Vec<view::View>,
     pub types: Vec<custom_type::CustomType>,
     pub domains: Vec<domain::Domain>,
+    pub collations: Vec<collation::Collation>,
     pub functions: Vec<function::Function>,
     pub aggregates: Vec<aggregate::Aggregate>,
     pub operators: Vec<operator::Operator>,
@@ -133,6 +135,9 @@ impl Catalog {
         let domains = raw::domain::load_with_exclusions(&mut tx, &shared)
             .await?
             .collect_into("domain", &mut oid_indexes);
+        let collations = raw::collation::load_with_exclusions(&mut tx, &shared)
+            .await?
+            .collect_into("collation", &mut oid_indexes);
         let functions = raw::function::load_with_exclusions(&mut tx, &shared)
             .await?
             .collect_into("function", &mut oid_indexes);
@@ -198,6 +203,7 @@ impl Catalog {
         insert_deps(&views, &mut forward, &mut reverse);
         insert_deps(&types, &mut forward, &mut reverse);
         insert_deps(&domains, &mut forward, &mut reverse);
+        insert_deps(&collations, &mut forward, &mut reverse);
         insert_deps(&functions, &mut forward, &mut reverse);
         insert_deps(&aggregates, &mut forward, &mut reverse);
         insert_deps(&operators, &mut forward, &mut reverse);
@@ -216,6 +222,7 @@ impl Catalog {
             views,
             types,
             domains,
+            collations,
             functions,
             aggregates,
             operators,
@@ -420,6 +427,12 @@ impl Catalog {
             .find(|d| d.schema == schema && d.name == name)
     }
 
+    pub fn find_collation(&self, schema: &str, name: &str) -> Option<&collation::Collation> {
+        self.collations
+            .iter()
+            .find(|c| c.schema == schema && c.name == name)
+    }
+
     pub fn find_sequence(&self, schema: &str, name: &str) -> Option<&sequence::Sequence> {
         self.sequences
             .iter()
@@ -465,6 +478,7 @@ impl Catalog {
             views,
             types,
             domains,
+            collations,
             functions,
             aggregates,
             operators,
@@ -488,6 +502,7 @@ impl Catalog {
         out.extend(views.iter().map(|x| x as &dyn Attached));
         out.extend(types.iter().map(|x| x as &dyn Attached));
         out.extend(domains.iter().map(|x| x as &dyn Attached));
+        out.extend(collations.iter().map(|x| x as &dyn Attached));
         out.extend(functions.iter().map(|x| x as &dyn Attached));
         out.extend(aggregates.iter().map(|x| x as &dyn Attached));
         out.extend(operators.iter().map(|x| x as &dyn Attached));
@@ -647,6 +662,13 @@ impl Catalog {
                 steps.extend(casts_diff::diff(None, Some(new)));
             }
 
+            DbObjectId::Collation { schema, name } => {
+                let old = self.find_collation(schema, name)?;
+                let new = new_catalog.find_collation(schema, name)?;
+                steps.extend(collations_diff::diff(Some(old), None));
+                steps.extend(collations_diff::diff(None, Some(new)));
+            }
+
             DbObjectId::Schema { .. }
             | DbObjectId::Extension { .. }
             | DbObjectId::Grant { .. }
@@ -667,6 +689,7 @@ impl Catalog {
             views: Vec::new(),
             types: Vec::new(),
             domains: Vec::new(),
+            collations: Vec::new(),
             functions: Vec::new(),
             aggregates: Vec::new(),
             operators: Vec::new(),
@@ -691,6 +714,7 @@ impl Catalog {
             DbObjectId::View { schema, name } => self.find_view(schema, name).is_some(),
             DbObjectId::Type { schema, name } => self.find_custom_type(schema, name).is_some(),
             DbObjectId::Domain { schema, name } => self.find_domain(schema, name).is_some(),
+            DbObjectId::Collation { schema, name } => self.find_collation(schema, name).is_some(),
             DbObjectId::Function {
                 schema,
                 name,
@@ -760,6 +784,7 @@ impl Catalog {
         ids.extend(self.views.iter().map(DependsOn::id));
         ids.extend(self.types.iter().map(DependsOn::id));
         ids.extend(self.domains.iter().map(DependsOn::id));
+        ids.extend(self.collations.iter().map(DependsOn::id));
         ids.extend(self.functions.iter().map(DependsOn::id));
         ids.extend(self.aggregates.iter().map(DependsOn::id));
         ids.extend(self.operators.iter().map(DependsOn::id));

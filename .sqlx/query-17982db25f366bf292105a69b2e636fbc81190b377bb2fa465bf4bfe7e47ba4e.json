@@ -1,0 +1,157 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            a.attrelid AS \"attrelid!\",\n            a.attnum AS \"attnum!\",\n            a.attname AS \"name!\",\n            a.atttypid AS \"type_oid!\",\n            pg_catalog.format_type(a.atttypid, a.atttypmod) AS \"formatted_type!\",\n            pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) AS \"expression?\",\n            a.attgenerated::text AS \"attgenerated?\",\n            a.attidentity::text AS \"attidentity?\",\n            a.attnotnull AS \"not_null!\",\n            COALESCE(a.attndims, 0)::int AS \"attndims!: i32\",\n            a.attcollation AS \"attcollation!\",\n            t.typcollation AS \"type_collation!\",\n            coll.collnamespace AS \"collation_namespace?\",\n            coll.collname AS \"collation_name?\"\n        FROM pg_attribute a\n        JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'\n        JOIN pg_type t ON t.oid = a.atttypid\n        LEFT JOIN pg_attrdef ad\n          ON ad.adrelid = a.attrelid\n         AND ad.adnum = a.attnum\n        LEFT JOIN pg_collation coll ON coll.oid = a.attcollation AND a.attcollation != 0\n        WHERE a.attnum > 0\n          AND NOT a.attisdropped\n        ORDER BY a.attrelid, a.attnum\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attrelid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attrelid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "attnum!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnum"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "type_oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "atttypid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "formatted_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "expression?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "attgenerated?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "attidentity?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "not_null!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attnotnull"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "attndims!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "attcollation!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attcollation"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "type_collation!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_type",
+            "name": "typcollation"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "collation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "collation_name?",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "17982db25f366bf292105a69b2e636fbc81190b377bb2fa465bf4bfe7e47ba4e"
+}

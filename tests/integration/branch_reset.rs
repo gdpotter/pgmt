@@ -7,7 +7,7 @@ use pgmt::config::types::{ShadowDatabase, ShadowResetMode};
 
 #[tokio::test]
 async fn test_url_shadow_branch_mode() -> Result<()> {
-    let _branch_guard = crate::helpers::BRANCH_TEST_LOCK.lock().await;
+    let _shadow_guard = crate::helpers::shadow_cleanup_guard().await;
     with_test_db(async |db| {
         // A dedicated database plays the externally-provisioned source (the
         // harness database itself holds an open pool; the branch source must

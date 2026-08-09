@@ -66,6 +66,7 @@ pub fn merge_indexes(indexes: Vec<(&'static str, OidIndex)>) -> Result<OidIndex>
 
 pub mod aggregate;
 pub mod cast;
+pub mod collation;
 pub mod constraint;
 pub mod custom_type;
 pub mod domain;

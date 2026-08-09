@@ -18,6 +18,7 @@ use super::dedup_preserving_order;
 use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::collation::CollationRef;
 use crate::catalog::custom_type::{CompositeAttribute, CustomType, EnumValue, TypeKind};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::resolve_type_dependency;
@@ -56,6 +57,15 @@ pub struct RawCompositeAttribute {
     /// `format_type(atttypid, atttypmod)` — carries type modifiers and array
     /// brackets, which no Rust-side reconstruction can recover.
     pub formatted_type: String,
+    /// `attcollation` and the attribute type's own `typcollation`, unresolved.
+    /// A collation equal to the type's default is the absence of a choice, and
+    /// comparing the OIDs is what tells the two apart — a user collation that
+    /// happens to be named "default" is still a choice.
+    pub attcollation: Oid,
+    pub type_collation: Oid,
+    /// `attcollation`'s namespace and name, unresolved.
+    pub collation_namespace: Option<Oid>,
+    pub collation_name: Option<String>,
 }
 
 /// Everything the custom-type converter reads out of `pg_catalog`.
@@ -267,12 +277,36 @@ pub fn convert(
             entry.custom_type.depends_on.push(dep);
         }
 
+        // Only a collation that differs from the attribute type's own is a
+        // choice the attribute made; `text` inheriting the database default is
+        // not.
+        let collation = (row.attcollation != Oid(0) && row.attcollation != row.type_collation)
+            .then(|| {
+                row.collation_namespace
+                    .zip(row.collation_name.as_ref())
+                    .and_then(|(namespace, name)| {
+                        Some(CollationRef {
+                            schema: shared.namespaces.name(namespace)?.to_string(),
+                            name: name.clone(),
+                        })
+                    })
+            })
+            .flatten();
+        // A user-defined collation must exist before the composite type that
+        // uses it; the collations PostgreSQL ships are not managed objects.
+        if let Some(collation) = &collation
+            && !is_system_schema(&collation.schema)
+        {
+            entry.custom_type.depends_on.push(collation.id());
+        }
+
         entry
             .custom_type
             .composite_attributes
             .push(CompositeAttribute {
                 name: row.name.clone(),
                 type_name: row.formatted_type.clone(),
+                collation,
                 comment: None,
             });
         entry.attribute_attnums.push(row.attnum);
@@ -368,10 +402,16 @@ async fn fetch_composite_attributes(conn: &mut PgConnection) -> Result<Vec<RawCo
             a.attnum AS "attnum!",
             a.attname AS "name!",
             a.atttypid AS "attribute_type_oid!",
-            pg_catalog.format_type(a.atttypid, a.atttypmod) AS "formatted_type!"
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS "formatted_type!",
+            a.attcollation AS "attcollation!",
+            attr_t.typcollation AS "type_collation!",
+            coll.collnamespace AS "collation_namespace?",
+            coll.collname AS "collation_name?"
         FROM pg_type t
         JOIN pg_class c ON t.typrelid = c.oid
         JOIN pg_attribute a ON a.attrelid = c.oid
+        JOIN pg_type attr_t ON attr_t.oid = a.atttypid
+        LEFT JOIN pg_collation coll ON coll.oid = a.attcollation AND a.attcollation != 0
         WHERE t.typtype = 'c'
           AND a.attnum > 0
           AND NOT a.attisdropped
@@ -389,6 +429,10 @@ async fn fetch_composite_attributes(conn: &mut PgConnection) -> Result<Vec<RawCo
             name: row.name,
             attribute_type_oid: row.attribute_type_oid,
             formatted_type: row.formatted_type,
+            attcollation: row.attcollation,
+            type_collation: row.type_collation,
+            collation_namespace: row.collation_namespace,
+            collation_name: row.collation_name,
         })
         .collect())
 }

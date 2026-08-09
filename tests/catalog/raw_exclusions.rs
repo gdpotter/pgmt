@@ -9,11 +9,11 @@ use anyhow::Result;
 use pgmt::catalog::raw::exclusion::{Converted, ExclusionReason};
 use pgmt::catalog::raw::shared;
 use pgmt::catalog::raw::{
-    aggregate as raw_aggregate, cast as raw_cast, constraint as raw_constraint,
-    custom_type as raw_custom_type, domain as raw_domain, extension as raw_extension,
-    function as raw_function, index as raw_index, operator as raw_operator, policy as raw_policy,
-    schema as raw_schema, sequence as raw_sequence, table as raw_table, trigger as raw_trigger,
-    view as raw_view,
+    aggregate as raw_aggregate, cast as raw_cast, collation as raw_collation,
+    constraint as raw_constraint, custom_type as raw_custom_type, domain as raw_domain,
+    extension as raw_extension, function as raw_function, index as raw_index,
+    operator as raw_operator, policy as raw_policy, schema as raw_schema, sequence as raw_sequence,
+    table as raw_table, trigger as raw_trigger, view as raw_view,
 };
 use sqlx::postgres::types::Oid;
 use std::collections::BTreeSet;
@@ -335,6 +335,81 @@ async fn test_every_raw_type_row_is_converted_or_excluded() -> Result<()> {
                 .excluded_for("SystemSchema")
                 .any(|row| row.schema == "pg_catalog" && row.name == "int4range"),
             "expected pg_catalog range types to be excluded as SystemSchema"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_every_raw_collation_row_is_converted_or_excluded() -> Result<()> {
+    with_test_db(async |db| {
+        setup(db).await;
+        db.execute("CREATE COLLATION case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)")
+            .await;
+        db.execute("CREATE COLLATION adopted_collation (provider = icu, locale = 'und')")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD COLLATION adopted_collation")
+            .await;
+
+        let mut conn = db.conn().await;
+        let shared = shared::fetch(&mut conn).await?;
+        let raw = raw_collation::fetch(&mut conn).await?;
+        let converted = raw_collation::convert(&raw, &shared)?;
+
+        let accounted: BTreeSet<u32> = converted
+            .objects
+            .iter()
+            .map(|(oid, _)| oid.0)
+            .chain(converted.excluded.iter().map(|row| row.oid.0))
+            .collect();
+        let all: BTreeSet<u32> = raw.iter().map(|row| row.oid.0).collect();
+
+        let residue: Vec<&str> = raw
+            .iter()
+            .filter(|row| !accounted.contains(&row.oid.0))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "raw collation rows neither converted nor excluded: {:?}",
+            residue
+        );
+        assert_eq!(accounted, all);
+        assert_eq!(
+            converted.objects.len() + converted.excluded.len(),
+            raw.len(),
+            "a row was counted twice"
+        );
+
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, collation)| collation.name == "case_insensitive")
+        );
+
+        let adopted = converted
+            .excluded
+            .iter()
+            .find(|row| row.name == "adopted_collation")
+            .expect("the adopted collation should be excluded");
+        assert_eq!(
+            adopted.reason,
+            ExclusionReason::ExtensionOwned {
+                extension: "citext".to_string()
+            }
+        );
+        assert_eq!(adopted.kind, "collation");
+
+        // pg_catalog ships the built-in collations plus one per libc locale
+        // found at initdb; all of them are system rows.
+        assert!(
+            converted
+                .excluded_for("SystemSchema")
+                .any(|row| row.name == "default"),
+            "expected the built-in default collation to be excluded as SystemSchema"
         );
 
         Ok(())

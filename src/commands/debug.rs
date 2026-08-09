@@ -97,6 +97,10 @@ pub enum ObjectIdJson {
         source: String,
         target: String,
     },
+    Collation {
+        schema: String,
+        name: String,
+    },
     Grant {
         id: String,
     },
@@ -205,6 +209,10 @@ impl From<&DbObjectId> for ObjectIdJson {
             DbObjectId::Cast { source, target } => ObjectIdJson::Cast {
                 source: source.clone(),
                 target: target.clone(),
+            },
+            DbObjectId::Collation { schema, name } => ObjectIdJson::Collation {
+                schema: schema.clone(),
+                name: name.clone(),
             },
             DbObjectId::Grant { id } => ObjectIdJson::Grant { id: id.clone() },
             DbObjectId::Comment { object_id } => ObjectIdJson::Comment {
@@ -503,6 +511,7 @@ fn format_object_id(obj: &ObjectIdJson) -> String {
             format!("Operator: {}.{}({})", schema, name, arguments)
         }
         ObjectIdJson::Cast { source, target } => format!("Cast: ({} AS {})", source, target),
+        ObjectIdJson::Collation { schema, name } => format!("Collation: {}.{}", schema, name),
         ObjectIdJson::Grant { id } => format!("Grant: {}", id),
         ObjectIdJson::Comment { object_id } => {
             format!("Comment on {}", format_object_id(object_id))

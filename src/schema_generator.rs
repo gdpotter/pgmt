@@ -174,6 +174,8 @@ impl SchemaGenerator {
                 format!("{}domains/{}.sql", prefix, name)
             }
 
+            MigrationStep::Collation(op) => self.determine_file_for_object_id(&op.db_object_id()),
+
             MigrationStep::Table(op) => {
                 let (schema, name) = self.extract_table_info_from_operation(op);
                 let prefix = self.schema_path_prefix(&schema);
@@ -312,6 +314,9 @@ impl SchemaGenerator {
             }
             DbObjectId::Domain { schema, name } => {
                 format!("{}domains/{}.sql", self.schema_path_prefix(schema), name)
+            }
+            DbObjectId::Collation { schema, name } => {
+                format!("{}collations/{}.sql", self.schema_path_prefix(schema), name)
             }
             DbObjectId::Table { schema, name } => {
                 format!("{}tables/{}.sql", self.schema_path_prefix(schema), name)
@@ -730,6 +735,7 @@ impl SchemaGenerator {
             | DbObjectId::Extension { .. }
             | DbObjectId::Operator { .. }
             | DbObjectId::Cast { .. }
+            | DbObjectId::Collation { .. }
             | DbObjectId::Grant { .. }
             | DbObjectId::Comment { .. }
             | DbObjectId::Column { .. } => {

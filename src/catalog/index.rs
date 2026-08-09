@@ -3,6 +3,7 @@
 //!
 //! Loading lives in `catalog::raw::index`.
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
 
 /* ---------- Data structures ---------- */
@@ -49,7 +50,12 @@ impl std::fmt::Display for IndexType {
 #[derive(Debug, Clone)]
 pub struct IndexColumn {
     pub expression: String, // Column name or expression
-    pub collation: Option<String>,
+    /// Explicit per-key collation from `pg_index.indcollation`, recorded only
+    /// when it differs from what the key would inherit (the column's own
+    /// collation for plain keys, the default collation for expression keys).
+    /// `None` means the key uses its inherited collation and no COLLATE clause
+    /// is rendered.
+    pub collation: Option<CollationRef>,
     pub opclass: Option<String>,        // Operator class
     pub ordering: Option<String>,       // ASC/DESC for btree indexes
     pub nulls_ordering: Option<String>, // NULLS FIRST/LAST

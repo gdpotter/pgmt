@@ -4,6 +4,7 @@
 //! Types are read through `catalog::raw::custom_type`, which fetches the
 //! OID-keyed rows and converts them into these structs.
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
 
 /* ---------- Data structures ---------- */
@@ -42,6 +43,11 @@ pub struct CompositeAttribute {
     /// The attribute's type as the server renders it, with modifiers and array
     /// brackets. This is what the CREATE statement emits.
     pub type_name: String,
+    /// Explicit collation, schema-qualified. `None` when the attribute uses its
+    /// type's default collation, so plain `text` attributes never carry a
+    /// `COLLATE` clause. System collations (pg_catalog."C", etc.) are stored
+    /// and rendered but add no managed dependency.
+    pub collation: Option<CollationRef>,
     pub comment: Option<String>,
 }
 
@@ -109,6 +115,7 @@ mod tests {
             .map(|(name, type_name)| CompositeAttribute {
                 name: name.to_string(),
                 type_name: type_name.to_string(),
+                collation: None,
                 comment: None,
             })
             .collect();

@@ -113,6 +113,10 @@ fn to_id(row: &snapshot::Row) -> Option<DbObjectId> {
             schema: row.schema.clone().unwrap_or_default(),
             name: row.name.clone(),
         },
+        "collation" => DbObjectId::Collation {
+            schema: row.schema.clone().unwrap_or_default(),
+            name: row.name.clone(),
+        },
         "constraint" => DbObjectId::Constraint {
             schema: row.schema.clone().unwrap_or_default(),
             table: row.table.clone().unwrap_or_default(),

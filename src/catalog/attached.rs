@@ -13,6 +13,7 @@
 
 use crate::catalog::aggregate::Aggregate;
 use crate::catalog::cast::Cast;
+use crate::catalog::collation::Collation;
 use crate::catalog::constraint::Constraint;
 use crate::catalog::custom_type::CustomType;
 use crate::catalog::domain::Domain;
@@ -169,6 +170,6 @@ macro_rules! impl_attached {
 }
 
 impl_attached!(
-    Domain, Function, Aggregate, Operator, Cast, Sequence, Index, Constraint, Trigger, Policy,
-    Extension,
+    Domain, Collation, Function, Aggregate, Operator, Cast, Sequence, Index, Constraint, Trigger,
+    Policy, Extension,
 );

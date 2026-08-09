@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Features
+
+- Support custom collations (`CREATE COLLATION` with libc, ICU, and PG17+ builtin providers, including `deterministic` and ICU `rules`): create, drop, and comment, with dependency ordering and cascades across the domains, table columns, composite type attributes, indexes, and views that use them. Previously `pgmt apply` silently ignored collations — a schema with `CREATE COLLATION` and a dependent object failed on the target — and column `COLLATE` clauses were dropped from generated SQL ([#15](https://github.com/gdpotter/pgmt/issues/15))
+
 ### Bug Fixes
 
 - `--verbose` now reports progress while the schema is applied to the shadow database. That phase is the longest part of a run on a large schema and previously logged nothing above debug, so `--verbose` went silent for as long as it took and offered no way to tell a slow run from a hung one. Starting or pulling the shadow container, and verifying the final state, are likewise reported now.
