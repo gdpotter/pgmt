@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            pg_catalog.format_type(t.typbasetype, t.typtypmod) AS \"base_type!\",\n            t.typbasetype AS \"base_type_oid!\",\n            t.typnotnull AS \"not_null!\",\n            pg_catalog.pg_get_expr(t.typdefaultbin, 0) AS \"default?\",\n            CASE\n                WHEN t.typcollation != 0 AND t.typcollation != (\n                    SELECT oid FROM pg_collation WHERE collname = 'default'\n                ) THEN (SELECT collname FROM pg_collation WHERE oid = t.typcollation)\n                ELSE NULL\n            END AS \"collation?\"\n        FROM pg_type t\n        WHERE t.typtype = 'd'\n        ORDER BY t.oid\n        ",
+  "query": "\n        SELECT\n            t.oid AS \"oid!\",\n            t.typnamespace AS \"namespace!\",\n            t.typname AS \"name!\",\n            pg_catalog.format_type(t.typbasetype, t.typtypmod) AS \"base_type!\",\n            t.typbasetype AS \"base_type_oid!\",\n            t.typnotnull AS \"not_null!\",\n            pg_catalog.pg_get_expr(t.typdefaultbin, 0) AS \"default?\",\n            coll.collnamespace AS \"collation_namespace?\",\n            coll.collname AS \"collation_name?\"\n        FROM pg_type t\n        LEFT JOIN pg_collation coll ON coll.oid = t.typcollation AND t.typcollation != 0\n        WHERE t.typtype = 'd'\n        ORDER BY t.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -72,9 +72,25 @@
       },
       {
         "ordinal": 7,
-        "name": "collation?",
+        "name": "collation_namespace?",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "collation_name?",
         "type_info": "Name",
-        "origin": "Expression"
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
       }
     ],
     "parameters": {
@@ -88,8 +104,9 @@
       false,
       false,
       null,
-      null
+      false,
+      false
     ]
   },
-  "hash": "6fcb7d46dbf976da444392111161d117487ebc0043c868b42aa6c8b187ed8a15"
+  "hash": "09eb965dac592e64e2498a8b4e0954e9254f4b7c3b29b8dddfee27823869a8ed"
 }

@@ -20,6 +20,7 @@ use super::exclusion::{Converted, Excluded, ExclusionReason, is_system_schema};
 use super::oid_index::OidIndex;
 use super::reference::RawReference;
 use super::shared::{SharedCatalog, class};
+use crate::catalog::collation::CollationRef;
 use crate::catalog::domain::{Domain, DomainCheckConstraint};
 use crate::catalog::id::DbObjectId;
 use crate::catalog::utils::resolve_type_dependency;
@@ -39,9 +40,11 @@ pub struct RawDomain {
     pub not_null: bool,
     /// `pg_get_expr` of `typdefaultbin`.
     pub default: Option<String>,
-    /// The collation name, present only when the domain overrides the default
-    /// collation.
-    pub collation: Option<String>,
+    /// `typcollation`'s namespace and name, unresolved. A domain over a
+    /// collatable type always has one; which of them is a meaningful override
+    /// is the converter's call.
+    pub collation_namespace: Option<Oid>,
+    pub collation_name: Option<String>,
 }
 
 /// One CHECK constraint on a domain, already rendered by
@@ -236,6 +239,27 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
             depends_on.push(dep);
         }
 
+        // Every domain over a collatable type carries a collation, but the
+        // database-wide `pg_catalog."default"` is the absence of a choice and
+        // renders nothing.
+        let collation = row
+            .collation_namespace
+            .zip(row.collation_name.as_ref())
+            .and_then(|(namespace, name)| {
+                let collation_schema = namespaces.name(namespace)?;
+                (!(collation_schema == "pg_catalog" && name == "default")).then(|| CollationRef {
+                    schema: collation_schema.to_string(),
+                    name: name.clone(),
+                })
+            });
+        // A user-defined collation must exist before the domain that uses it;
+        // the collations PostgreSQL ships are not managed objects.
+        if let Some(collation) = &collation
+            && !is_system_schema(&collation.schema)
+        {
+            depends_on.push(collation.id());
+        }
+
         kept.insert(row.oid.0, converted.objects.len());
         converted.objects.push((
             row.oid,
@@ -245,7 +269,7 @@ pub fn convert(raw: &RawDomains, shared: &SharedCatalog) -> Result<Converted<(Oi
                 base_type: row.base_type.clone(),
                 not_null: row.not_null,
                 default: row.default.clone(),
-                collation: row.collation.clone(),
+                collation,
                 check_constraints: constraints.get(&row.oid.0).cloned().unwrap_or_default(),
                 comment: None,
                 depends_on,
@@ -315,13 +339,10 @@ async fn fetch_domains(conn: &mut PgConnection) -> Result<Vec<RawDomain>> {
             t.typbasetype AS "base_type_oid!",
             t.typnotnull AS "not_null!",
             pg_catalog.pg_get_expr(t.typdefaultbin, 0) AS "default?",
-            CASE
-                WHEN t.typcollation != 0 AND t.typcollation != (
-                    SELECT oid FROM pg_collation WHERE collname = 'default'
-                ) THEN (SELECT collname FROM pg_collation WHERE oid = t.typcollation)
-                ELSE NULL
-            END AS "collation?"
+            coll.collnamespace AS "collation_namespace?",
+            coll.collname AS "collation_name?"
         FROM pg_type t
+        LEFT JOIN pg_collation coll ON coll.oid = t.typcollation AND t.typcollation != 0
         WHERE t.typtype = 'd'
         ORDER BY t.oid
         "#
@@ -339,7 +360,8 @@ async fn fetch_domains(conn: &mut PgConnection) -> Result<Vec<RawDomain>> {
             base_type_oid: row.base_type_oid,
             not_null: row.not_null,
             default: row.default,
-            collation: row.collation,
+            collation_namespace: row.collation_namespace,
+            collation_name: row.collation_name,
         })
         .collect())
 }

@@ -22,6 +22,7 @@ const SCHEMA: &[&str] = &[
     "CREATE TYPE app.status AS ENUM ('active', 'retired')",
     "CREATE TYPE app.point2d AS (x integer, y integer)",
     "CREATE DOMAIN app.email AS text CHECK (VALUE LIKE '%@%')",
+    "CREATE COLLATION app.case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
     "CREATE SEQUENCE app.counter",
     r#"CREATE TABLE app.users (
         id integer PRIMARY KEY,
@@ -99,6 +100,7 @@ fn catalog_object_ids(catalog: &Catalog) -> BTreeSet<DbObjectId> {
     collect(&catalog.views, &mut ids);
     collect(&catalog.types, &mut ids);
     collect(&catalog.domains, &mut ids);
+    collect(&catalog.collations, &mut ids);
     collect(&catalog.functions, &mut ids);
     collect(&catalog.aggregates, &mut ids);
     collect(&catalog.operators, &mut ids);

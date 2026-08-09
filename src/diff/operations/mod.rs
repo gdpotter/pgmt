@@ -24,6 +24,7 @@ pub enum OperationKind {
 
 pub use aggregate::*;
 pub use cast::*;
+pub use collation::*;
 pub use comments::*;
 pub use constraint::*;
 pub use domain::*;
@@ -42,6 +43,7 @@ pub use view::*;
 
 pub mod aggregate;
 pub mod cast;
+pub mod collation;
 pub mod comments;
 pub mod constraint;
 pub mod domain;
@@ -66,6 +68,7 @@ pub enum MigrationStep {
     View(ViewOperation),
     Type(TypeOperation),
     Domain(DomainOperation),
+    Collation(CollationOperation),
     Sequence(SequenceOperation),
     Function(FunctionOperation),
     Aggregate(AggregateOperation),
@@ -98,6 +101,7 @@ impl MigrationStep {
             Self::View(op) => op.operation_kind(),
             Self::Type(op) => op.operation_kind(),
             Self::Domain(op) => op.operation_kind(),
+            Self::Collation(op) => op.operation_kind(),
             Self::Sequence(op) => op.operation_kind(),
             Self::Function(op) => op.operation_kind(),
             Self::Aggregate(op) => op.operation_kind(),

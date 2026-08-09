@@ -4,6 +4,7 @@
 //! Domains are read through `catalog::raw::domain`, which fetches the OID-keyed
 //! rows and converts them into these structs.
 
+use super::collation::CollationRef;
 use super::id::{DbObjectId, DependsOn};
 
 /// A CHECK constraint on a domain
@@ -21,7 +22,9 @@ pub struct Domain {
     pub base_type: String,
     pub not_null: bool,
     pub default: Option<String>,
-    pub collation: Option<String>,
+    /// Non-default collation, schema-qualified. Same-named collations can
+    /// exist in different schemas, so the bare name is not a usable identity.
+    pub collation: Option<CollationRef>,
     pub check_constraints: Vec<DomainCheckConstraint>,
     pub comment: Option<String>,
     pub depends_on: Vec<DbObjectId>,

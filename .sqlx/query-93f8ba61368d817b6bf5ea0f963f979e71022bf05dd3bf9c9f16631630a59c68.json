@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.oid AS \"oid!\",\n            c.collnamespace AS \"namespace!\",\n            c.collname AS \"name!\",\n            c.collprovider::text AS \"provider!\",\n            c.collisdeterministic AS \"deterministic!\",\n            to_jsonb(c)->>'collcollate' AS \"collcollate?\",\n            to_jsonb(c)->>'collctype' AS \"collctype?\",\n            to_jsonb(c)->>'colllocale' AS \"colllocale?\",\n            to_jsonb(c)->>'colliculocale' AS \"colliculocale?\",\n            to_jsonb(c)->>'collicurules' AS \"collicurules?\"\n        FROM pg_collation c\n        ORDER BY c.oid\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "oid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace!",
+        "type_info": "Oid",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collnamespace"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "provider!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "deterministic!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_collation",
+            "name": "collisdeterministic"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "collcollate?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "collctype?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "colllocale?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "colliculocale?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "collicurules?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "93f8ba61368d817b6bf5ea0f963f979e71022bf05dd3bf9c9f16631630a59c68"
+}

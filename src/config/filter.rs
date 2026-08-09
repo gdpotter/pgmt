@@ -116,6 +116,11 @@ impl ObjectFilter {
             .types
             .retain(|custom_type| self.should_include_schema(&custom_type.schema));
 
+        // Filter collations by schema
+        catalog
+            .collations
+            .retain(|collation| self.should_include_schema(&collation.schema));
+
         // Filter sequences by schema
         catalog
             .sequences

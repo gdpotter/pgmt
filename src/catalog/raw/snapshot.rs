@@ -351,6 +351,19 @@ pub fn branches() -> Vec<Branch> {
         .filter("t.typtype = 'd'")
         .filter(sql::not_a_system_namespace("n.nspname"))
         .filter(sql::not_extension_owned("pg_type", "t.oid")),
+        // raw::collation. `pg_catalog` holds the built-in collations and one per
+        // libc locale found at initdb, so the system-namespace filter is what
+        // separates a user collation from the hundreds the server ships.
+        Branch::new(
+            "collation",
+            "pg_collation c\n     JOIN pg_namespace n ON c.collnamespace = n.oid",
+            "pg_collation",
+            "c.oid",
+        )
+        .schema("n.nspname")
+        .name("c.collname")
+        .filter(sql::not_a_system_namespace("n.nspname"))
+        .filter(sql::not_extension_owned("pg_collation", "c.oid")),
         // raw::constraint. Primary keys are carried by their table, so they are
         // not constraints of their own here.
         Branch::new(

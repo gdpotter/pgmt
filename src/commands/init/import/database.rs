@@ -409,6 +409,9 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
     catalog.views.retain(|v| schema_set.contains(&v.schema));
     catalog.functions.retain(|f| schema_set.contains(&f.schema));
     catalog.types.retain(|t| schema_set.contains(&t.schema));
+    catalog
+        .collations
+        .retain(|c| schema_set.contains(&c.schema));
     catalog.sequences.retain(|s| schema_set.contains(&s.schema));
     catalog.indexes.retain(|i| schema_set.contains(&i.schema));
     catalog
@@ -457,6 +460,11 @@ fn filter_catalog_by_schemas(mut catalog: Catalog, selected_schemas: &[String]) 
     );
     insert_deps(
         &catalog.types,
+        &mut catalog.forward_deps,
+        &mut catalog.reverse_deps,
+    );
+    insert_deps(
+        &catalog.collations,
         &mut catalog.forward_deps,
         &mut catalog.reverse_deps,
     );

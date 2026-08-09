@@ -36,10 +36,11 @@ pub mod class {
     pub const PG_TRIGGER: &str = "pg_trigger";
     pub const PG_POLICY: &str = "pg_policy";
     pub const PG_EXTENSION: &str = "pg_extension";
+    pub const PG_COLLATION: &str = "pg_collation";
 
     /// The catalog tables above, the only ones anything here is addressed
     /// through.
-    pub const ALL: [&str; 11] = [
+    pub const ALL: [&str; 12] = [
         PG_CLASS,
         PG_PROC,
         PG_TYPE,
@@ -51,6 +52,7 @@ pub mod class {
         PG_TRIGGER,
         PG_POLICY,
         PG_EXTENSION,
+        PG_COLLATION,
     ];
 
     /// The constant naming this catalog table, for a name that arrives as a
