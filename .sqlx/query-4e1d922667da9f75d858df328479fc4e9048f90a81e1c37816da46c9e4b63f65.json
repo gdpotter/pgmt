@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            i.oid AS \"oid!\",\n            i.relnamespace AS \"namespace!\",\n            i.relname AS \"name!\",\n            t.oid AS \"table_oid!\",\n            t.relnamespace AS \"table_namespace!\",\n            t.relname AS \"table_name!\",\n            am.amname AS \"access_method!\",\n            idx.indisunique AS \"is_unique!\",\n            idx.indisclustered AS \"is_clustered!\",\n            idx.indisvalid AS \"is_valid!\",\n            pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS \"predicate?\",\n            ts.spcname AS \"tablespace?\",\n            i.reloptions AS \"reloptions?\",\n            (\n                SELECT con.conname\n                FROM pg_constraint con\n                WHERE con.conindid = i.oid\n                  AND con.contype IN ('p', 'u', 'x')\n                LIMIT 1\n            ) AS \"backing_constraint?\"\n        FROM pg_index idx\n        JOIN pg_class i ON idx.indexrelid = i.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_am am ON i.relam = am.oid\n        LEFT JOIN pg_tablespace ts ON i.reltablespace = ts.oid\n        ORDER BY i.oid\n        ",
+  "query": "\n        SELECT\n            i.oid AS \"oid!\",\n            i.relnamespace AS \"namespace!\",\n            i.relname AS \"name!\",\n            t.oid AS \"table_oid!\",\n            t.relnamespace AS \"table_namespace!\",\n            t.relname AS \"table_name!\",\n            am.amname AS \"access_method!\",\n            idx.indisunique AS \"is_unique!\",\n            idx.indisclustered AS \"is_clustered!\",\n            idx.indisvalid AS \"is_valid!\",\n            pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS \"predicate?\",\n            ts.spcname AS \"tablespace?\",\n            i.reloptions AS \"reloptions?\",\n            bc.conname AS \"backing_constraint?\"\n        FROM pg_index idx\n        JOIN pg_class i ON idx.indexrelid = i.oid\n        JOIN pg_class t ON idx.indrelid = t.oid\n        JOIN pg_am am ON i.relam = am.oid\n        LEFT JOIN pg_tablespace ts ON i.reltablespace = ts.oid\n        LEFT JOIN (\n            SELECT con.conindid, min(con.conname) AS conname\n            FROM pg_constraint con\n            WHERE con.contype IN ('p', 'u', 'x')\n              AND con.conindid <> 0\n            GROUP BY con.conindid\n        ) bc ON bc.conindid = i.oid\n        ORDER BY i.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -144,7 +144,7 @@
       {
         "ordinal": 13,
         "name": "backing_constraint?",
-        "type_info": "Name",
+        "type_info": "Text",
         "origin": "Expression"
       }
     ],
@@ -168,5 +168,5 @@
       null
     ]
   },
-  "hash": "c037a46f1ea700fa485682900044bcc0d6984b1fcdf7c19cf96cdd7b102511bb"
+  "hash": "4e1d922667da9f75d858df328479fc4e9048f90a81e1c37816da46c9e4b63f65"
 }

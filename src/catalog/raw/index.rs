@@ -322,18 +322,19 @@ async fn fetch_indexes(conn: &mut PgConnection) -> Result<Vec<RawIndex>> {
             pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS "predicate?",
             ts.spcname AS "tablespace?",
             i.reloptions AS "reloptions?",
-            (
-                SELECT con.conname
-                FROM pg_constraint con
-                WHERE con.conindid = i.oid
-                  AND con.contype IN ('p', 'u', 'x')
-                LIMIT 1
-            ) AS "backing_constraint?"
+            bc.conname AS "backing_constraint?"
         FROM pg_index idx
         JOIN pg_class i ON idx.indexrelid = i.oid
         JOIN pg_class t ON idx.indrelid = t.oid
         JOIN pg_am am ON i.relam = am.oid
         LEFT JOIN pg_tablespace ts ON i.reltablespace = ts.oid
+        LEFT JOIN (
+            SELECT con.conindid, min(con.conname) AS conname
+            FROM pg_constraint con
+            WHERE con.contype IN ('p', 'u', 'x')
+              AND con.conindid <> 0
+            GROUP BY con.conindid
+        ) bc ON bc.conindid = i.oid
         ORDER BY i.oid
         "#
     )
