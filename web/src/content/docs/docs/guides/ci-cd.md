@@ -15,6 +15,26 @@ Patterns for integrating pgmt with CI/CD pipelines.
 | `pgmt migrate diff`     | Detect drift between schema and target database | Scheduled / pre-deploy |
 | `pgmt migrate apply`    | Deploy migrations to target database            | On merge to main       |
 
+## Which database each command needs
+
+Setting the wrong `PGMT_*` variable is the most common CI failure, because an
+unset one usually falls back to something instead of erroring:
+
+| Command                 | Databases                | Environment variables                |
+| ----------------------- | ------------------------ | ------------------------------------ |
+| `pgmt apply`            | dev + shadow             | `PGMT_DEV_URL`, `PGMT_SHADOW_URL`    |
+| `pgmt config validate`  | none                     | —                                    |
+| `pgmt migrate validate` | shadow                   | `PGMT_SHADOW_URL`                    |
+| `pgmt migrate diff`     | target + shadow          | `PGMT_TARGET_URL`, `PGMT_SHADOW_URL` |
+| `pgmt migrate apply`    | target                   | `PGMT_TARGET_URL`                    |
+
+`pgmt migrate validate` and `pgmt migrate diff` never touch your dev database —
+they replay schema files into the shadow database and compare that against
+migration history or the target. Setting `PGMT_DEV_URL` for them has no effect,
+and pgmt falls back to starting a shadow database in Docker, which most CI
+runners cannot do. Point `PGMT_SHADOW_URL` at an empty database on the CI
+Postgres service instead.
+
 ## Using pgmt apply in CI
 
 For integration tests or setting up a dev database in CI, use `pgmt apply`:
@@ -79,8 +99,8 @@ jobs:
       - name: Install pgmt
         uses: gdpotter/pgmt@v0
 
-      - name: Setup database
-        run: createdb testdb
+      - name: Setup shadow database
+        run: createdb shadowdb
         env:
           PGPASSWORD: ci_test
           PGHOST: localhost
@@ -92,7 +112,7 @@ jobs:
       - name: Validate migrations
         run: pgmt migrate validate
         env:
-          PGMT_DEV_URL: postgres://postgres:ci_test@localhost/testdb
+          PGMT_SHADOW_URL: postgres://postgres:ci_test@localhost/shadowdb
 
   deploy:
     if: github.ref == 'refs/heads/main'
@@ -165,7 +185,7 @@ jobs:
             echo "drift_detected=false" >> $GITHUB_OUTPUT
           fi
         env:
-          PGMT_DEV_URL: postgres://postgres:ci_test@localhost/shadowdb
+          PGMT_SHADOW_URL: postgres://postgres:ci_test@localhost/shadowdb
           PGMT_TARGET_URL: ${{ secrets.PROD_DATABASE_URL }}
 
       - name: Create issue on drift
@@ -225,7 +245,7 @@ validate-schema:
     - postgres:17
   variables:
     POSTGRES_PASSWORD: test
-    PGMT_DEV_URL: postgres://postgres:test@postgres/postgres
+    PGMT_SHADOW_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt config validate
@@ -248,7 +268,7 @@ check-drift:
     - postgres:17
   variables:
     POSTGRES_PASSWORD: test
-    PGMT_DEV_URL: postgres://postgres:test@postgres/postgres
+    PGMT_SHADOW_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
     - pgmt migrate diff --format summary
@@ -306,9 +326,29 @@ Example JSON output:
     "destructive_changes": 1,
     "safe_changes": 2
   },
-  "changes": [...]
+  "changes": [
+    {
+      "kind": "table",
+      "schema": "public",
+      "name": "partners",
+      "object": "table public.partners",
+      "destructive": false,
+      "sql": ["CREATE TABLE \"public\".\"partners\" (...);"]
+    }
+  ]
 }
 ```
+
+`kind` is a stable lowercase word (`table`, `view`, `function`, `index`,
+`grant`, ...) — filter on it rather than on `object`, which is a human-readable
+rendering. For example, to list only destructive changes:
+
+```bash
+pgmt migrate diff --format json | jq -r '.changes[] | select(.destructive) | .object'
+```
+
+Diagnostics and progress messages go to stderr, so redirecting stdout gives you
+clean JSON.
 
 ## Exit Codes
 

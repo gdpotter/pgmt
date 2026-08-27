@@ -190,7 +190,7 @@ pgmt diff [OPTIONS]
 
 ```bash
 --format <FORMAT>             # detailed | summary | sql | json
---output-sql <FILE>           # Save SQL to file
+--output-sql <FILE>           # Save SQL to file (works with any --format)
 --dev-url <URL>               # Development database [env: PGMT_DEV_URL]
 --shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
@@ -399,10 +399,13 @@ pgmt migrate diff [OPTIONS]
 
 ```bash
 --format <FORMAT>             # detailed | summary | sql | json
---output-sql <FILE>           # Save remediation SQL to file
+--output-sql <FILE>           # Save remediation SQL to file (works with any --format)
 --target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
 --shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
+
+Diagnostics go to stderr and the selected format goes to stdout, so
+`pgmt migrate diff --format json > drift.json` is safe to redirect.
 
 **Examples:**
 
