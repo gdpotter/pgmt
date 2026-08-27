@@ -128,6 +128,68 @@ impl DbObjectId {
             DbObjectId::Comment { object_id } => object_id.schema(),
         }
     }
+
+    /// The object kind as a lowercase word, matching the leading word of the
+    /// `Display` form.
+    ///
+    /// This is a machine-readable name that consumers key on (`--format json`
+    /// emits it), so a variant's word is part of the output contract: renaming
+    /// one breaks every pipeline filtering on it. A `Comment` reports the kind
+    /// it is on, prefixed, rather than the inner object's own kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DbObjectId::Schema { .. } => "schema",
+            DbObjectId::Table { .. } => "table",
+            DbObjectId::View { .. } => "view",
+            DbObjectId::Type { .. } => "type",
+            DbObjectId::Domain { .. } => "domain",
+            DbObjectId::Collation { .. } => "collation",
+            DbObjectId::Function { .. } => "function",
+            DbObjectId::Procedure { .. } => "procedure",
+            DbObjectId::Sequence { .. } => "sequence",
+            DbObjectId::Index { .. } => "index",
+            DbObjectId::Constraint { .. } => "constraint",
+            DbObjectId::Grant { .. } => "grant",
+            DbObjectId::Trigger { .. } => "trigger",
+            DbObjectId::Policy { .. } => "policy",
+            DbObjectId::Extension { .. } => "extension",
+            DbObjectId::Aggregate { .. } => "aggregate",
+            DbObjectId::Operator { .. } => "operator",
+            DbObjectId::Cast { .. } => "cast",
+            DbObjectId::Column { .. } => "column",
+            DbObjectId::Comment { .. } => "comment",
+        }
+    }
+
+    /// The object's own name, without its schema: what `Display` prints after
+    /// the schema qualifier. A function or aggregate reports the bare name, not
+    /// the signature — [`Display`] is the fully qualified form.
+    ///
+    /// [`Display`]: fmt::Display
+    pub fn name(&self) -> String {
+        match self {
+            DbObjectId::Schema { name }
+            | DbObjectId::Table { name, .. }
+            | DbObjectId::View { name, .. }
+            | DbObjectId::Type { name, .. }
+            | DbObjectId::Domain { name, .. }
+            | DbObjectId::Collation { name, .. }
+            | DbObjectId::Function { name, .. }
+            | DbObjectId::Procedure { name, .. }
+            | DbObjectId::Sequence { name, .. }
+            | DbObjectId::Index { name, .. }
+            | DbObjectId::Constraint { name, .. }
+            | DbObjectId::Trigger { name, .. }
+            | DbObjectId::Policy { name, .. }
+            | DbObjectId::Extension { name }
+            | DbObjectId::Aggregate { name, .. }
+            | DbObjectId::Operator { name, .. } => name.clone(),
+            DbObjectId::Column { column, .. } => column.clone(),
+            DbObjectId::Grant { id } => id.clone(),
+            DbObjectId::Cast { source, target } => format!("({source} AS {target})"),
+            DbObjectId::Comment { object_id } => object_id.name(),
+        }
+    }
 }
 
 impl fmt::Display for DbObjectId {

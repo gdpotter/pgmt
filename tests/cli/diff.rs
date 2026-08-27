@@ -165,16 +165,33 @@ mod diff_formats {
                 "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100));",
             )?;
 
-            // Test JSON format - just verify it contains JSON-like output
-            // The exact structure will be validated by looking for key JSON elements
-            helper
+            // stdout is the JSON document and nothing else: a CI job pipes it
+            // straight into jq, so anything printed beside it is a parse error.
+            let assert = helper
                 .command()
                 .args(["diff", "--format", "json"])
                 .assert()
-                .code(1)
-                .stdout(predicate::str::contains("has_differences"))
-                .stdout(predicate::str::contains("summary"))
-                .stdout(predicate::str::contains("changes"));
+                .code(1);
+            let stdout = String::from_utf8(assert.get_output().stdout.clone())?;
+            let parsed: serde_json::Value = serde_json::from_str(&stdout)?;
+
+            assert_eq!(parsed["has_differences"], serde_json::json!(true));
+            assert!(parsed["summary"]["total_changes"].as_u64().unwrap() > 0);
+
+            // Each change names its object in fields a filter can key on, not as
+            // a rendered blob. `Table { schema: "public", ... }` — Rust's `Debug`
+            // form of the identity — is what this pins against.
+            let change = &parsed["changes"][0];
+            assert_eq!(change["kind"], serde_json::json!("table"));
+            assert_eq!(change["schema"], serde_json::json!("public"));
+            assert_eq!(change["name"], serde_json::json!("users"));
+            assert_eq!(change["object"], serde_json::json!("table public.users"));
+            assert!(change["destructive"].is_boolean());
+            assert!(change["sql"].is_array());
+            assert!(
+                !stdout.contains("schema: \""),
+                "the JSON must not carry a Rust Debug rendering: {stdout}"
+            );
 
             Ok(())
         })

@@ -156,7 +156,7 @@ fn output_detailed_format(
     println!("{}", "━".repeat(70));
 
     for (i, step) in steps.iter().enumerate() {
-        println!("\n{}. {:?}", i + 1, step.id());
+        println!("\n{}. {}", i + 1, step.id());
         println!(
             "Status: {}",
             if step.has_destructive_sql() {
@@ -310,8 +310,17 @@ fn output_json_format(steps: &[MigrationStep], context: &DiffContext) -> Result<
     let changes: Vec<serde_json::Value> = steps
         .iter()
         .map(|step| {
+            let id = step.id();
             json!({
-                "type": format!("{:?}", step.id()),
+                // The identity of the object that changed, as three stable
+                // fields rather than one rendered blob: `kind` is what a CI
+                // filter keys on, `object` is what a human reads. Rust's
+                // `Debug` form is neither, and leaks the enum's shape into an
+                // output contract.
+                "kind": id.kind(),
+                "schema": id.schema(),
+                "name": id.name(),
+                "object": id.to_string(),
                 "destructive": step.has_destructive_sql(),
                 "sql": step.to_sql().iter().map(|r| &r.sql).collect::<Vec<_>>(),
             })
