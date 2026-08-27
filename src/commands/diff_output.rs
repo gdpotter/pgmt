@@ -45,8 +45,22 @@ pub fn output_diff(
     to_catalog: &Catalog,
     output_file: Option<&str>,
 ) -> Result<()> {
+    // `--output-sql` names a destination, not a format: honour it whatever
+    // `--format` selects, so `--format json --output-sql fix.sql` still leaves
+    // the remediation file beside the JSON a CI job parses.
+    if let Some(file_path) = output_file {
+        std::fs::write(file_path, render_sql_script(steps, context))?;
+        eprintln!("SQL saved to {}", file_path);
+    }
+
     match format {
-        DiffFormat::Sql => output_sql_format(steps, context, output_file),
+        // Already written above; a second copy on stdout would break `pgmt
+        // migrate diff --format sql > fix.sql` into the same file twice.
+        DiffFormat::Sql if output_file.is_some() => Ok(()),
+        DiffFormat::Sql => {
+            println!("{}", render_sql_script(steps, context));
+            Ok(())
+        }
         DiffFormat::Summary => {
             output_summary_format(steps);
             Ok(())
@@ -61,11 +75,12 @@ pub fn has_differences(steps: &[MigrationStep]) -> bool {
     !steps.is_empty()
 }
 
-fn output_sql_format(
-    steps: &[MigrationStep],
-    context: &DiffContext,
-    output_file: Option<&str>,
-) -> Result<()> {
+/// The remediation script: a header naming the two sides, then every rendered
+/// statement.
+///
+/// The renderers own statement termination, so nothing is appended here — a
+/// semicolon added on top of a terminated statement is what produced `... ;;`.
+fn render_sql_script(steps: &[MigrationStep], context: &DiffContext) -> String {
     let mut output = String::new();
     output.push_str(&format!(
         "-- SQL to bring {} in sync with {}\n",
@@ -80,14 +95,7 @@ fn output_sql_format(
         }
     }
 
-    if let Some(file_path) = output_file {
-        std::fs::write(file_path, &output)?;
-        println!("SQL saved to {}", file_path);
-    } else {
-        println!("{}", output);
-    }
-
-    Ok(())
+    output
 }
 
 fn output_summary_format(steps: &[MigrationStep]) {

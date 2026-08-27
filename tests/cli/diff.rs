@@ -334,13 +334,20 @@ mod diff_output_file {
                 ])
                 .assert()
                 .code(1)
-                .stdout(predicate::str::contains("SQL saved to"));
+                // The confirmation is a diagnostic, not payload: it goes to
+                // stderr so that `--format json --output-sql` still leaves clean
+                // JSON on stdout for a CI job to parse.
+                .stdout(predicate::str::is_empty())
+                .stderr(predicate::str::contains("SQL saved to"));
 
             // Verify file was created and contains SQL
             assert!(output_file.exists());
             let content = fs::read_to_string(&output_file)?;
             assert!(content.contains("ALTER TABLE"));
             assert!(content.contains("-- SQL to bring"));
+            // The renderers terminate their own statements; nothing appends a
+            // second semicolon on the way out.
+            assert!(!content.contains(";;"));
 
             Ok(())
         })
