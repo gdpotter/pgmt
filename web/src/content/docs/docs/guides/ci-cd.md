@@ -20,13 +20,13 @@ Patterns for integrating pgmt with CI/CD pipelines.
 Setting the wrong `PGMT_*` variable is the most common CI failure, because an
 unset one usually falls back to something instead of erroring:
 
-| Command                 | Databases                | Environment variables                |
-| ----------------------- | ------------------------ | ------------------------------------ |
-| `pgmt apply`            | dev + shadow             | `PGMT_DEV_URL`, `PGMT_SHADOW_URL`    |
-| `pgmt config validate`  | none                     | —                                    |
-| `pgmt migrate validate` | shadow                   | `PGMT_SHADOW_URL`                    |
-| `pgmt migrate diff`     | target + shadow          | `PGMT_TARGET_URL`, `PGMT_SHADOW_URL` |
-| `pgmt migrate apply`    | target                   | `PGMT_TARGET_URL`                    |
+| Command                 | Databases       | Environment variables                |
+| ----------------------- | --------------- | ------------------------------------ |
+| `pgmt apply`            | dev + shadow    | `PGMT_DEV_URL`, `PGMT_SHADOW_URL`    |
+| `pgmt config validate`  | none            | —                                    |
+| `pgmt migrate validate` | shadow          | `PGMT_SHADOW_URL`                    |
+| `pgmt migrate diff`     | target + shadow | `PGMT_TARGET_URL`, `PGMT_SHADOW_URL` |
+| `pgmt migrate apply`    | target          | `PGMT_TARGET_URL`                    |
 
 `pgmt migrate validate` and `pgmt migrate diff` never touch your dev database —
 they replay schema files into the shadow database and compare that against
