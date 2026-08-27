@@ -140,8 +140,13 @@ async fn test_migration_validation_object_filtering() -> Result<()> {
     helper.run_migration_test(
         &[
             "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)",
-            // Include the migration tracking table that should be filtered out
+            // Every table pgmt creates for its own bookkeeping should be
+            // filtered out. `migrate apply` creates all three on any project,
+            // module or not, so one missing from the filter is reported as
+            // drift on every target.
             "CREATE TABLE pgmt_migrations (version BIGINT PRIMARY KEY, description TEXT NOT NULL, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, checksum TEXT NOT NULL)",
+            "CREATE TABLE pgmt_migrations_sections (id SERIAL PRIMARY KEY, migration_version BIGINT NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE pgmt_migrations_modules (module TEXT PRIMARY KEY, source TEXT NOT NULL)",
         ],
         &[],
         &[],

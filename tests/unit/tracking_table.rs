@@ -107,6 +107,7 @@ fn test_object_filter_pgmt_internal_table_recognition() {
 
     // Should recognize the sections table
     assert!(filter.is_pgmt_internal_table("internal", "migration_history_sections"));
+    assert!(filter.is_pgmt_internal_table("internal", "migration_history_modules"));
 
     // Should not recognize other tables
     assert!(!filter.is_pgmt_internal_table("internal", "other_table"));

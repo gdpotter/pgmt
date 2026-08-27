@@ -78,10 +78,14 @@ impl ObjectFilter {
             return false;
         }
 
-        // Check all pgmt internal table patterns
+        // Every table `TrackingStore` addresses. A tracking table pgmt creates
+        // but does not list here is reported as drift against schema files that
+        // will never declare it, and `migrate diff` proposes dropping pgmt's own
+        // bookkeeping.
         let internal_tables = [
             self.tracking_table.name.as_str(), // pgmt_migrations
             &format!("{}_sections", self.tracking_table.name), // pgmt_migrations_sections
+            &format!("{}_modules", self.tracking_table.name), // pgmt_migrations_modules
         ];
 
         internal_tables.contains(&table_name)
@@ -259,6 +263,8 @@ mod tests {
         assert!(filter.is_pgmt_internal_table("public", "pgmt_migrations"));
         // Sections table
         assert!(filter.is_pgmt_internal_table("public", "pgmt_migrations_sections"));
+        // Module subscription table
+        assert!(filter.is_pgmt_internal_table("public", "pgmt_migrations_modules"));
         // Not internal - wrong schema
         assert!(!filter.is_pgmt_internal_table("other", "pgmt_migrations"));
         // Not internal - different table
@@ -316,6 +322,7 @@ mod tests {
         // Sections table should also be excluded
         assert!(!filter.should_include_table("internal", "migration_history_sections"));
         assert!(filter.is_pgmt_internal_table("internal", "migration_history_sections"));
+        assert!(filter.is_pgmt_internal_table("internal", "migration_history_modules"));
 
         // Other tables in the same schema should not be included
         assert!(!filter.should_include_table("internal", "other_table"));

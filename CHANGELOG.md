@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Log records now go to stderr instead of stdout. `pgmt migrate diff --format json > drift.json` and `--format sql | psql` could be corrupted by a log line interleaved into the payload. The line that usually did it was a slow-statement warning, which fires only when a statement is slow — so the failure appeared under CI load and never in development.
 - `pgmt migrate diff --format json` names the changed object in three stable fields — `kind`, `schema`, `name` — plus a readable `object`, instead of a single `type` field carrying Rust's internal `Debug` rendering (`Table { schema: "public", name: "partners" }`). `pgmt diff --format detailed` shows the readable form too.
+- `pgmt migrate diff` no longer reports pgmt's own `{tracking_table}_modules` table as drift. `migrate apply` creates it on every target, module project or not, and only the `_sections` companion was being filtered out.
 - Generated migrations no longer emit SQL statements without a trailing semicolon. `DROP TRIGGER`, `DROP CAST`, `DROP AGGREGATE`, `DROP OPERATOR`, and `CREATE TYPE ... AS RANGE` ran into the statement that followed them, so any migration containing one failed to parse. Modifying a trigger, cast, or operator was affected as well as dropping it, since those are rendered as a drop followed by a create. `pgmt diff --format sql` also stops doubling the semicolon on statements that already had one.
 
 ## 0.6.3 - 2026-08-10
