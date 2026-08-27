@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.6.4 - 2026-08-27
+
 ### Bug Fixes
 
 - Log records now go to stderr instead of stdout. `pgmt migrate diff --format json > drift.json` and `--format sql | psql` could be corrupted by a log line interleaved into the payload. The line that usually did it was a slow-statement warning, which fires only when a statement is slow — so the failure appeared under CI load and never in development.
