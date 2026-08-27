@@ -27,13 +27,13 @@ impl SqlRenderer for TypeOperation {
                         definition
                     ),
                     "RANGE" => format!(
-                        "CREATE TYPE {}.{} AS RANGE {}",
+                        "CREATE TYPE {}.{} AS RANGE {};",
                         quote_ident(schema),
                         quote_ident(name),
                         definition
                     ),
                     _ => format!(
-                        "CREATE TYPE {}.{} AS {} {}",
+                        "CREATE TYPE {}.{} AS {} {};",
                         quote_ident(schema),
                         quote_ident(name),
                         kind,
@@ -123,7 +123,7 @@ mod tests {
         let rendered = op.to_sql();
         assert_eq!(
             rendered[0].sql,
-            "CREATE TYPE \"public\".\"floatrange\" AS RANGE (SUBTYPE = float8)"
+            "CREATE TYPE \"public\".\"floatrange\" AS RANGE (SUBTYPE = float8);"
         );
     }
 

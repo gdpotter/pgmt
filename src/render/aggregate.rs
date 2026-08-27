@@ -53,7 +53,7 @@ fn render_create_aggregate(aggregate: &Aggregate) -> RenderedSql {
 
 fn render_drop_aggregate(identifier: &AggregateIdentifier) -> RenderedSql {
     let sql = format!(
-        "DROP AGGREGATE \"{}\".\"{}\"({})",
+        "DROP AGGREGATE \"{}\".\"{}\"({});",
         identifier.schema, identifier.name, identifier.arguments
     );
     RenderedSql::new(sql)
@@ -120,7 +120,7 @@ mod tests {
         let rendered = render_drop_aggregate(&identifier);
         assert_eq!(
             rendered.sql,
-            "DROP AGGREGATE \"public\".\"group_concat\"(text)"
+            "DROP AGGREGATE \"public\".\"group_concat\"(text);"
         );
         assert_eq!(rendered.safety, Safety::Safe);
     }

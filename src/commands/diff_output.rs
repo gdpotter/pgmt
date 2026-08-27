@@ -76,7 +76,7 @@ fn output_sql_format(
     for step in steps {
         for rendered in step.to_sql() {
             output.push_str(&rendered.sql);
-            output.push_str(";\n\n");
+            output.push_str("\n\n");
         }
     }
 

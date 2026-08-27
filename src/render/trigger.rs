@@ -55,7 +55,7 @@ fn render_create_trigger(trigger: &Trigger) -> RenderedSql {
 
 fn render_drop_trigger(identifier: &TriggerIdentifier) -> RenderedSql {
     let sql = format!(
-        "DROP TRIGGER \"{}\" ON \"{}\".\"{}\"",
+        "DROP TRIGGER \"{}\" ON \"{}\".\"{}\";",
         identifier.name, identifier.schema, identifier.table
     );
     RenderedSql::new(sql)
@@ -153,7 +153,7 @@ mod tests {
         let rendered = render_drop_trigger(&identifier);
         assert_eq!(
             rendered.sql,
-            "DROP TRIGGER \"update_timestamp\" ON \"public\".\"users\""
+            "DROP TRIGGER \"update_timestamp\" ON \"public\".\"users\";"
         );
         assert_eq!(rendered.safety, Safety::Safe);
     }
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(rendered_list.len(), 1);
         assert_eq!(
             rendered_list[0].sql,
-            "DROP TRIGGER \"update_timestamp\" ON \"public\".\"users\""
+            "DROP TRIGGER \"update_timestamp\" ON \"public\".\"users\";"
         );
     }
 

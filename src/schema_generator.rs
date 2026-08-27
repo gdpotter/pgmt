@@ -459,9 +459,6 @@ impl SchemaGenerator {
                     content.push('\n');
                 }
                 content.push_str(sql);
-                if !sql.ends_with(';') {
-                    content.push(';');
-                }
                 content.push('\n');
             }
 

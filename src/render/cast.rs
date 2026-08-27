@@ -35,7 +35,7 @@ fn render_create_cast(cast: &Cast) -> RenderedSql {
 
 fn render_drop_cast(identifier: &CastIdentifier) -> RenderedSql {
     RenderedSql::new(format!(
-        "DROP CAST ({} AS {})",
+        "DROP CAST ({} AS {});",
         identifier.source, identifier.target
     ))
 }
@@ -73,7 +73,7 @@ mod tests {
     fn test_render_drop_cast() {
         let identifier = CastIdentifier::from_cast(&test_cast());
         let rendered = render_drop_cast(&identifier);
-        assert_eq!(rendered.sql, "DROP CAST (celsius AS fahrenheit)");
+        assert_eq!(rendered.sql, "DROP CAST (celsius AS fahrenheit);");
     }
 
     #[test]

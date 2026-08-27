@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- Generated migrations no longer emit SQL statements without a trailing semicolon. `DROP TRIGGER`, `DROP CAST`, `DROP AGGREGATE`, `DROP OPERATOR`, and `CREATE TYPE ... AS RANGE` ran into the statement that followed them, so any migration containing one failed to parse. Modifying a trigger, cast, or operator was affected as well as dropping it, since those are rendered as a drop followed by a create. `pgmt diff --format sql` also stops doubling the semicolon on statements that already had one.
+
 ## 0.6.3 - 2026-08-10
 
 ### Features

@@ -37,7 +37,7 @@ fn render_create_operator(operator: &Operator) -> RenderedSql {
 fn render_drop_operator(identifier: &OperatorIdentifier) -> RenderedSql {
     // The operator symbol is not a quotable identifier; the schema is.
     RenderedSql::new(format!(
-        "DROP OPERATOR {}.{} ({})",
+        "DROP OPERATOR {}.{} ({});",
         quote_ident(&identifier.schema),
         identifier.name,
         identifier.arguments
@@ -75,7 +75,7 @@ mod tests {
         let rendered = render_drop_operator(&identifier);
         assert_eq!(
             rendered.sql,
-            "DROP OPERATOR \"public\".=== (integer, integer)"
+            "DROP OPERATOR \"public\".=== (integer, integer);"
         );
     }
 
@@ -87,7 +87,7 @@ mod tests {
             arguments: "NONE, integer".to_string(),
         };
         let rendered = render_drop_operator(&identifier);
-        assert_eq!(rendered.sql, "DROP OPERATOR \"public\".@@ (NONE, integer)");
+        assert_eq!(rendered.sql, "DROP OPERATOR \"public\".@@ (NONE, integer);");
     }
 
     #[test]
