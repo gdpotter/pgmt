@@ -37,15 +37,17 @@ pub struct RawFunction {
     pub prokind: String,
     /// `pg_get_function_identity_arguments` — the signature a function is
     /// identified by, rendered relative to the connection's `search_path`.
-    /// Absent for a routine in a system schema, which the converter excludes:
-    /// rendering a signature for every built-in routine costs more than the
-    /// answer is worth.
+    /// Absent for a routine the converter excludes — one in a system schema or
+    /// owned by an extension — since rendering a signature for a routine that
+    /// gets no identity costs more than the answer is worth.
     pub arguments: Option<String>,
     /// `pg_get_functiondef` — the complete `CREATE FUNCTION` statement. Absent
-    /// for a routine in a system schema, which the converter excludes: rendering
-    /// a definition for every built-in routine costs more than the whole load.
+    /// for a routine the converter excludes, on the same terms: rendering a
+    /// definition for every built-in and extension routine costs more than the
+    /// whole load.
     pub definition: Option<String>,
-    /// `pg_get_function_result`, absent for a procedure.
+    /// `pg_get_function_result`. Absent for a procedure, and for a routine the
+    /// converter excludes.
     pub return_type: Option<String>,
     /// `prorettype`, unresolved: an array's own OID, not its element type's.
     pub return_type_oid: Oid,
@@ -480,42 +482,78 @@ async fn fetch_functions(conn: &mut PgConnection) -> Result<Vec<RawFunction>> {
     // Aggregates are their own object kind, reconstructed from `pg_aggregate`;
     // `pg_get_functiondef` cannot render them at all.
     //
-    // The system-schema test mirrors `exclusion::sql::not_a_system_namespace`,
-    // spelled out because `sqlx::query!` takes a literal: the row still has to
-    // arrive for the converter to account for its exclusion, but rendering a
-    // definition it will discard is the single most expensive thing in the load,
-    // and rendering the identity signature is the next most expensive.
+    // `renderable` is the two exclusions the converter drops a routine for,
+    // spelled in SQL because `sqlx::query!` takes a literal and cannot
+    // interpolate `exclusion::sql`: the system-schema test mirrors
+    // `not_a_system_namespace`, the `pg_depend` test mirrors
+    // `not_extension_owned('pg_proc', ...)`. The row still has to arrive for the
+    // converter to account for its exclusion, but the three server-side
+    // renderings below are the most expensive thing in the whole load and
+    // nothing reads them for a row that will be dropped. On a database carrying
+    // a large extension — PostGIS alone declares over a thousand routines —
+    // rendering them is the difference between a load that takes a second and
+    // one that does not. The two spellings must stay in step: a routine this
+    // predicate skips and the converter then keeps would be rendered as an
+    // empty `CREATE`, which `convert` refuses.
+    //
+    // Extension ownership is a join against the `pg_depend` rows rather than a
+    // correlated `NOT EXISTS`, because the planner charges a correlated subplan
+    // per row without knowing the `AND` short-circuits: the estimate crosses
+    // `jit_above_cost` and the query then pays tens of milliseconds compiling a
+    // plan for work it skips, cancelling out the saving.
     let rows = sqlx::query!(
         r#"
         SELECT
-            p.oid AS "oid!",
-            p.pronamespace AS "namespace!",
-            p.proname AS "name!",
-            p.prokind::text AS "prokind!",
-            CASE
-                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-                 AND n.nspname NOT LIKE 'pg_temp_%'
-                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
-                THEN pg_catalog.pg_get_function_identity_arguments(p.oid)
+            base.oid AS "oid!",
+            base.namespace AS "namespace!",
+            base.name AS "name!",
+            base.prokind AS "prokind!",
+            CASE WHEN base.renderable THEN
+                pg_catalog.pg_get_function_identity_arguments(base.oid)
             END AS "arguments?",
-            CASE
-                WHEN n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-                 AND n.nspname NOT LIKE 'pg_temp_%'
-                 AND n.nspname NOT LIKE 'pg_toast_temp_%'
-                THEN pg_catalog.pg_get_functiondef(p.oid)
+            CASE WHEN base.renderable THEN
+                pg_catalog.pg_get_functiondef(base.oid)
             END AS "definition?",
-            pg_catalog.pg_get_function_result(p.oid) AS "return_type?",
-            p.prorettype AS "return_type_oid!",
-            l.lanname AS "language!",
-            p.provolatile::text AS "volatility!",
-            p.proisstrict AS "is_strict!",
-            p.prosecdef AS "security_definer!",
-            p.pronargs AS "num_args!"
-        FROM pg_proc p
-        JOIN pg_language l ON p.prolang = l.oid
-        JOIN pg_namespace n ON p.pronamespace = n.oid
-        WHERE p.prokind != 'a'
-        ORDER BY p.oid
+            CASE WHEN base.renderable THEN
+                pg_catalog.pg_get_function_result(base.oid)
+            END AS "return_type?",
+            base.return_type_oid AS "return_type_oid!",
+            base.language AS "language!",
+            base.volatility AS "volatility!",
+            base.is_strict AS "is_strict!",
+            base.security_definer AS "security_definer!",
+            base.num_args AS "num_args!"
+        FROM (
+            SELECT
+                p.oid AS oid,
+                p.pronamespace AS namespace,
+                p.proname AS name,
+                p.prokind::text AS prokind,
+                p.prorettype AS return_type_oid,
+                l.lanname AS language,
+                p.provolatile::text AS volatility,
+                p.proisstrict AS is_strict,
+                p.prosecdef AS security_definer,
+                p.pronargs AS num_args,
+                (
+                    n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                    AND n.nspname NOT LIKE 'pg_temp_%'
+                    AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                    AND ext.objid IS NULL
+                ) AS renderable
+            FROM pg_proc p
+            JOIN pg_language l ON p.prolang = l.oid
+            JOIN pg_namespace n ON p.pronamespace = n.oid
+            LEFT JOIN (
+                SELECT DISTINCT dep.objid
+                FROM pg_depend dep
+                WHERE dep.classid = 'pg_proc'::regclass
+                  AND dep.refclassid = 'pg_extension'::regclass
+                  AND dep.deptype = 'e'
+            ) ext ON ext.objid = p.oid
+            WHERE p.prokind != 'a'
+        ) base
+        ORDER BY base.oid
         "#
     )
     .fetch_all(&mut *conn)

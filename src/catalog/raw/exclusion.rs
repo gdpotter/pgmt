@@ -290,6 +290,9 @@ pub mod sql {
     /// catalog table: an OID identifies a row within one catalog, so an
     /// unqualified test could match a row of another catalog that happens to
     /// carry the same OID.
+    ///
+    /// `raw::function` duplicates this as a literal for `pg_proc`, to skip
+    /// rendering definitions for routines its converter excludes.
     pub fn not_extension_owned(class: &str, oid_expr: &str) -> String {
         format!(
             "NOT EXISTS (\n    SELECT 1 FROM pg_depend dep\n    \

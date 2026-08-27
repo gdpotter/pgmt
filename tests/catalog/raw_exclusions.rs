@@ -1521,3 +1521,63 @@ async fn test_system_schema_rows_arrive_without_their_rendered_signatures() -> R
     })
     .await
 }
+
+/// The same skipping covers extension-owned routines, which is where it pays on
+/// a real database: a system schema holds a fixed set of built-ins, but an
+/// installed extension can declare thousands of routines in a user schema, and
+/// every one of them was being rendered only for the converter to discard it.
+#[tokio::test]
+async fn test_extension_owned_routines_arrive_without_their_rendered_definitions() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE EXTENSION IF NOT EXISTS citext").await;
+        db.execute("CREATE FUNCTION adopted_fn() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql")
+            .await;
+        db.execute("CREATE FUNCTION own_fn() RETURNS int AS $$ SELECT 2 $$ LANGUAGE sql")
+            .await;
+        db.execute("ALTER EXTENSION citext ADD FUNCTION adopted_fn()")
+            .await;
+
+        let mut conn = db.conn().await;
+        let functions = raw_function::fetch(&mut conn).await?;
+
+        let adopted = functions
+            .functions
+            .iter()
+            .find(|row| row.name == "adopted_fn")
+            .expect("the adopted function should still be fetched");
+        assert!(
+            adopted.arguments.is_none()
+                && adopted.definition.is_none()
+                && adopted.return_type.is_none(),
+            "an extension-owned routine should arrive unrendered"
+        );
+
+        let own = functions
+            .functions
+            .iter()
+            .find(|row| row.name == "own_fn")
+            .expect("the user function should be fetched");
+        assert!(own.arguments.is_some() && own.definition.is_some() && own.return_type.is_some());
+
+        // The row is still accounted for, and the reason names the extension.
+        let shared = shared::fetch(&mut conn).await?;
+        let converted = raw_function::convert(&functions, &shared)?;
+        assert!(
+            converted.excluded.iter().any(|row| row.name == "adopted_fn"
+                && row.reason
+                    == ExclusionReason::ExtensionOwned {
+                        extension: "citext".to_string()
+                    }),
+            "the unrendered row should be excluded as extension-owned, not lost"
+        );
+        assert!(
+            converted
+                .objects
+                .iter()
+                .any(|(_, function)| function.name == "own_fn")
+        );
+
+        Ok(())
+    })
+    .await
+}

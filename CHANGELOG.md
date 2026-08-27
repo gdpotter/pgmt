@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--output-sql` writes the file whatever `--format` selects. It previously did nothing unless `--format sql` was also given, so `--format json --output-sql fix.sql` silently produced no file. Its confirmation message moved to stderr so it cannot corrupt the chosen format's output.
 - Generated migrations no longer emit SQL statements without a trailing semicolon. `DROP TRIGGER`, `DROP CAST`, `DROP AGGREGATE`, `DROP OPERATOR`, and `CREATE TYPE ... AS RANGE` ran into the statement that followed them, so any migration containing one failed to parse. Modifying a trigger, cast, or operator was affected as well as dropping it, since those are rendered as a drop followed by a create. `pgmt diff --format sql` also stops doubling the semicolon on statements that already had one.
 
+### Performance
+
+- Loading the catalog no longer renders definitions for routines an extension owns. `pg_get_functiondef` and its siblings were called for every function in the database and the result discarded for anything pgmt does not manage; on a database carrying a large extension (PostGIS alone declares over a thousand routines) that dominated the load. Measured at roughly 4x faster on a database with 2,000 extension-owned functions.
+
 ## 0.6.3 - 2026-08-10
 
 ### Features
