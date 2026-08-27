@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- Log records now go to stderr instead of stdout. `pgmt migrate diff --format json > drift.json` and `--format sql | psql` could be corrupted by a log line interleaved into the payload. The line that usually did it was a slow-statement warning, which fires only when a statement is slow — so the failure appeared under CI load and never in development.
 - Generated migrations no longer emit SQL statements without a trailing semicolon. `DROP TRIGGER`, `DROP CAST`, `DROP AGGREGATE`, `DROP OPERATOR`, and `CREATE TYPE ... AS RANGE` ran into the statement that followed them, so any migration containing one failed to parse. Modifying a trigger, cast, or operator was affected as well as dropping it, since those are rendered as a drop followed by a create. `pgmt diff --format sql` also stops doubling the semicolon on statements that already had one.
 
 ## 0.6.3 - 2026-08-10

@@ -229,6 +229,51 @@ mod diff_formats {
         })
         .await
     }
+
+    /// Log records go to stderr, so raising the log level cannot corrupt the
+    /// JSON on stdout.
+    ///
+    /// This was a `> drift.json` that produced unparseable output only
+    /// sometimes: the log line that broke it was a slow-statement warning, so it
+    /// appeared under CI's load and never in development.
+    #[tokio::test]
+    async fn test_diff_json_survives_logging() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL PRIMARY KEY);")?;
+
+            helper
+                .command()
+                .args(["apply", "--force"])
+                .assert()
+                .success();
+
+            helper.write_schema_file(
+                "users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100));",
+            )?;
+
+            let assert = helper
+                .command()
+                .env("RUST_LOG", "debug")
+                .args(["diff", "--format", "json"])
+                .assert()
+                .code(1);
+
+            let stdout = String::from_utf8(assert.get_output().stdout.clone())?;
+            let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
+            serde_json::from_str::<serde_json::Value>(&stdout)
+                .map_err(|e| anyhow::anyhow!("stdout was not valid JSON ({e}): {stdout}"))?;
+            assert!(
+                !stderr.is_empty(),
+                "the debug log should have gone somewhere, and stdout is not it"
+            );
+
+            Ok(())
+        })
+        .await
+    }
 }
 
 // Note: The diff_sources module was removed because pgmt diff no longer supports

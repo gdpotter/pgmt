@@ -408,7 +408,16 @@ fn initialize_logging(cli: &Cli) {
         EnvFilter::new(level)
     };
 
-    fmt().with_env_filter(filter).with_target(false).init();
+    // Logs are diagnostics, never payload: `pgmt migrate diff --format json >
+    // drift.json` and `--format sql | psql` both consume stdout, and a WARN
+    // interleaved into either corrupts it. The corruption is latency-dependent
+    // (a slow-statement warning fires only when the statement is slow), so it
+    // passes in dev and fails in CI.
+    fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 async fn run_main(cli: Cli) -> Result<()> {
