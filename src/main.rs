@@ -197,6 +197,10 @@ enum MigrateCommands {
         #[command(flatten)]
         target: config::TargetUrlArgs,
 
+        /// Preview what would be applied without changing the database
+        #[arg(long)]
+        dry_run: bool,
+
         /// Modules to apply (comma-separated, or "all"). Default: only the
         /// unmoduled base. Falls back to PGMT_MODULES.
         #[arg(long, value_delimiter = ',')]
@@ -533,7 +537,11 @@ async fn run_main(cli: Cli) -> Result<()> {
                             .await
                         }
                     }
-                    MigrateCommands::Apply { target, modules } => {
+                    MigrateCommands::Apply {
+                        target,
+                        dry_run,
+                        modules,
+                    } => {
                         let config = config::ConfigBuilder::new()
                             .with_file(file_config.clone())
                             .resolve()?;
@@ -541,7 +549,10 @@ async fn run_main(cli: Cli) -> Result<()> {
                         let selection = modules::ModuleSelection::resolve(modules, &config)?;
 
                         info!("Applying explicit migrations");
-                        commands::cmd_migrate_apply(&config, &root_dir, &target, selection).await
+                        commands::cmd_migrate_apply(
+                            &config, &root_dir, &target, *dry_run, selection,
+                        )
+                        .await
                     }
                     MigrateCommands::Provision {
                         target,

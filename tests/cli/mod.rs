@@ -23,6 +23,7 @@
 /// session.expect("Migration created")?;
 /// ```
 pub mod apply_crash_states;
+pub mod apply_dry_run;
 pub mod apply_locking;
 pub mod apply_resume;
 pub mod baseline_commands;

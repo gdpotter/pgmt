@@ -1,10 +1,12 @@
 use crate::commands::migrate::section_executor::{ExecutionMode, SectionExecutor};
 use crate::config::Config;
+use crate::config::types::TrackingTable;
+use crate::migration::section_parser::MigrationSection;
 use crate::migration::{
     ParsedMigration, discover_migrations, parse_migration_sections, validate_sections,
 };
 use crate::migration_tracking::section_tracking::{
-    RecordedSections, section_statuses, validate_and_sync_section_checksums,
+    RecordedSections, SectionStatus, section_statuses, validate_and_sync_section_checksums,
 };
 use crate::migration_tracking::{
     MigrationLock, calculate_checksum, ensure_section_tracking_table, ensure_tracking_table_exists,
@@ -14,7 +16,7 @@ use crate::modules::{ModuleRuntime, ModuleSelection, SectionClassification, Skip
 use crate::progress::SectionReporter;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::Instant;
 use tracing::debug;
@@ -23,9 +25,14 @@ pub async fn cmd_migrate_apply(
     config: &Config,
     root_dir: &Path,
     target: &crate::config::TargetUrl,
+    dry_run: bool,
     selection: ModuleSelection,
 ) -> Result<()> {
-    println!("Applying migrations to target database");
+    if dry_run {
+        println!("Previewing migrations (dry run) - the target database will not be changed");
+    } else {
+        println!("Applying migrations to target database");
+    }
 
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
@@ -53,18 +60,24 @@ pub async fn cmd_migrate_apply(
     // otherwise).
     let lock = MigrationLock::acquire(target.as_str(), &config.migration.tracking_table).await?;
 
-    let result = apply_with_module_guard(config, root_dir, &pool, &migrations, &selection).await;
+    let result =
+        apply_with_module_guard(config, root_dir, &pool, &migrations, dry_run, &selection).await;
     lock.release().await?;
     result
 }
 
 /// The module-aware body of `migrate apply`, split out so the advisory lock
 /// wraps every path (including the guards' refusals) with a single release.
+///
+/// Under `dry_run` every guard still runs — a refusal is exactly what a preview
+/// must surface — but nothing is subscribed, recorded or executed: the run ends
+/// in the read-only preview instead of the apply loop.
 async fn apply_with_module_guard(
     config: &Config,
     root_dir: &Path,
     pool: &PgPool,
     migrations: &[ParsedMigration],
+    dry_run: bool,
     selection: &ModuleSelection,
 ) -> Result<()> {
     // A baseline row whose registered sections aren't all completed is a
@@ -230,12 +243,223 @@ async fn apply_with_module_guard(
             .filter(|m| !would_subscribe.contains(*m))
             .cloned()
             .collect();
-        runtime.record_adopted(&to_adopt).await?;
+        if !dry_run {
+            runtime.record_adopted(&to_adopt).await?;
+        }
+    }
+
+    if dry_run {
+        return preview_pending_migrations(pool, config, migrations, selection, &runtime).await;
     }
 
     let applied_any =
         apply_pending_migrations(pool, config, migrations, selection, &mut runtime).await?;
     if !applied_any {
+        println!("Nothing to apply — up to date.");
+    }
+    Ok(())
+}
+
+/// The main tracking table's rows, reduced to what decides whether a migration
+/// is still pending. ONE spelling of that read and of the two rules derived
+/// from it, shared by the apply loop and its dry-run preview.
+struct AppliedState {
+    /// Highest recorded baseline version, if any.
+    baseline_version: Option<u64>,
+    /// Migration rows only, version → stored whole-file checksum. A version can
+    /// also host a baseline row (paired `--create-baseline`) whose checksum is
+    /// the baseline file's, not the migration's — it must never enter the
+    /// migration checksum comparison.
+    applied_migrations: HashMap<u64, String>,
+}
+
+impl AppliedState {
+    async fn load(pool: &PgPool, tracking_table: &TrackingTable) -> Result<Self> {
+        let tracking_table_name = format_tracking_table_name(tracking_table)?;
+        let rows: Vec<(i64, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT version, checksum, is_baseline FROM {}",
+            tracking_table_name
+        )))
+        .fetch_all(pool)
+        .await?;
+
+        let baseline_version = rows
+            .iter()
+            .filter(|(_, _, is_baseline)| *is_baseline)
+            .map(|(version, _, _)| version_from_db(*version))
+            .max();
+        let applied_migrations = rows
+            .into_iter()
+            .filter(|(_, _, is_baseline)| !*is_baseline)
+            .map(|(v, checksum, _)| (version_from_db(v), checksum))
+            .collect();
+
+        Ok(Self {
+            baseline_version,
+            applied_migrations,
+        })
+    }
+
+    /// A recorded baseline covers every migration up to its version, so those
+    /// migration files are skipped rather than applied or checksum-compared.
+    fn covered_by_baseline(&self, version: u64) -> bool {
+        self.baseline_version.is_some_and(|bv| version <= bv)
+    }
+
+    /// The stored whole-file checksum of a registered migration. `None` means
+    /// this target has never registered the version.
+    fn registered(&self, version: u64) -> Option<&String> {
+        self.applied_migrations.get(&version)
+    }
+}
+
+/// Read a migration file and parse it into validated sections, with the error
+/// context both the apply loop and the preview report.
+fn read_and_parse_sections(migration: &ParsedMigration) -> Result<(String, Vec<MigrationSection>)> {
+    let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
+        format!(
+            "Failed to read migration file: {}",
+            migration.path.display()
+        )
+    })?;
+    let sections = parse_migration_sections(&migration.path, &migration_sql)
+        .with_context(|| format!("Failed to parse migration {}", migration.version))?;
+    validate_sections(&sections).with_context(|| {
+        format!(
+            "Invalid section configuration in migration {}",
+            migration.version
+        )
+    })?;
+    Ok((migration_sql, sections))
+}
+
+/// The recorded per-section state of one migration plus THE deploy verdict for
+/// it. An unregistered version has no section rows, so its statuses are empty
+/// and every selected section is still to run.
+fn classify_migration(
+    sections: &[MigrationSection],
+    recorded_sections: &RecordedSections,
+    version: u64,
+    registered: bool,
+    vocabulary: &BTreeSet<String>,
+    selection: &ModuleSelection,
+    established: &BTreeSet<String>,
+) -> Result<(BTreeMap<String, SectionStatus>, SectionClassification)> {
+    let statuses = if registered {
+        section_statuses(recorded_sections.for_version(version))?
+    } else {
+        Default::default()
+    };
+    let classification =
+        crate::modules::classify_sections(sections, &statuses, vocabulary, selection, established);
+    Ok((statuses, classification))
+}
+
+/// Report what `migrate apply` would do, without doing any of it.
+///
+/// Read-only by construction: it reads the tracking tables and the migration
+/// files, classifies each pending migration's sections exactly as the apply
+/// loop does, and prints. No DDL runs, no tracking row is written, and no
+/// re-anchor is crossed — so the preview describes the run as it stands now,
+/// with each migration judged against the target's current state rather than
+/// the state its predecessors would have left behind.
+async fn preview_pending_migrations(
+    pool: &PgPool,
+    config: &Config,
+    migrations: &[ParsedMigration],
+    selection: &ModuleSelection,
+    runtime: &ModuleRuntime,
+) -> Result<()> {
+    let applied = AppliedState::load(pool, &config.migration.tracking_table).await?;
+    let recorded_sections =
+        RecordedSections::load_migrations(pool, &config.migration.tracking_table).await?;
+
+    let mut would_run_any = false;
+    for migration in migrations {
+        if applied.covered_by_baseline(migration.version) {
+            continue;
+        }
+
+        let (_, sections) = read_and_parse_sections(migration)?;
+        let registered = applied.registered(migration.version).is_some();
+        let (
+            statuses,
+            SectionClassification {
+                to_run,
+                to_satisfy,
+                selected,
+                skipped,
+                coupling_violation: _,
+            },
+        ) = classify_migration(
+            &sections,
+            &recorded_sections,
+            migration.version,
+            registered,
+            runtime.established(),
+            selection,
+            runtime.established(),
+        )?;
+
+        if to_run.is_empty() && to_satisfy.is_empty() && skipped.is_empty() {
+            continue;
+        }
+
+        if !to_run.is_empty() || !to_satisfy.is_empty() {
+            would_run_any = true;
+            let done = selected
+                .iter()
+                .filter(|(_, s)| statuses.get(&s.name).is_some_and(|st| st.is_covered()))
+                .count();
+            if registered {
+                println!(
+                    "\nWould resume migration {} - {} ({}/{} selected sections already complete)",
+                    migration.version,
+                    migration.description,
+                    done,
+                    selected.len()
+                );
+            } else {
+                println!(
+                    "\nWould apply migration {} - {}",
+                    migration.version, migration.description
+                );
+            }
+        } else {
+            println!(
+                "\nMigration {} - {}",
+                migration.version, migration.description
+            );
+        }
+
+        for (_, section) in &to_run {
+            println!("  Would run section '{}'", section.name);
+        }
+        for (_, section) in &to_satisfy {
+            println!(
+                "  Would record section '{}' satisfied: source '{}' is established here \
+                 (objects already present; nothing to run)",
+                section.name,
+                section.remaps.as_deref().unwrap_or("?"),
+            );
+        }
+        for skip in &skipped {
+            match skip.notice {
+                SkipNotice::Drift => println!(
+                    "  Would skip module '{}' sections (established on this target but not in \
+                     the requested set - this is schema drift until a deploy names it: \
+                     --modules ...,{})",
+                    skip.module, skip.module
+                ),
+                SkipNotice::NotEstablished => println!(
+                    "  Would skip module '{}' sections (not established here)",
+                    skip.module
+                ),
+            }
+        }
+    }
+
+    if !would_run_any {
         println!("Nothing to apply — up to date.");
     }
     Ok(())
@@ -274,34 +498,8 @@ pub(crate) async fn apply_pending_migrations(
     selection: &ModuleSelection,
     runtime: &mut ModuleRuntime,
 ) -> Result<bool> {
-    let tracking_table_name = format_tracking_table_name(&config.migration.tracking_table)?;
     let mut applied_any = false;
-
-    // All tracking rows: version + checksum + is_baseline.
-    let rows: Vec<(i64, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT version, checksum, is_baseline FROM {}",
-        tracking_table_name
-    )))
-    .fetch_all(pool)
-    .await?;
-
-    // A recorded baseline covers every migration up to its version. Those
-    // migration files (if still present alongside the baseline) must be skipped
-    // rather than re-applied or checksum-compared against the baseline.
-    let baseline_version = rows
-        .iter()
-        .filter(|(_, _, is_baseline)| *is_baseline)
-        .map(|(version, _, _)| version_from_db(*version))
-        .max();
-
-    // Migration rows only: a version can also host a baseline row (paired
-    // `--create-baseline`), whose checksum is the baseline file's, not the
-    // migration's — it must never enter the migration checksum comparison.
-    let applied_migrations: HashMap<u64, String> = rows
-        .into_iter()
-        .filter(|(_, _, is_baseline)| !is_baseline)
-        .map(|(v, checksum, _)| (version_from_db(v), checksum))
-        .collect();
+    let applied = AppliedState::load(pool, &config.migration.tracking_table).await?;
 
     // Every recorded migration section row in ONE query, rather than one read
     // per migration file. The snapshot's precondition holds here: the loop
@@ -325,7 +523,7 @@ pub(crate) async fn apply_pending_migrations(
             .await?;
 
         // Skip migrations covered by a recorded baseline.
-        if baseline_version.is_some_and(|bv| migration.version <= bv) {
+        if applied.covered_by_baseline(migration.version) {
             // Distinguish the benign case (covered by, or at, the baseline) from
             // a silent hazard: a migration merged late with a version STRICTLY
             // below an already-recorded baseline watermark and NO tracking row.
@@ -337,8 +535,10 @@ pub(crate) async fn apply_pending_migrations(
             // for; only a total absence below the watermark is the hazard. The
             // at-baseline-version case (paired `--create-baseline` migration) is
             // excluded by the strict `<` comparison.
-            let below_watermark = baseline_version.is_some_and(|bv| migration.version < bv);
-            if below_watermark && !applied_migrations.contains_key(&migration.version) {
+            let below_watermark = applied
+                .baseline_version
+                .is_some_and(|bv| migration.version < bv);
+            if below_watermark && applied.registered(migration.version).is_none() {
                 eprintln!(
                     "Warning: migration {} ({}) is below the baseline watermark ({}) \
                      and was never applied to this database. It will never run here or on \
@@ -347,7 +547,9 @@ pub(crate) async fn apply_pending_migrations(
                      regenerate it above the baseline.",
                     migration.version,
                     migration.description,
-                    baseline_version.expect("below_watermark implies a baseline exists"),
+                    applied
+                        .baseline_version
+                        .expect("below_watermark implies a baseline exists"),
                     migration.version,
                 );
             } else {
@@ -365,29 +567,10 @@ pub(crate) async fn apply_pending_migrations(
         }
 
         // Read migration SQL first so we can validate checksum
-        let migration_sql = std::fs::read_to_string(&migration.path).with_context(|| {
-            format!(
-                "Failed to read migration file: {}",
-                migration.path.display()
-            )
-        })?;
-
-        // Calculate checksum
+        let (migration_sql, sections) = read_and_parse_sections(migration)?;
         let checksum = calculate_checksum(&migration_sql);
 
-        // Parse migration into sections
-        let sections = parse_migration_sections(&migration.path, &migration_sql)
-            .with_context(|| format!("Failed to parse migration {}", migration.version))?;
-
-        // Validate sections
-        validate_sections(&sections).with_context(|| {
-            format!(
-                "Invalid section configuration in migration {}",
-                migration.version
-            )
-        })?;
-
-        let registered = applied_migrations.get(&migration.version);
+        let registered = applied.registered(migration.version);
 
         // Two-phase gate: a re-anchor AT this version is gate-checked
         // now — before V's sections — and committed only after they complete
@@ -467,30 +650,29 @@ pub(crate) async fn apply_pending_migrations(
             .map(|p| p.rewritten().clone())
             .unwrap_or_else(|| runtime.established().clone());
 
-        let statuses = if registered.is_some() {
-            section_statuses(recorded_sections.for_version(migration.version))?
-        } else {
-            Default::default()
-        };
-
         // THE section classifier: one pure verdict for what runs, what is
         // recorded satisfied, what is skipped (and at what notice level), and
         // whether coupling is violated. `to_run` already excludes covered
         // sections, so SectionExecutor's per-section is_covered re-query is
         // defense-in-depth and the reporter count is accurate.
-        let SectionClassification {
-            to_run,
-            to_satisfy,
-            selected,
-            skipped,
-            coupling_violation,
-        } = crate::modules::classify_sections(
+        let (
+            statuses,
+            SectionClassification {
+                to_run,
+                to_satisfy,
+                selected,
+                skipped,
+                coupling_violation,
+            },
+        ) = classify_migration(
             &sections,
-            &statuses,
+            &recorded_sections,
+            migration.version,
+            registered.is_some(),
             &vocabulary,
             selection,
             runtime.established(),
-        );
+        )?;
 
         for skip in &skipped {
             match skip.notice {

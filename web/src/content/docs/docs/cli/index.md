@@ -279,15 +279,19 @@ pgmt migrate apply [OPTIONS]
 
 ```bash
 --target-url <URL>            # Target database [env: PGMT_TARGET_URL] (required)
+--dry-run                     # Preview what would be applied, without changing the database
 --modules <NAMES>             # Comma-separated modules to apply, or "all"
                               # [env: PGMT_MODULES]. Default: base only
 ```
+
+`--dry-run` lists each pending migration, the sections that would run, and the module sections it would skip. It reads the target's tracking table but runs no DDL and records nothing.
 
 **Examples:**
 
 ```bash
 pgmt migrate apply --target-url postgres://prod/myapp
 pgmt migrate apply            # Uses target_url from pgmt.yaml
+pgmt migrate apply --dry-run  # Preview the pending migrations
 pgmt migrate apply --modules billing   # Base + billing (+ its dependencies)
 ```
 

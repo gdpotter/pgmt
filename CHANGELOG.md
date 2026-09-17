@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pgmt init --defaults` is now fully non-interactive. Re-running it in an initialized project updates the existing `pgmt.yaml` instead of reaching a prompt, which failed with `IO error: not a terminal` from a script or CI. Without `--defaults`, an existing `pgmt.yaml` with no terminal attached now fails with a message naming `--defaults` and `--fresh`.
 - The `pgmt init` success banner no longer claims the schema directory contains "modular files" when nothing was imported. A `--defaults` or `--no-import` run leaves the directory empty, and the banner now says so and how to import.
 
+### Features
+
+- `pgmt migrate apply --dry-run` previews the pending migrations, the sections each would run, and the module sections it would skip, without touching the target — matching `migrate provision --dry-run`. The first-contact and partial-baseline guards still run, so a preview surfaces the same refusals a real apply would.
+
 ## 0.6.4 - 2026-08-27
 
 ### Bug Fixes
