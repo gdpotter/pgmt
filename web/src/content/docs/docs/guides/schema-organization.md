@@ -32,7 +32,7 @@ schema/
     └── helpers.sql
 ```
 
-The numbered prefixes give you alphabetical ordering as a baseline. You can also organize by business domain (`auth/`, `catalog/`, `orders/`) or mix both approaches.
+The numbered prefixes keep the tree readable, but they don't decide execution order — `-- require:` declarations do. You can also organize by business domain (`auth/`, `catalog/`, `orders/`) or mix both approaches.
 
 ## Dependencies with `-- require:`
 
@@ -47,11 +47,7 @@ CREATE TABLE app.users (
 );
 ```
 
-pgmt loads files in this order:
-
-1. Alphabetically by default
-2. Adjusted by `-- require:` declarations
-3. Topologically sorted so dependencies come first
+pgmt orders files by their `-- require:` declarations alone: a file runs only after every file it requires, and files whose requirements are all satisfied run in alphabetical order. Alphabetical order is a tiebreaker, not a dependency — a view in `04_views/` that selects from a table in `03_tables/` must still `-- require:` that table's file, or it may run first. The files `pgmt init` generates carry these headers already.
 
 File paths are relative to your schema directory. The `.sql` extension is optional.
 
