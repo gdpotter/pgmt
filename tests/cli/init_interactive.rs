@@ -371,3 +371,80 @@ fn test_shadow_flag_constraints() {
         InitArgs::try_parse_from(["init", "--auto-shadow", "--shadow-pg-version", "16"]).is_ok()
     );
 }
+
+/// `pgmt init --defaults` is fully non-interactive: it succeeds with stdin not
+/// a terminal, its banner does not claim schema files were written when no
+/// import ran, and a second run updates the existing pgmt.yaml instead of
+/// failing on a prompt.
+#[test]
+fn test_init_defaults_is_non_interactive_and_banner_is_truthful() -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let temp_dir = TempDir::new()?;
+    let project_dir = temp_dir.path();
+
+    let first = Command::new(env!("CARGO_BIN_EXE_pgmt"))
+        .current_dir(project_dir)
+        .args(["init", "--defaults"])
+        .stdin(Stdio::null())
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&first.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&first.stderr).to_string();
+    assert!(
+        first.status.success(),
+        "first init failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("directory with modular files"),
+        "banner claims modular files were written, but nothing was imported:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("directory (empty"),
+        "banner should say the schema directory is empty:\n{stdout}"
+    );
+    assert!(project_dir.join("pgmt.yaml").exists());
+
+    let schema_dir = project_dir.join("schema");
+    let sql_files = count_sql_files(&schema_dir);
+    assert_eq!(sql_files, 0, "no schema files should have been written");
+
+    // Second run: an existing pgmt.yaml must be updated without a prompt.
+    let second = Command::new(env!("CARGO_BIN_EXE_pgmt"))
+        .current_dir(project_dir)
+        .args(["init", "--defaults"])
+        .stdin(Stdio::null())
+        .output()?;
+
+    let stdout2 = String::from_utf8_lossy(&second.stdout).to_string();
+    let stderr2 = String::from_utf8_lossy(&second.stderr).to_string();
+    assert!(
+        second.status.success(),
+        "re-init failed\nstdout:\n{stdout2}\nstderr:\n{stderr2}"
+    );
+    assert!(
+        !stderr2.contains("not a terminal"),
+        "re-init hit an interactive prompt:\n{stderr2}"
+    );
+    assert!(
+        stdout2.contains("Update mode"),
+        "re-init should take the update path:\n{stdout2}"
+    );
+
+    Ok(())
+}
+
+fn count_sql_files(dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count += count_sql_files(&path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("sql") {
+                count += 1;
+            }
+        }
+    }
+    count
+}

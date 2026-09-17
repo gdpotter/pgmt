@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,10 +29,14 @@ pub enum ExistingConfigResult {
     Cancelled,
 }
 
-/// Check for existing config file and prompt user for how to proceed
+/// Check for existing config file and prompt user for how to proceed.
+///
+/// `non_interactive` (`--defaults`) answers the prompt with "Update", so a
+/// run without a terminal never reaches `dialoguer`.
 pub fn check_existing_config(
     project_dir: &Path,
     force_fresh: bool,
+    non_interactive: bool,
 ) -> Result<ExistingConfigResult> {
     let config_path = project_dir.join(CONFIG_FILENAME);
 
@@ -76,6 +81,21 @@ pub fn check_existing_config(
         println!("   Shadow PG: {}", pg_version);
     }
     println!();
+
+    if non_interactive {
+        println!(
+            "✏️  Update mode (--defaults): existing {} will be updated\n",
+            CONFIG_FILENAME
+        );
+        return Ok(ExistingConfigResult::Update(Box::new(existing_config)));
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow::anyhow!(
+            "existing {} found and stdin is not a terminal; pass --defaults to update it or --fresh to overwrite it",
+            CONFIG_FILENAME
+        ));
+    }
 
     // Prompt user for action
     let choices = vec![
@@ -170,7 +190,7 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
 
     // Check for existing config before proceeding
     let project_dir = std::env::current_dir()?;
-    let existing_config = check_existing_config(&project_dir, args.fresh)?;
+    let existing_config = check_existing_config(&project_dir, args.fresh, args.defaults)?;
 
     // Handle the different init modes
     let existing_input = match existing_config {
@@ -253,7 +273,11 @@ pub async fn cmd_init_with_args(args: &InitArgs) -> Result<()> {
     println!("✅ pgmt.yaml created");
 
     // Success summary
-    print_success_summary(&options, &baseline_result);
+    // The banner must describe what is actually on disk: a `--no-import` /
+    // `--defaults` run leaves the schema directory empty.
+    let schema_files_written =
+        count_generated_files(&options.project_dir.join(&options.schema_dir)).unwrap_or(0) > 0;
+    print_success_summary(&options, &baseline_result, schema_files_written);
 
     Ok(())
 }
@@ -710,16 +734,29 @@ async fn create_baseline_during_init(
 }
 
 /// Print success summary at the end of initialization
-pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineResult) {
+pub fn print_success_summary(
+    options: &InitOptions,
+    baseline_result: &BaselineResult,
+    schema_files_written: bool,
+) {
+    let schema_dir_line = if schema_files_written {
+        format!(
+            "{} directory with modular files",
+            options.schema_dir.display()
+        )
+    } else {
+        format!(
+            "{} directory (empty — re-run 'pgmt init' without --no-import/--defaults to import your dev database)",
+            options.schema_dir.display()
+        )
+    };
+
     match baseline_result {
         BaselineResult::Created => {
             println!("\n🎉 Project initialized successfully!");
             println!("\n📝 Created:");
             println!("  ✅ pgmt.yaml (configuration)");
-            println!(
-                "  ✅ {} directory with modular files",
-                options.schema_dir.display()
-            );
+            println!("  ✅ {}", schema_dir_line);
             println!("  ✅ migrations/ directory");
             println!("  ✅ schema_baselines/ directory");
             println!("  ✅ Initial baseline from existing database");
@@ -732,10 +769,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
             println!("\n🎉 Project initialized successfully!");
             println!("\n📝 Created:");
             println!("  ✅ pgmt.yaml (configuration)");
-            println!(
-                "  ✅ {} directory with modular files",
-                options.schema_dir.display()
-            );
+            println!("  ✅ {}", schema_dir_line);
             println!("  ✅ migrations/ directory");
             println!("  ✅ schema_baselines/ directory");
 
@@ -774,10 +808,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                     println!("\n⚠️ Project partially initialized - baseline creation failed!");
                     println!("\n📝 Created:");
                     println!("  ✅ pgmt.yaml (configuration)");
-                    println!(
-                        "  ✅ {} directory with modular files",
-                        options.schema_dir.display()
-                    );
+                    println!("  ✅ {}", schema_dir_line);
                     println!("  ✅ migrations/ directory");
                     println!("  ✅ schema_baselines/ directory");
                     println!("  ❌ Initial baseline creation failed: {}", error);
@@ -794,10 +825,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
                     println!("\n🎉 Project initialized successfully!");
                     println!("\n📝 Created:");
                     println!("  ✅ pgmt.yaml (configuration)");
-                    println!(
-                        "  ✅ {} directory with modular files",
-                        options.schema_dir.display()
-                    );
+                    println!("  ✅ {}", schema_dir_line);
                     println!("  ✅ migrations/ directory");
                     println!("  ✅ schema_baselines/ directory");
                     println!("  ⚠️ Baseline creation failed (see error above)");
@@ -813,10 +841,7 @@ pub fn print_success_summary(options: &InitOptions, baseline_result: &BaselineRe
             println!("\n🎉 Project initialized successfully!");
             println!("\n📝 Created:");
             println!("  ✅ pgmt.yaml (configuration)");
-            println!(
-                "  ✅ {} directory with modular files",
-                options.schema_dir.display()
-            );
+            println!("  ✅ {}", schema_dir_line);
             println!("  ✅ migrations/ directory");
             println!("  ✅ schema_baselines/ directory");
 
@@ -989,7 +1014,7 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         // No config file - should return NotFound
-        let result = check_existing_config(&temp_dir, false).unwrap();
+        let result = check_existing_config(&temp_dir, false, false).unwrap();
         assert!(matches!(result, ExistingConfigResult::NotFound));
 
         // Clean up
@@ -1012,10 +1037,40 @@ databases:
         std::fs::write(temp_dir.join("pgmt.yaml"), config_content).unwrap();
 
         // With --fresh flag, should return Fresh without prompting
-        let result = check_existing_config(&temp_dir, true).unwrap();
+        let result = check_existing_config(&temp_dir, true, false).unwrap();
         assert!(matches!(result, ExistingConfigResult::Fresh));
 
         // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// `--defaults` is non-interactive: an existing pgmt.yaml is updated
+    /// without a prompt, so a run with no terminal attached still succeeds.
+    #[test]
+    fn test_check_existing_config_defaults_updates_without_prompting() {
+        use std::env;
+
+        let temp_dir = env::temp_dir().join("pgmt_test_defaults_flag");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let config_content = r#"
+databases:
+  dev_url: postgres://localhost/test
+"#;
+        std::fs::write(temp_dir.join("pgmt.yaml"), config_content).unwrap();
+
+        let result = check_existing_config(&temp_dir, false, true).unwrap();
+        match result {
+            ExistingConfigResult::Update(config) => {
+                assert_eq!(
+                    config.databases.and_then(|d| d.dev_url).as_deref(),
+                    Some("postgres://localhost/test")
+                );
+            }
+            other => panic!("expected Update, got {:?}", other),
+        }
+
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

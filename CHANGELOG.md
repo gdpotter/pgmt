@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- `pgmt init --defaults` is now fully non-interactive. Re-running it in an initialized project updates the existing `pgmt.yaml` instead of reaching a prompt, which failed with `IO error: not a terminal` from a script or CI. Without `--defaults`, an existing `pgmt.yaml` with no terminal attached now fails with a message naming `--defaults` and `--fresh`.
+- The `pgmt init` success banner no longer claims the schema directory contains "modular files" when nothing was imported. A `--defaults` or `--no-import` run leaves the directory empty, and the banner now says so and how to import.
+
 ## 0.6.4 - 2026-08-27
 
 ### Bug Fixes
