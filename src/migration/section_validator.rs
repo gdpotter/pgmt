@@ -63,15 +63,6 @@ fn validate_section(section: &MigrationSection) -> Result<()> {
         }
     }
 
-    // Validate SQL is not empty
-    if section.sql.trim().is_empty() {
-        return Err(anyhow!(
-            "Section '{}' (line {}) has no SQL statements",
-            section.name,
-            section.start_line
-        ));
-    }
-
     // Validate CONCURRENTLY operations are non-transactional
     if section.sql.to_uppercase().contains("CONCURRENTLY")
         && section.mode == TransactionMode::Transactional

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- `pgmt migrate new --empty` writes a stub migration to fill in by hand, for SQL a schema diff cannot produce (data backfills, `CREATE INDEX CONCURRENTLY`). It skips the diff entirely, so it needs no shadow database and leaves pending schema changes for the next ordinary `migrate new`.
+- A section with no SQL now applies as a no-op instead of failing validation. Empty sections were rejected at apply time, so an unfilled migration broke a deploy rather than a local run — and any comment in the file defeated the check anyway.
 - `pgmt migrate apply --dry-run` previews the pending migrations, the sections each would run, and the module sections it would skip, without touching the target — matching `migrate provision --dry-run`. The first-contact and partial-baseline guards still run, so a preview surfaces the same refusals a real apply would.
 
 ## 0.6.4 - 2026-08-27

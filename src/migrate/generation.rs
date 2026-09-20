@@ -35,11 +35,8 @@ pub fn generate_migration(input: MigrationGenerationInput) -> Result<MigrationGe
         "-- No changes detected\n".to_string()
     };
 
-    let sanitized_description = sanitize_description(&input.description);
-    let migration_filename = format!(
-        "{}{}_{}.sql",
-        input.filename_prefix, input.version, sanitized_description
-    );
+    let migration_filename =
+        migration_filename(&input.filename_prefix, input.version, &input.description);
 
     Ok(MigrationGenerationResult {
         migration_sql,
@@ -47,6 +44,17 @@ pub fn generate_migration(input: MigrationGenerationInput) -> Result<MigrationGe
         steps: ordered_steps,
         has_changes,
     })
+}
+
+/// The on-disk name for a migration: `{prefix}{version}_{description}.sql`.
+/// The one spelling of the rule, shared by generated and hand-written stubs.
+pub fn migration_filename(filename_prefix: &str, version: u64, description: &str) -> String {
+    format!(
+        "{}{}_{}.sql",
+        filename_prefix,
+        version,
+        sanitize_description(description)
+    )
 }
 
 /// Pure function to render migration steps into SQL

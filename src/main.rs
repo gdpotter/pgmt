@@ -171,6 +171,11 @@ enum MigrateCommands {
         #[arg(long)]
         create_baseline: bool,
 
+        /// Write a stub migration to fill in by hand instead of diffing the
+        /// schema files (for data migrations and other SQL pgmt cannot derive)
+        #[arg(long)]
+        empty: bool,
+
         #[command(flatten)]
         shadow: config::ShadowUrlArgs,
     },
@@ -495,6 +500,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                     MigrateCommands::New {
                         description,
                         create_baseline,
+                        empty,
                         shadow,
                     } => {
                         let config = config::ConfigBuilder::new()
@@ -508,6 +514,7 @@ async fn run_main(cli: Cli) -> Result<()> {
                             &root_dir,
                             description.as_deref(),
                             *create_baseline,
+                            *empty,
                             &shadow,
                         )
                         .await

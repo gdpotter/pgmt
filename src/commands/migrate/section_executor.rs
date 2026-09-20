@@ -135,6 +135,34 @@ impl SectionExecutor {
             return Ok(());
         }
 
+        // An empty section is a no-op, never a driver round-trip. It has no DDL
+        // to record atomically with, so it bypasses the transaction modes.
+        if section.sql.trim().is_empty() {
+            self.reporter
+                .start_section(&section.name, section.description.as_deref());
+            record_section_start(
+                &self.pool,
+                &self.tracking_table,
+                migration_version,
+                self.is_baseline,
+                &section.name,
+            )
+            .await?;
+            record_section_complete(
+                &self.pool,
+                &self.tracking_table,
+                migration_version,
+                self.is_baseline,
+                &section.name,
+                Some(0),
+                0,
+            )
+            .await?;
+            self.reporter
+                .complete_section(&section.name, Duration::from_secs(0), Some(0));
+            return Ok(());
+        }
+
         // Execute based on mode
         let result = match section.mode {
             TransactionMode::Transactional => {

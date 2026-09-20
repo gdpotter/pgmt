@@ -53,7 +53,7 @@ async fn test_migrate_new_branch_shadow_does_not_reuse_dirty_branch() -> Result<
         // succeeds even under the old shared-branch behavior. `--create-baseline`
         // writes a full-schema baseline and exercises the third pristine-start
         // phase — baseline validation — on its own fresh branch.
-        cmd_migrate_new(&config, root, Some("create_users"), true, &shadow)
+        cmd_migrate_new(&config, root, Some("create_users"), true, false, &shadow)
             .await
             .expect("first migrate new should succeed");
 
@@ -74,7 +74,7 @@ async fn test_migrate_new_branch_shadow_does_not_reuse_dirty_branch() -> Result<
         // exists". This is the core regression guard. (No `--create-baseline`
         // here: a baseline built from a non-first migration's delta is an
         // unrelated concern.)
-        cmd_migrate_new(&config, root, Some("create_posts"), false, &shadow)
+        cmd_migrate_new(&config, root, Some("create_posts"), false, false, &shadow)
             .await
             .expect("second migrate new must not collide on a reused dirty branch");
 

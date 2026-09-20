@@ -219,6 +219,7 @@ pgmt migrate new [DESCRIPTION] [OPTIONS]
 
 ```bash
 --create-baseline             # Create baseline alongside migration
+--empty                       # Write a stub to fill in by hand (no diff)
 --shadow-url <URL>            # Shadow database [env: PGMT_SHADOW_URL]
 ```
 
@@ -228,7 +229,17 @@ pgmt migrate new [DESCRIPTION] [OPTIONS]
 pgmt migrate new "add users table"
 pgmt migrate new "v2.0 release" --create-baseline
 pgmt migrate new                  # Interactive (prompts for description)
+pgmt migrate new "backfill emails" --empty
 ```
+
+`--empty` writes a stub migration for SQL that a schema diff cannot produce —
+a data backfill, a `CREATE INDEX CONCURRENTLY`, a one-off `UPDATE`. It does not
+read the schema files at all, so pending schema changes stay pending and are
+picked up by the next ordinary `pgmt migrate new`. It needs no shadow database.
+
+The stub has no section header, which makes it a base (unmoduled) migration.
+Add a `-- pgmt:section` header yourself to assign it to a module or to change
+its transaction mode.
 
 ---
 

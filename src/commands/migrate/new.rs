@@ -1,7 +1,7 @@
 use crate::baseline::operations::BaselineCreationRequest;
 use crate::catalog::Catalog;
 use crate::config::Config;
-use crate::migrate::{MigrationGenerationInput, generate_migration};
+use crate::migrate::{MigrationGenerationInput, generate_migration, migration_filename};
 use crate::migration::{
     BaselineConfig, get_migration_starting_state, get_migration_starting_state_with_attribution,
     validate_baseline_against_catalog,
@@ -21,6 +21,7 @@ pub async fn cmd_migrate_new(
     root_dir: &Path,
     description: Option<&str>,
     create_baseline: bool,
+    empty: bool,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<()> {
     let description = prompt_required_string_with_validation(
@@ -51,6 +52,16 @@ pub async fn cmd_migrate_new(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| anyhow::anyhow!("System time is before Unix epoch: {}", e))?
         .as_secs();
+
+    let should_create_baseline = create_baseline || config.migration.create_baselines_by_default;
+
+    // A stub needs no diff, and with no baseline to build there is nothing left
+    // to read the database for. Pending schema changes stay pending.
+    if empty && !should_create_baseline {
+        let path = write_empty_migration(&migrations_dir, config, version, &description)?;
+        println!("Created empty migration: {}", path.display());
+        return Ok(());
+    }
 
     let baseline_config = BaselineConfig {
         validate_consistency: config.migration.validate_baseline_consistency,
@@ -118,7 +129,6 @@ pub async fn cmd_migrate_new(
     // this change diverges the partition from what history implies —
     // a re-tag or a drop that breaks another module's replayability. Any
     // divergence demands a re-anchoring baseline alongside the migration.
-    let should_create_baseline = create_baseline || config.migration.create_baselines_by_default;
     let module_gen = evaluate_module_generation(
         config,
         &old_catalog,
@@ -130,7 +140,7 @@ pub async fn cmd_migrate_new(
     )?;
     let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
 
-    if !migration_result.has_changes && !partition_diverged {
+    if !empty && !migration_result.has_changes && !partition_diverged {
         println!("No changes detected - no migration needed");
         return Ok(());
     }
@@ -182,6 +192,13 @@ pub async fn cmd_migrate_new(
         println!("Skipping baseline creation (use --create-baseline to create one)");
     }
 
+    if empty {
+        let path = write_empty_migration(&migrations_dir, config, version, &description)?;
+        println!("Created empty migration: {}", path.display());
+        println!("Migration generation complete!");
+        return Ok(());
+    }
+
     // The migration: ordinary diff sections plus, at a re-anchor, the
     // acquisition sections for module-sourced moves (base-sourced
     // moves are satisfied everywhere by construction and stay baseline-only).
@@ -210,4 +227,18 @@ pub async fn cmd_migrate_new(
 
     println!("Migration generation complete!");
     Ok(())
+}
+
+/// Write the stub for a hand-written migration. Having no section header, it
+/// applies as a single base (unmoduled) section.
+fn write_empty_migration(
+    migrations_dir: &Path,
+    config: &Config,
+    version: u64,
+    description: &str,
+) -> Result<std::path::PathBuf> {
+    let filename = migration_filename(&config.migration.filename_prefix, version, description);
+    let path = migrations_dir.join(filename);
+    std::fs::write(&path, "")?;
+    Ok(path)
 }

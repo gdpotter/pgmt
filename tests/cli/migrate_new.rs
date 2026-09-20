@@ -45,6 +45,44 @@ mod migrate_new_tests {
         .await
     }
 
+    /// `--empty` writes a stub to fill in by hand and never consults the
+    /// schema files, so pending schema changes stay pending rather than being
+    /// captured in a migration the author meant to write themselves.
+    #[tokio::test]
+    async fn test_migrate_new_empty_ignores_pending_schema_changes() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL);",
+            )?;
+
+            helper
+                .command()
+                .args(["migrate", "new", "backfill_user_names", "--empty"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Created empty migration:"));
+
+            let migrations = helper.list_migration_files()?;
+            assert_eq!(migrations.len(), 1);
+            assert!(migrations[0].contains("backfill_user_names"));
+
+            let sql = helper.read_migration_file(&migrations[0])?;
+            assert!(
+                sql.is_empty(),
+                "--empty must write a stub with no SQL of its own: {sql}"
+            );
+
+            let baselines = helper.list_baseline_files()?;
+            assert!(baselines.is_empty());
+
+            Ok(())
+        })
+        .await
+    }
+
     /// Test that baselines are NOT created by default when --create-baseline is not provided
     #[tokio::test]
     async fn test_migrate_new_without_baseline_creation() -> Result<()> {

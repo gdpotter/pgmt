@@ -388,3 +388,65 @@ SELECT 2;
     })
     .await
 }
+
+/// A section with no SQL validates, executes as a no-op, and records as
+/// completed. Covers both an empty file, which parses as one header-less
+/// "default" section, and an explicit header with nothing under it.
+#[tokio::test]
+async fn test_empty_sections_execute_as_no_ops() -> Result<()> {
+    with_test_db(async |db| {
+        let tracking_table = TrackingTable::default();
+        ensure_section_tracking_table(db.pool(), &tracking_table).await?;
+
+        for (version, label, migration_sql) in [
+            (1, "whole empty file", ""),
+            (
+                2,
+                "explicit header with no body",
+                "-- pgmt:section name=\"placeholder\"\n",
+            ),
+        ] {
+            let sections = parse_migration_sections(Path::new("test.sql"), migration_sql)?;
+            assert_eq!(sections.len(), 1, "{label}");
+
+            validate_sections(&sections)
+                .unwrap_or_else(|e| panic!("{label} should validate, got: {e}"));
+
+            initialize_sections(
+                db.pool(),
+                &tracking_table,
+                version,
+                false,
+                &ordered(&sections),
+            )
+            .await?;
+
+            let reporter = SectionReporter::new(sections.len(), false);
+            let mut executor = SectionExecutor::new(
+                db.pool().clone(),
+                tracking_table.clone(),
+                reporter,
+                ExecutionMode::Production,
+                false,
+            );
+            executor.execute_section(version, &sections[0]).await?;
+
+            let status = get_section_status(
+                db.pool(),
+                &tracking_table,
+                version,
+                false,
+                &sections[0].name,
+            )
+            .await?;
+            assert_eq!(
+                status,
+                Some(SectionStatus::Completed),
+                "{label} should record as completed"
+            );
+        }
+
+        Ok(())
+    })
+    .await
+}
