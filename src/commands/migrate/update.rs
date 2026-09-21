@@ -1,5 +1,4 @@
 use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
-use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration};
 use crate::migration::{
@@ -73,9 +72,12 @@ pub async fn cmd_migrate_update_with_options(
 
     // Step 2: Reset shadow database and apply current schema
     debug!("Applying current schema to shadow database");
-    let (new_catalog, file_mapping) =
-        crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-            .await?;
+    let crate::schema_ops::DesiredState {
+        base: shadow_base,
+        catalog: new_catalog,
+        mapping: file_mapping,
+    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
+        .await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -139,7 +141,7 @@ pub async fn cmd_migrate_update_with_options(
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
-            base_catalog: Catalog::empty(),
+            base_catalog: shadow_base.clone(),
             version: latest_migration.version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),
@@ -281,9 +283,12 @@ pub async fn cmd_migrate_update_specific(
 
     // Apply current schema to shadow database
     debug!("Applying current schema to shadow database");
-    let (new_catalog, file_mapping) =
-        crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-            .await?;
+    let crate::schema_ops::DesiredState {
+        base: shadow_base,
+        catalog: new_catalog,
+        mapping: file_mapping,
+    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
+        .await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -400,7 +405,7 @@ pub async fn cmd_migrate_update_specific(
     if should_update_baseline {
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
-            base_catalog: Catalog::empty(),
+            base_catalog: shadow_base.clone(),
             version: new_version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),

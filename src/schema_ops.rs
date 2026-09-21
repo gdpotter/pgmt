@@ -157,23 +157,48 @@ pub async fn apply_current_schema_to_shadow(
     Ok(catalog)
 }
 
-/// Like [`apply_current_schema_to_shadow`], but also returns the file→object
-/// mapping so module-aware generation can attribute desired-state objects to
-/// their owning modules. Identical shadow work — the mapping is computed by
-/// the schema processor either way.
+/// The desired state, plus the two things a caller that writes a baseline
+/// needs alongside it.
+pub struct DesiredState {
+    /// The shadow's state before any schema file ran: whatever the image
+    /// provides (extensions, platform schemas), on top of a cleaned database
+    /// with the roles file applied. A baseline is the diff FROM this, so
+    /// substrate cancels structurally instead of relying on the `objects`
+    /// predicate to name it.
+    pub base: Catalog,
+    /// What the schema files describe.
+    pub catalog: Catalog,
+    /// Which file produced which object, for module attribution.
+    pub mapping: FileToObjectMapping,
+}
+
+/// Like [`apply_current_schema_to_shadow`], but also returns the shadow's
+/// pre-schema base and the file→object mapping. Identical shadow work — the
+/// base is a load at a point the shadow already passes through, and the
+/// mapping is computed by the schema processor either way.
+///
+/// Both catalogs are scoped to the managed universe by the same filter, so
+/// they are directly diffable.
 pub async fn apply_current_schema_to_shadow_with_mapping(
     config: &Config,
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
-) -> Result<(Catalog, FileToObjectMapping)> {
+) -> Result<DesiredState> {
     let shadow_pool = shadow.connect_fresh().await?;
+    let filter = ObjectFilter::from_config(config);
 
     clean_shadow_for_schema(config, root_dir, &shadow_pool).await?;
+    let base = Catalog::load_managed(&shadow_pool, &filter).await?;
+
     let (catalog, mapping) = apply_schema_files_to_shadow(config, root_dir, &shadow_pool).await?;
-    let managed = ObjectFilter::from_config(config).filter_catalog(catalog);
+    let managed = filter.filter_catalog(catalog);
 
     crate::db::branch::drop_branch(shadow_pool).await?;
-    Ok((managed, mapping))
+    Ok(DesiredState {
+        base,
+        catalog: managed,
+        mapping,
+    })
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

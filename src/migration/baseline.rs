@@ -164,8 +164,12 @@ async fn load_baseline_into_shadow_inner(
 /// Checkpoint the migration log: replay the full history (latest baseline +
 /// subsequent migrations) onto a pristine shadow and return the shadow's
 /// pre-history **base** (image substrate — baseline generation diffs against
-/// it), the **unfiltered** replayed catalog, and per-section attribution
-/// (populated only when the project declares modules).
+/// it), the replayed catalog, and per-section attribution (populated only
+/// when the project declares modules).
+///
+/// Both catalogs are scoped to the managed universe, and a baseline is the
+/// diff between them: substrate cancels structurally, and objects outside
+/// `objects` never enter the artifact from either side.
 ///
 /// This is `migrate baseline`'s source: a baseline asserts "replaying history
 /// through V produces exactly this", so it is generated FROM that replay —
@@ -184,7 +188,7 @@ pub async fn replay_history_for_checkpoint(
         config.modules.is_enabled().then_some(&mut attribution);
 
     prepare_shadow_for_replay(shadow_pool, roles_file, config).await?;
-    let base = Catalog::load_unfiltered(shadow_pool).await?;
+    let base = load_managed_catalog(shadow_pool, config).await?;
 
     let migrations_to_replay = if let Some(baseline) = find_latest_baseline(baselines_dir)? {
         apply_baseline_file_sections(
@@ -205,7 +209,7 @@ pub async fn replay_history_for_checkpoint(
 
     replay_migrations(shadow_pool, &migrations_to_replay, config, false, collector).await?;
 
-    let catalog = Catalog::load_unfiltered(shadow_pool).await?;
+    let catalog = load_managed_catalog(shadow_pool, config).await?;
     Ok((base, catalog, attribution))
 }
 

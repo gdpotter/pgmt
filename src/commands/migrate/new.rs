@@ -1,5 +1,4 @@
 use crate::baseline::operations::BaselineCreationRequest;
-use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::migrate::{MigrationGenerationInput, generate_migration, migration_filename};
 use crate::migration::{
@@ -105,9 +104,12 @@ pub async fn cmd_migrate_new(
     crate::db::branch::drop_branch(starting_pool).await?;
 
     debug!("Applying current schema to shadow database");
-    let (new_catalog, file_mapping) =
-        crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-            .await?;
+    let crate::schema_ops::DesiredState {
+        base: shadow_base,
+        catalog: new_catalog,
+        mapping: file_mapping,
+    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
+        .await?;
 
     // Validate column ordering before generating migration
     crate::validation::apply_column_order_validation(
@@ -154,9 +156,13 @@ pub async fn cmd_migrate_new(
         // Generate the baseline from the full desired catalog, not the migration
         // SQL — the migration is a delta against the prior state, so writing it
         // would produce a partial baseline for any non-initial migration.
+        //
+        // Diffed FROM the shadow's pre-schema base: whatever the image
+        // provides is present on both sides and cancels, so a baseline
+        // re-creates only what the schema files describe.
         let result = crate::baseline::operations::create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
-            base_catalog: Catalog::empty(),
+            base_catalog: shadow_base.clone(),
             version,
             description: "baseline".to_string(),
             baselines_dir: baselines_dir.clone(),

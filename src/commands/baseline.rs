@@ -3,7 +3,6 @@ use crate::baseline::operations::{
 };
 use crate::catalog::file_dependencies::FileToObjectMapping;
 use crate::config::Config;
-use crate::config::filter::ObjectFilter;
 use crate::diff::operations::SqlRenderer;
 use crate::migration::{discover_baselines, discover_migrations, replay_history_for_checkpoint};
 use crate::modules::{ModulePartition, render_sectioned_migration, sectionize_steps};
@@ -101,13 +100,6 @@ pub async fn cmd_migrate_baseline(
     .await?;
     crate::db::branch::drop_branch(replay_pool).await?;
 
-    // The managed view of the replayed state — used for the dependency debug
-    // output below and for baseline validation. The baseline itself is
-    // replayed-minus-base; re-applied onto a substrate-bearing shadow it
-    // reproduces this view, so validating against it holds whether or not the
-    // user scoped `objects`.
-    let catalog = ObjectFilter::from_config(config).filter_catalog(replayed.clone());
-
     let request = BaselineCreationRequest {
         catalog: replayed.clone(),
         base_catalog: base_catalog.clone(),
@@ -167,7 +159,7 @@ pub async fn cmd_migrate_baseline(
                     crate::diff::operations::MigrationStep::Comment(_) => "Comment",
                 };
 
-                let dependencies = catalog
+                let dependencies = replayed
                     .forward_deps
                     .get(&step_id)
                     .map(|deps| {
@@ -204,7 +196,7 @@ pub async fn cmd_migrate_baseline(
         let validation_result = validate_baseline_against_catalog(
             &validate_pool,
             &result.path,
-            &catalog,
+            &replayed,
             &baseline_config,
             &roles_file,
             config,
