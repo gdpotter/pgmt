@@ -15,6 +15,10 @@ pub struct CliTestHelper {
     pub shadow_database_url: String,
     dev_db_name: String,
     shadow_db_name: String,
+    /// Extra databases created by [`CliTestHelper::create_extra_database`],
+    /// dropped alongside dev and shadow. Behind a mutex because the helper is
+    /// handed to tests by shared reference.
+    extra_db_names: std::sync::Mutex<Vec<String>>,
 }
 
 impl CliTestHelper {
@@ -74,35 +78,33 @@ impl CliTestHelper {
             shadow_database_url,
             dev_db_name,
             shadow_db_name,
+            extra_db_names: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    /// Cleanup test databases manually
+    /// Drop every database this helper created — dev, shadow, and any extra
+    /// target. Leaked databases are never reclaimed on the test server, so a
+    /// helper must take its own with it.
     pub async fn cleanup(&self) {
         let base_url = self.pg_instance.base_url.clone();
-        let dev_db_name = self.dev_db_name.clone();
-        let shadow_db_name = self.shadow_db_name.clone();
+        let mut names = vec![self.dev_db_name.clone(), self.shadow_db_name.clone()];
+        names.extend(self.extra_db_names.lock().unwrap().iter().cloned());
 
-        // Best-effort cleanup with timeout
-        let cleanup_future = async move {
-            if let Ok(pool) = sqlx::PgPool::connect(&base_url).await {
-                let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+        // Best effort, with a per-drop budget: one shared timeout would be
+        // consumed by the first slow drop and strand every database after it.
+        let budget = std::time::Duration::from_secs(5);
+        let connect = tokio::time::timeout(budget, sqlx::PgPool::connect(&base_url));
+        if let Ok(Ok(pool)) = connect.await {
+            for name in names {
+                let drop_db = sqlx::query(sqlx::AssertSqlSafe(format!(
                     "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
-                    dev_db_name
+                    name
                 )))
-                .execute(&pool)
-                .await;
-                let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
-                    shadow_db_name
-                )))
-                .execute(&pool)
-                .await;
-                pool.close().await;
+                .execute(&pool);
+                let _ = tokio::time::timeout(budget, drop_db).await;
             }
-        };
-
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), cleanup_future).await;
+            pool.close().await;
+        }
     }
 
     /// Initialize a pgmt project structure
@@ -271,8 +273,8 @@ docker:
 
     /// Create an additional empty database on the same instance and return its
     /// connection URL. Used to test target-vs-dev routing (the extra DB stands
-    /// in for a deployment target distinct from dev). Uniquely named, so it
-    /// harmlessly leaks past the helper's dev/shadow-only cleanup.
+    /// in for a deployment target distinct from dev). It is registered for
+    /// cleanup, so it is dropped with the helper's own databases.
     pub async fn create_extra_database(&self) -> Result<String> {
         let name = format!("test_target_{}", Uuid::new_v4().simple());
         let base_pool = sqlx::PgPool::connect(&self.pg_instance.base_url).await?;
@@ -280,6 +282,7 @@ docker:
             .execute(&base_pool)
             .await?;
         base_pool.close().await;
+        self.extra_db_names.lock().unwrap().push(name.clone());
         let url = if let Some(last_slash) = self.pg_instance.base_url.rfind('/') {
             format!("{}/{}", &self.pg_instance.base_url[..last_slash], name)
         } else {
