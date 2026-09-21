@@ -17,25 +17,26 @@
   },
   "dependencies": {
     "@astrojs/check": "^0.9.10",
-    "@astrojs/sitemap": "^3.7.3",
-    "@astrojs/starlight": "^0.41.7",
-    "astro": "^7.2.0",
-    "rehype-mermaid": "^2.1.0",
-    "shiki": "^3.23.0",
-    "typescript": "^5.9.3"
+    "@astrojs/markdown-remark": "^7.3.1",
+    "@astrojs/sitemap": "^3.7.4",
+    "@astrojs/starlight": "^0.42.2",
+    "astro": "^7.3.3",
+    "rehype-mermaid": "^3.0.0",
+    "shiki": "^4.4.3",
+    "typescript": "^6.0.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
-    "@pandacss/dev": "^1.12.0",
-    "@typescript-eslint/eslint-plugin": "^8.66.0",
-    "@typescript-eslint/parser": "^8.66.0",
-    "eslint": "^9.39.5",
+    "@eslint/js": "^10.0.1",
+    "@pandacss/dev": "^1.12.1",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-astro": "^1.7.0",
-    "globals": "^16.5.0",
-    "playwright": "^1.62.1",
-    "prettier": "^3.9.6",
-    "prettier-plugin-astro": "^0.14.1"
+    "eslint-plugin-astro": "^3.2.1",
+    "globals": "^17.12.0",
+    "playwright": "^1.63.0",
+    "prettier": "^3.9.8",
+    "prettier-plugin-astro": "^1.0.1"
   },
   "pnpm": {
     "overrides": {

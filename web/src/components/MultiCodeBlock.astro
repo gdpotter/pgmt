@@ -157,54 +157,50 @@ const languageBadgeClass = css({
 ---
 
 <div class={cx(codeBlockClass, className)}>
-  {
-    (title || showCopy) && (
-      <div class={headerClass}>
-        <div
-          class={css({
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'sm',
-            flexWrap: 'wrap',
-          })}
-        >
-          {sections.map(({ language }) => (
-            <span
-              class={languageBadgeClass}
-              style={`background-color: ${languageColors[language] || '#666'}`}
-            >
-              {language}
-            </span>
-          ))}
-          {title && <span class={titleClass}>{title}</span>}
-        </div>
-        {showCopy && (
-          <button class={copyButtonClass} id="copy-button" data-code={fullCode}>
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-            </svg>
-          </button>
-        )}
+  {(title || showCopy) && (
+    <div class={headerClass}>
+      <div
+        class={css({
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'sm',
+          flexWrap: 'wrap',
+        })}
+      >
+        {sections.map(({ language }) => (
+          <span
+            class={languageBadgeClass}
+            style={`background-color: ${languageColors[language] || '#666'}`}
+          >
+            {language}
+          </span>
+        ))}
+        {title && <span class={titleClass}>{title}</span>}
       </div>
-    )
-  }
+      {showCopy && (
+        <button class={copyButtonClass} id="copy-button" data-code={fullCode}>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        </button>
+      )}
+    </div>
+  )}
 
-  {
-    highlightedSections.map((section, index) => (
-      <Fragment>
-        {index > 0 && <div class={separatorClass} />}
-        <div class={sectionClass} set:html={section.highlighted} />
-      </Fragment>
-    ))
-  }
+  {highlightedSections.map((section, index) => (
+    <Fragment>
+      {index > 0 && <div class={separatorClass} />}
+      <div class={sectionClass} set:html={section.highlighted} />
+    </Fragment>
+  ))}
 </div>
 
 <script>

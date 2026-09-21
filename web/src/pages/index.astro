@@ -39,8 +39,7 @@ import { links } from '../config/links';
             lineHeight: '1.2',
           })}
         >
-          Edit your schema.{' '}
-          pgmt handles{' '}
+          Edit your schema. pgmt handles{' '}
           <span
             class={css({
               background:
@@ -130,7 +129,8 @@ import { links } from '../config/links';
               fontSize: 'sm',
               lineHeight: '1.6',
               color: 'text.secondary',
-            })}>{`schema/
+            })}
+          >{`schema/
 ├── functions/
 │   └── calculate_score.sql`}  <span class={css({ color: 'accent', fontWeight: '600' })}>← changed</span>{`
 └── views/
@@ -155,11 +155,11 @@ import { links } from '../config/links';
               lineHeight: '1.7',
             })}
           >
-            <strong class={css({ color: 'text.primary' })}
-              >One function changed.</strong
-            >{' '}
-            pgmt detected 3 dependent views, dropped them in the right order, applied
-            the update, and recreated everything — automatically.
+            <strong class={css({ color: 'text.primary' })}>
+              One function changed.
+            </strong>{' '}
+            pgmt detected 3 dependent views, dropped them in the right order,
+            applied the update, and recreated everything — automatically.
           </p>
           <p
             class={css({
@@ -183,7 +183,9 @@ import { links } from '../config/links';
           flexWrap: 'wrap',
         })}
       >
-        <Button href={links.docs.quickStart} size="lg">Get Started</Button>
+        <Button href={links.docs.quickStart} size="lg">
+          Get Started
+        </Button>
         <Button
           href="/blog/schema-migrations-arent-the-problem"
           variant="outline"
@@ -234,7 +236,8 @@ import { links } from '../config/links';
               lineHeight: '1.7',
             })}
           >
-            Run <code
+            Run{' '}
+            <code
               class={css({
                 fontFamily: 'mono',
                 fontSize: 'sm',
@@ -243,10 +246,13 @@ import { links } from '../config/links';
                 borderRadius: 'sm',
                 border: '1px solid',
                 borderColor: 'border',
-              })}>pgmt apply --watch</code
-            > and forget about it. Edit a schema file, save — your dev database updates
-            instantly. No migration files during development, no manual dependency
-            management.
+              })}
+            >
+              pgmt apply --watch
+            </code>{' '}
+            and forget about it. Edit a schema file, save — your dev database
+            updates instantly. No migration files during development, no manual
+            dependency management.
           </p>
         </div>
         <div class={css({ flex: '1' })}>
@@ -579,7 +585,9 @@ CREATE VIEW executive_dashboard AS ...`}
           flexWrap: 'wrap',
         })}
       >
-        <Button href={links.docs.quickStart} size="lg">Get Started</Button>
+        <Button href={links.docs.quickStart} size="lg">
+          Get Started
+        </Button>
         <Button href={links.docs.root} variant="outline" size="lg">
           Read the Docs
         </Button>

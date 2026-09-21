@@ -39,13 +39,11 @@ const { Content } = await render(post);
           fontFamily: 'mono',
         })}
       >
-        {
-          post.data.pubDate.toLocaleDateString('en-us', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          })
-        }
+        {post.data.pubDate.toLocaleDateString('en-us', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })}
       </time>
       <h1
         class={css({
@@ -147,7 +145,9 @@ const { Content } = await render(post);
     >
       <div class={hstack({ gap: 'md', flexWrap: 'wrap' })}>
         <Button href={links.docs.quickStart}>Get Started</Button>
-        <Button href={links.github.repo} variant="outline">GitHub</Button>
+        <Button href={links.github.repo} variant="outline">
+          GitHub
+        </Button>
       </div>
     </footer>
   </article>
