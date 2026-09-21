@@ -54,21 +54,30 @@ pub async fn cmd_migrate_update_with_options(
     // Each pristine-start phase gets its own fresh branch — the replay dirties
     // the shadow and `clean_shadow_db` is a no-op on branches, so a shared
     // branch would make the schema-file apply collide. See `migrate new`.
-    let starting_pool = shadow.connect_fresh().await?;
     let mut historical = HistoricalAttribution::default();
     let attribution = config.modules.is_enabled().then_some(&mut historical);
-    let old_catalog = get_migration_update_starting_state(
-        &starting_pool,
+    let (baselines, migrations_from, roles, cfg) = (
         &baselines_dir,
         &migrations_dir,
-        latest_migration.version,
         &roles_file,
         &baseline_config,
-        config,
-        attribution,
-    )
-    .await?;
-    crate::db::branch::drop_branch(starting_pool).await?;
+    );
+    let version = latest_migration.version;
+    let old_catalog = shadow
+        .with_fresh(|pool| async move {
+            get_migration_update_starting_state(
+                &pool,
+                baselines,
+                migrations_from,
+                version,
+                roles,
+                cfg,
+                config,
+                attribution,
+            )
+            .await
+        })
+        .await?;
 
     // Step 2: Reset shadow database and apply current schema
     debug!("Applying current schema to shadow database");
@@ -159,17 +168,21 @@ pub async fn cmd_migrate_update_with_options(
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
         if baseline_config.validate_consistency {
-            let validate_pool = shadow.connect_fresh().await?;
-            validate_baseline_against_catalog(
-                &validate_pool,
-                &result.path,
-                &new_catalog,
-                &baseline_config,
-                &roles_file,
-                config,
-            )
-            .await?;
-            crate::db::branch::drop_branch(validate_pool).await?;
+            let (baseline_path, catalog, roles, cfg) =
+                (&result.path, &new_catalog, &roles_file, &baseline_config);
+            shadow
+                .with_fresh(|pool| async move {
+                    validate_baseline_against_catalog(
+                        &pool,
+                        baseline_path,
+                        catalog,
+                        cfg,
+                        roles,
+                        config,
+                    )
+                    .await
+                })
+                .await?;
         }
     } else {
         println!(
@@ -265,21 +278,30 @@ pub async fn cmd_migrate_update_specific(
 
     // Fresh branch per pristine-start phase (see `migrate new`): the replay
     // dirties the shadow and branch cleans are no-ops, so reuse would collide.
-    let starting_pool = shadow.connect_fresh().await?;
     let mut historical = HistoricalAttribution::default();
     let attribution = config.modules.is_enabled().then_some(&mut historical);
-    let old_catalog = get_migration_update_starting_state(
-        &starting_pool,
+    let (baselines, migrations_from, roles, cfg) = (
         &baselines_dir,
         &migrations_dir,
-        target_migration.version,
         &roles_file,
         &baseline_config,
-        config,
-        attribution,
-    )
-    .await?;
-    crate::db::branch::drop_branch(starting_pool).await?;
+    );
+    let version = target_migration.version;
+    let old_catalog = shadow
+        .with_fresh(|pool| async move {
+            get_migration_update_starting_state(
+                &pool,
+                baselines,
+                migrations_from,
+                version,
+                roles,
+                cfg,
+                config,
+                attribution,
+            )
+            .await
+        })
+        .await?;
 
     // Apply current schema to shadow database
     debug!("Applying current schema to shadow database");
@@ -426,17 +448,21 @@ pub async fn cmd_migrate_update_specific(
         }
 
         if baseline_config.validate_consistency {
-            let validate_pool = shadow.connect_fresh().await?;
-            validate_baseline_against_catalog(
-                &validate_pool,
-                &result.path,
-                &new_catalog,
-                &baseline_config,
-                &roles_file,
-                config,
-            )
-            .await?;
-            crate::db::branch::drop_branch(validate_pool).await?;
+            let (baseline_path, catalog, roles, cfg) =
+                (&result.path, &new_catalog, &roles_file, &baseline_config);
+            shadow
+                .with_fresh(|pool| async move {
+                    validate_baseline_against_catalog(
+                        &pool,
+                        baseline_path,
+                        catalog,
+                        cfg,
+                        roles,
+                        config,
+                    )
+                    .await
+                })
+                .await?;
         }
     } else if is_latest {
         println!(

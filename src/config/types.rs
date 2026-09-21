@@ -172,11 +172,44 @@ impl ShadowDatabase {
     /// scoped-cleans itself). Every pristine-start phase MUST take its own
     /// connection: `clean_shadow_db` is a no-op on branches, so a branch reused
     /// across phases still holds the previous phase's objects and the next
-    /// apply fails with "already exists". Pair with [`crate::db::branch::drop_branch`]
-    /// to reclaim the branch when the phase is done.
+    /// apply fails with "already exists".
+    ///
+    /// Prefer [`Self::with_fresh`], which reclaims the branch on every exit
+    /// path. Call this directly only when the pool must outlive one scope, and
+    /// then pair it with [`crate::db::branch::drop_branch`] by hand.
     pub async fn connect_fresh(&self) -> anyhow::Result<sqlx::PgPool> {
         let url = self.get_connection_string().await?;
         crate::db::connection::connect_with_retry(&url).await
+    }
+
+    /// Run one pristine-start phase against its own fresh shadow, reclaiming
+    /// the ephemeral branch whether the phase succeeds or fails.
+    ///
+    /// A hand-rolled `connect_fresh` / `drop_branch` pair leaks the branch on
+    /// every `?` between them, and a phase that ends in an error is exactly
+    /// when the leak happens. Async `Drop` does not exist, so the scope is a
+    /// combinator rather than a guard: the pool lives only as long as `phase`.
+    ///
+    /// The phase's own error wins over a failed reclaim — the reclaim failure
+    /// is logged, since it costs a stale branch, not a wrong answer.
+    pub async fn with_fresh<T, F, Fut>(&self, phase: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(sqlx::PgPool) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        let pool = self.connect_fresh().await?;
+        let outcome = phase(pool.clone()).await;
+
+        match (outcome, crate::db::branch::drop_branch(pool).await) {
+            (Ok(value), reclaimed) => reclaimed.map(|()| value),
+            (Err(phase_error), Ok(())) => Err(phase_error),
+            (Err(phase_error), Err(reclaim_error)) => {
+                tracing::warn!(
+                    "failed to reclaim the shadow branch after an error: {reclaim_error:#}"
+                );
+                Err(phase_error)
+            }
+        }
     }
 
     /// Generate a shadow database URL for Docker mode

@@ -130,3 +130,65 @@ async fn test_url_shadow_clean_mode_does_not_touch_databases() -> Result<()> {
 
     Ok(())
 }
+
+/// A phase that fails must still give its branch back. A `connect_fresh` /
+/// `drop_branch` pair with a `?` between them skips the reclaim on exactly the
+/// path where it matters, leaking one branch database per failed run.
+#[tokio::test]
+async fn test_with_fresh_reclaims_the_branch_when_the_phase_fails() -> Result<()> {
+    let _shadow_guard = crate::helpers::shadow_cleanup_guard().await;
+    with_test_db(async |db| {
+        let source_db = format!("pgmt_src_{}", uuid::Uuid::new_v4().simple());
+        db.execute(&format!("CREATE DATABASE \"{}\"", source_db))
+            .await;
+        let base = db.url();
+        let source_url = format!("{}/{}", &base[..base.rfind('/').unwrap()], source_db);
+
+        let shadow = ShadowDatabase::Url {
+            url: source_url,
+            reset: ShadowResetMode::Branch,
+        };
+
+        // The phase records which branch it was handed, then fails.
+        let branch_name = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let recorder = std::sync::Arc::clone(&branch_name);
+        let outcome: Result<()> = shadow
+            .with_fresh(|pool| async move {
+                let name: String = sqlx::query_scalar("SELECT current_database()")
+                    .fetch_one(&pool)
+                    .await?;
+                *recorder.lock().unwrap() = Some(name);
+                anyhow::bail!("the phase failed")
+            })
+            .await;
+
+        let error = outcome.expect_err("the phase's error must reach the caller");
+        assert!(
+            error.to_string().contains("the phase failed"),
+            "the phase's own error wins over the reclaim: {error}"
+        );
+
+        let branch = branch_name.lock().unwrap().clone().expect("phase ran");
+        assert!(
+            branch.contains("pgmt_branch_"),
+            "the phase should have been handed an ephemeral branch: {branch}"
+        );
+
+        let still_there: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(&branch)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert!(
+            !still_there,
+            "branch {branch} leaked: a failed phase must still reclaim it"
+        );
+
+        db.execute(&format!("DROP DATABASE IF EXISTS \"{}\"", source_db))
+            .await;
+    })
+    .await;
+
+    Ok(())
+}

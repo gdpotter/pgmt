@@ -72,36 +72,40 @@ pub async fn cmd_migrate_new(
     // Each phase needs its own pristine shadow: the replay below leaves the
     // shadow populated, and `clean_shadow_db` is a no-op on branch shadows, so
     // reusing one branch would make the schema-file apply collide ("already
-    // exists"). `drop_branch` reclaims the ephemeral branch right after.
+    // exists"). `with_fresh` scopes each phase to its own branch.
     //
     // Module projects also collect per-section attribution during the replay
     // (which module's section created each object) — that's what lets DROP
     // steps and re-tags be attributed, since dropped objects have no current
     // file.
-    let starting_pool = shadow.connect_fresh().await?;
-    let (old_catalog, historical) = if modules_enabled {
-        get_migration_starting_state_with_attribution(
-            &starting_pool,
-            &baselines_dir,
-            &migrations_dir,
-            &roles_file,
-            &baseline_config,
-            config,
-        )
-        .await?
-    } else {
-        let catalog = get_migration_starting_state(
-            &starting_pool,
-            &baselines_dir,
-            &migrations_dir,
-            &roles_file,
-            &baseline_config,
-            config,
-        )
+    let (baselines, migrations_from, roles) = (&baselines_dir, &migrations_dir, &roles_file);
+    let cfg = &baseline_config;
+    let (old_catalog, historical) = shadow
+        .with_fresh(|pool| async move {
+            if modules_enabled {
+                get_migration_starting_state_with_attribution(
+                    &pool,
+                    baselines,
+                    migrations_from,
+                    roles,
+                    cfg,
+                    config,
+                )
+                .await
+            } else {
+                let catalog = get_migration_starting_state(
+                    &pool,
+                    baselines,
+                    migrations_from,
+                    roles,
+                    cfg,
+                    config,
+                )
+                .await?;
+                Ok((catalog, HistoricalAttribution::default()))
+            }
+        })
         .await?;
-        (catalog, HistoricalAttribution::default())
-    };
-    crate::db::branch::drop_branch(starting_pool).await?;
 
     debug!("Applying current schema to shadow database");
     let crate::schema_ops::DesiredState {
@@ -182,17 +186,20 @@ pub async fn cmd_migrate_new(
         println!("Created baseline: {}", result.path.display());
 
         if baseline_config.validate_consistency {
-            let validate_pool = shadow.connect_fresh().await?;
-            validate_baseline_against_catalog(
-                &validate_pool,
-                &result.path,
-                &new_catalog,
-                &baseline_config,
-                &roles_file,
-                config,
-            )
-            .await?;
-            crate::db::branch::drop_branch(validate_pool).await?;
+            let (baseline_path, catalog, roles) = (&result.path, &new_catalog, &roles_file);
+            shadow
+                .with_fresh(|pool| async move {
+                    validate_baseline_against_catalog(
+                        &pool,
+                        baseline_path,
+                        catalog,
+                        cfg,
+                        roles,
+                        config,
+                    )
+                    .await
+                })
+                .await?;
         }
     } else {
         println!("Skipping baseline creation (use --create-baseline to create one)");

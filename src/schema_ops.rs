@@ -147,14 +147,11 @@ pub async fn apply_current_schema_to_shadow(
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<Catalog> {
-    let shadow_pool = shadow.connect_fresh().await?;
-
-    let catalog = build_desired_state(config, root_dir, &shadow_pool).await?;
-
-    // Reclaim the ephemeral branch now rather than leaking one per call (matters
-    // for long-running callers like `apply --watch`); no-op for external URLs.
-    crate::db::branch::drop_branch(shadow_pool).await?;
-    Ok(catalog)
+    // The branch is reclaimed on every exit path rather than leaked per call,
+    // which matters for long-running callers like `apply --watch`.
+    shadow
+        .with_fresh(|pool| async move { build_desired_state(config, root_dir, &pool).await })
+        .await
 }
 
 /// The desired state, plus the two things a caller that writes a baseline
@@ -184,21 +181,22 @@ pub async fn apply_current_schema_to_shadow_with_mapping(
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<DesiredState> {
-    let shadow_pool = shadow.connect_fresh().await?;
-    let filter = ObjectFilter::from_config(config);
+    shadow
+        .with_fresh(|pool| async move {
+            let filter = ObjectFilter::from_config(config);
 
-    clean_shadow_for_schema(config, root_dir, &shadow_pool).await?;
-    let base = Catalog::load_managed(&shadow_pool, &filter).await?;
+            clean_shadow_for_schema(config, root_dir, &pool).await?;
+            let base = Catalog::load_managed(&pool, &filter).await?;
 
-    let (catalog, mapping) = apply_schema_files_to_shadow(config, root_dir, &shadow_pool).await?;
-    let managed = filter.filter_catalog(catalog);
+            let (catalog, mapping) = apply_schema_files_to_shadow(config, root_dir, &pool).await?;
 
-    crate::db::branch::drop_branch(shadow_pool).await?;
-    Ok(DesiredState {
-        base,
-        catalog: managed,
-        mapping,
-    })
+            Ok(DesiredState {
+                base,
+                catalog: filter.filter_catalog(catalog),
+                mapping,
+            })
+        })
+        .await
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

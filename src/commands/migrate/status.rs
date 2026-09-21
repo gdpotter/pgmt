@@ -273,17 +273,20 @@ pub async fn cmd_migrate_validate(
     // Reconstruction and desired-state each need their own pristine branch:
     // the replay dirties the shadow and branch cleans are no-ops, so sharing
     // one branch would make the schema-file apply collide. See `migrate new`.
-    let starting_pool = shadow.connect_fresh().await?;
-    let expected_catalog = get_migration_starting_state(
-        &starting_pool,
-        &baselines_dir,
-        &migrations_dir,
-        &roles_file,
-        &baseline_config,
-        config,
-    )
-    .await?;
-    crate::db::branch::drop_branch(starting_pool).await?;
+    let (baselines, migrations_from, roles) = (&baselines_dir, &migrations_dir, &roles_file);
+    let expected_catalog = shadow
+        .with_fresh(|pool| async move {
+            get_migration_starting_state(
+                &pool,
+                baselines,
+                migrations_from,
+                roles,
+                &baseline_config,
+                config,
+            )
+            .await
+        })
+        .await?;
 
     // Step 2: Get desired state from current schema files
     if !validation_options.quiet {

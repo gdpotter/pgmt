@@ -89,16 +89,12 @@ pub async fn cmd_migrate_baseline(
     // predicate; module projects also collect per-section attribution so the
     // checkpoint keeps every object's module tag.
     debug!("Replaying migration history into shadow database");
-    let replay_pool = shadow.connect_fresh().await?;
-    let (base_catalog, replayed, historical) = replay_history_for_checkpoint(
-        &replay_pool,
-        &baselines_dir,
-        &migrations_dir,
-        &roles_file,
-        config,
-    )
-    .await?;
-    crate::db::branch::drop_branch(replay_pool).await?;
+    let (baselines, migrations_from, roles) = (&baselines_dir, &migrations_dir, &roles_file);
+    let (base_catalog, replayed, historical) = shadow
+        .with_fresh(|pool| async move {
+            replay_history_for_checkpoint(&pool, baselines, migrations_from, roles, config).await
+        })
+        .await?;
 
     let request = BaselineCreationRequest {
         catalog: replayed.clone(),
@@ -192,17 +188,20 @@ pub async fn cmd_migrate_baseline(
 
         // Baseline validation replays into a pristine shadow, so it needs its
         // own fresh branch — the checkpoint replay above dirtied its own.
-        let validate_pool = shadow.connect_fresh().await?;
-        let validation_result = validate_baseline_against_catalog(
-            &validate_pool,
-            &result.path,
-            &replayed,
-            &baseline_config,
-            &roles_file,
-            config,
-        )
-        .await;
-        crate::db::branch::drop_branch(validate_pool).await?;
+        let (baseline_path, catalog, roles) = (&result.path, &replayed, &roles_file);
+        let validation_result = shadow
+            .with_fresh(|pool| async move {
+                validate_baseline_against_catalog(
+                    &pool,
+                    baseline_path,
+                    catalog,
+                    &baseline_config,
+                    roles,
+                    config,
+                )
+                .await
+            })
+            .await;
         if let Err(validation_error) = validation_result {
             eprintln!("Baseline validation failed\n");
             eprintln!("{:#}", validation_error);
