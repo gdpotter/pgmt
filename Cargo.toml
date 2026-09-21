@@ -45,7 +45,7 @@ anyhow = "1.0"
 assert_cmd = "2.1.2"
 predicates = "3.0"
 chrono = "0.4.43"
-rstest = "0.26.1"
+rstest = "0.27.0"
 insta = "1.46.1"
 
 # Interactive CLI testing - better support on Unix-like systems
