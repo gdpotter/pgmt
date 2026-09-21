@@ -1,19 +1,12 @@
-use crate::baseline::operations::BaselineCreationRequest;
+use crate::commands::migrate::pipeline::{
+    BaselinePolicy, GenerationRequest, StartingState, generate,
+};
 use crate::config::Config;
-use crate::migrate::{MigrationGenerationInput, generate_migration, migration_filename};
-use crate::migration::{
-    BaselineConfig, get_migration_starting_state, get_migration_starting_state_with_attribution,
-    validate_baseline_against_catalog,
-};
-use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, render_generated_migration,
-    section_baseline_if_moduled,
-};
+use crate::migrate::migration_filename;
 use crate::prompts::prompt_required_string_with_validation;
 use anyhow::Result;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::debug;
 
 pub async fn cmd_migrate_new(
     config: &Config,
@@ -62,147 +55,39 @@ pub async fn cmd_migrate_new(
         return Ok(());
     }
 
-    let baseline_config = BaselineConfig {
-        validate_consistency: config.migration.validate_baseline_consistency,
-        verbose: true,
-    };
-    let roles_file = root_dir.join(&config.directories.roles);
-    let modules_enabled = config.modules.is_enabled();
-
-    // Each phase needs its own pristine shadow: the replay below leaves the
-    // shadow populated, and `clean_shadow_db` is a no-op on branch shadows, so
-    // reusing one branch would make the schema-file apply collide ("already
-    // exists"). `with_fresh` scopes each phase to its own branch.
-    //
-    // Module projects also collect per-section attribution during the replay
-    // (which module's section created each object) — that's what lets DROP
-    // steps and re-tags be attributed, since dropped objects have no current
-    // file.
-    let (baselines, migrations_from, roles) = (&baselines_dir, &migrations_dir, &roles_file);
-    let cfg = &baseline_config;
-    let (old_catalog, historical) = shadow
-        .with_fresh(|pool| async move {
-            if modules_enabled {
-                get_migration_starting_state_with_attribution(
-                    &pool,
-                    baselines,
-                    migrations_from,
-                    roles,
-                    cfg,
-                    config,
-                )
-                .await
-            } else {
-                let catalog = get_migration_starting_state(
-                    &pool,
-                    baselines,
-                    migrations_from,
-                    roles,
-                    cfg,
-                    config,
-                )
-                .await?;
-                Ok((catalog, HistoricalAttribution::default()))
-            }
-        })
-        .await?;
-
-    debug!("Applying current schema to shadow database");
-    let crate::schema_ops::DesiredState {
-        base: shadow_base,
-        catalog: new_catalog,
-        mapping: file_mapping,
-    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-        .await?;
-
-    // Validate column ordering before generating migration
-    crate::validation::apply_column_order_validation(
-        &old_catalog,
-        &new_catalog,
-        config.migration.column_order,
-    )?;
-
-    debug!("Generating migration steps");
-    let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: old_catalog.clone(),
-        new_catalog: new_catalog.clone(),
-        description: description.clone(),
-        version,
-        filename_prefix: config.migration.filename_prefix.clone(),
-    })?;
-
-    // Module projects: validate cross-module references and check whether
-    // this change diverges the partition from what history implies —
-    // a re-tag or a drop that breaks another module's replayability. Any
-    // divergence demands a re-anchoring baseline alongside the migration.
-    let module_gen = evaluate_module_generation(
+    // `--create-baseline` opts in for this run; its absence falls back to
+    // config, so the flag can only add, never suppress a configured default.
+    let generated = generate(
         config,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-        should_create_baseline,
-        "re-run with --create-baseline to emit a re-anchoring baseline.",
-    )?;
-    let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
+        root_dir,
+        shadow,
+        GenerationRequest {
+            version,
+            description: description.clone(),
+            starting_state: StartingState::FullHistory,
+            baseline: if should_create_baseline {
+                BaselinePolicy::Requested
+            } else {
+                BaselinePolicy::Never
+            },
+            reanchor_hint: "re-run with --create-baseline to emit a re-anchoring baseline.",
+            dry_run: false,
+            stub_migration: empty,
+        },
+    )
+    .await?;
 
-    if !empty && !migration_result.has_changes && !partition_diverged {
+    if !empty && generated.is_empty() {
         println!("No changes detected - no migration needed");
         return Ok(());
     }
 
-    // Baseline first (--create-baseline opts in for this run; absence falls
-    // back to config — the flag can only add, never suppress a configured
-    // default): when the partition re-anchors, migration V's acquisition
-    // sections derive from the baseline's provenance cut, so the
-    // baseline's sections must exist before the migration is rendered.
-    if should_create_baseline {
-        // Generate the baseline from the full desired catalog, not the migration
-        // SQL — the migration is a delta against the prior state, so writing it
-        // would produce a partial baseline for any non-initial migration.
-        //
-        // Diffed FROM the shadow's pre-schema base: whatever the image
-        // provides is present on both sides and cancels, so a baseline
-        // re-creates only what the schema files describe.
-        let result = crate::baseline::operations::create_baseline(BaselineCreationRequest {
-            catalog: new_catalog.clone(),
-            base_catalog: shadow_base.clone(),
-            version,
-            description: "baseline".to_string(),
-            baselines_dir: baselines_dir.clone(),
-            verbose: baseline_config.verbose,
-        })
-        .await?;
-
-        // Module projects rewrite the baseline into provenance-cut per-module
-        // sections, with `remaps` recording prior ownership wherever it changed.
-        section_baseline_if_moduled(
-            module_gen.as_ref(),
-            &result.path,
-            &new_catalog,
-            &file_mapping,
-            &historical,
-        )?;
-        println!("Created baseline: {}", result.path.display());
-
-        if baseline_config.validate_consistency {
-            let (baseline_path, catalog, roles) = (&result.path, &new_catalog, &roles_file);
-            shadow
-                .with_fresh(|pool| async move {
-                    validate_baseline_against_catalog(
-                        &pool,
-                        baseline_path,
-                        catalog,
-                        cfg,
-                        roles,
-                        config,
-                    )
-                    .await
-                })
-                .await?;
+    match &generated.baseline {
+        Some(baseline) => println!("Created baseline: {}", baseline.path.display()),
+        None if !should_create_baseline => {
+            println!("Skipping baseline creation (use --create-baseline to create one)")
         }
-    } else {
-        println!("Skipping baseline creation (use --create-baseline to create one)");
+        None => {}
     }
 
     if empty {
@@ -212,21 +97,9 @@ pub async fn cmd_migrate_new(
         return Ok(());
     }
 
-    // The migration: ordinary diff sections plus, at a re-anchor, the
-    // acquisition sections for module-sourced moves (base-sourced
-    // moves are satisfied everywhere by construction and stay baseline-only).
-    let migration_sql: Option<String> = render_generated_migration(
-        module_gen.as_ref(),
-        migration_result.has_changes,
-        &migration_result.migration_sql,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-    )?;
-    match migration_sql {
+    match generated.migration_sql {
         Some(sql) => {
-            let migration_path = migrations_dir.join(&migration_result.migration_filename);
+            let migration_path = migrations_dir.join(&generated.filename);
             std::fs::write(&migration_path, &sql)?;
             println!("Created migration: {}", migration_path.display());
         }

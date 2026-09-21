@@ -283,6 +283,7 @@ pub async fn cmd_migrate_validate(
                 roles,
                 &baseline_config,
                 config,
+                None,
             )
             .await
         })

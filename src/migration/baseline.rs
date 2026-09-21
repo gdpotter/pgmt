@@ -368,55 +368,13 @@ pub async fn validate_baseline_against_catalog(
 ///
 /// This is also the "expected state" for `migrate validate` — both commands
 /// reconstruct history through the same baseline + replay path.
-pub async fn get_migration_starting_state(
-    shadow_pool: &PgPool,
-    baselines_dir: &Path,
-    migrations_dir: &Path,
-    roles_file: &Path,
-    baseline_config: &BaselineConfig,
-    config: &Config,
-) -> Result<Catalog> {
-    get_migration_starting_state_inner(
-        shadow_pool,
-        baselines_dir,
-        migrations_dir,
-        roles_file,
-        baseline_config,
-        config,
-        None,
-    )
-    .await
-}
-
-/// Like [`get_migration_starting_state`], but also collects object→module
-/// attribution from the replayed history's section tags (per-section identity
-/// snapshots). Used by module-aware generation to attribute DROP steps —
-/// their objects have no current file, so ownership can only come from the
-/// checksummed history that created them.
-pub async fn get_migration_starting_state_with_attribution(
-    shadow_pool: &PgPool,
-    baselines_dir: &Path,
-    migrations_dir: &Path,
-    roles_file: &Path,
-    baseline_config: &BaselineConfig,
-    config: &Config,
-) -> Result<(Catalog, HistoricalAttribution)> {
-    let mut attribution = HistoricalAttribution::default();
-    let catalog = get_migration_starting_state_inner(
-        shadow_pool,
-        baselines_dir,
-        migrations_dir,
-        roles_file,
-        baseline_config,
-        config,
-        Some(&mut attribution),
-    )
-    .await?;
-    Ok((catalog, attribution))
-}
-
+///
+/// `attribution`, when supplied, collects object→module attribution from the
+/// replayed history's section tags. Module-aware generation needs it to
+/// attribute DROP steps: their objects have no current file, so ownership can
+/// only come from the checksummed history that created them.
 #[allow(clippy::too_many_arguments)]
-async fn get_migration_starting_state_inner(
+pub async fn get_migration_starting_state(
     shadow_pool: &PgPool,
     baselines_dir: &Path,
     migrations_dir: &Path,

@@ -1,57 +1,19 @@
-use crate::baseline::operations::{BaselineCreationRequest, create_baseline};
+use crate::commands::migrate::pipeline::{
+    BaselinePolicy, GenerationRequest, StartingState, generate,
+};
 use crate::config::Config;
-use crate::migrate::{MigrationGenerationInput, generate_migration};
-use crate::migration::{
-    BaselineConfig, find_latest_migration, generate_baseline_filename,
-    get_migration_update_starting_state, should_manage_baseline_for_migration,
-    validate_baseline_against_catalog,
-};
-use crate::modules::{
-    HistoricalAttribution, evaluate_module_generation, render_generated_migration,
-    section_baseline_if_moduled,
-};
+use crate::migration::find_latest_migration;
 use anyhow::{Result, anyhow};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::debug;
 
-/// A temporary directory removed when the value drops.
-struct ScratchDir(PathBuf);
+/// `migrate update` has no `--create-baseline` flag; re-anchoring is owned by
+/// `migrate new`, so point the user there rather than at a flag this subcommand
+/// would reject as unknown.
+const REANCHOR_HINT: &str =
+    "run 'pgmt migrate new <description> --create-baseline' to emit a re-anchoring baseline.";
 
-impl ScratchDir {
-    fn new() -> Result<Self> {
-        let path =
-            std::env::temp_dir().join(format!("pgmt-dry-run-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&path)?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// The directory a baseline regeneration writes into.
-///
-/// A dry run still regenerates the baseline: module sectioning rewrites the
-/// file in place and baseline validation reads it back, so those steps need a
-/// real file. It is produced in a scratch directory that is discarded, leaving
-/// the project's baselines directory alone while the preview reports the real
-/// path. The returned guard must stay alive until the file is no longer needed.
-fn baseline_write_dir(
-    baselines_dir: &Path,
-    dry_run: bool,
-) -> Result<(PathBuf, Option<ScratchDir>)> {
-    if dry_run {
-        let scratch = ScratchDir::new()?;
-        let dir = scratch.0.clone();
-        Ok((dir, Some(scratch)))
-    } else {
-        Ok((baselines_dir.to_path_buf(), None))
-    }
-}
+const NO_CHANGES_SQL: &str = "-- No changes detected\n";
 
 pub async fn cmd_migrate_update_with_options(
     config: &Config,
@@ -65,112 +27,38 @@ pub async fn cmd_migrate_update_with_options(
 
     println!("Updating latest migration with current changes");
 
-    // Create necessary directories
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
     std::fs::create_dir_all(&migrations_dir)?;
     std::fs::create_dir_all(&baselines_dir)?;
 
-    // Find the latest migration
-    let latest_migration = find_latest_migration(&migrations_dir)?;
-    if latest_migration.is_none() {
-        return Err(anyhow::anyhow!(
+    let latest_migration = find_latest_migration(&migrations_dir)?.ok_or_else(|| {
+        anyhow!(
             "No migrations found. Use 'pgmt migrate new <description>' to create the first migration."
-        ));
-    }
-
-    let latest_migration = latest_migration.unwrap();
+        )
+    })?;
     println!("Updating migration: {}", latest_migration.path.display());
 
-    // Step 1: Load the baseline that corresponds to the previous migration
-    let baseline_config = BaselineConfig {
-        validate_consistency: config.migration.validate_baseline_consistency,
-        verbose: true,
-    };
-    let roles_file = root_dir.join(&config.directories.roles);
-
-    // Each pristine-start phase gets its own fresh branch — the replay dirties
-    // the shadow and `clean_shadow_db` is a no-op on branches, so a shared
-    // branch would make the schema-file apply collide. See `migrate new`.
-    let mut historical = HistoricalAttribution::default();
-    let attribution = config.modules.is_enabled().then_some(&mut historical);
-    let (baselines, migrations_from, roles, cfg) = (
-        &baselines_dir,
-        &migrations_dir,
-        &roles_file,
-        &baseline_config,
-    );
-    let version = latest_migration.version;
-    let old_catalog = shadow
-        .with_fresh(|pool| async move {
-            get_migration_update_starting_state(
-                &pool,
-                baselines,
-                migrations_from,
-                version,
-                roles,
-                cfg,
-                config,
-                attribution,
-            )
-            .await
-        })
-        .await?;
-
-    // Step 2: Reset shadow database and apply current schema
-    debug!("Applying current schema to shadow database");
-    let crate::schema_ops::DesiredState {
-        base: shadow_base,
-        catalog: new_catalog,
-        mapping: file_mapping,
-    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-        .await?;
-
-    // Validate column ordering before generating migration
-    crate::validation::apply_column_order_validation(
-        &old_catalog,
-        &new_catalog,
-        config.migration.column_order,
-    )?;
-
-    // Step 3: Generate migration using pure logic
-    debug!("Generating updated migration steps");
-    let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: old_catalog.clone(),
-        new_catalog: new_catalog.clone(),
-        description: latest_migration.description.clone(), // We keep the original description
-        version: latest_migration.version,
-        filename_prefix: config.migration.filename_prefix.clone(),
-    })?;
-
-    // Whether a paired baseline will be (re)generated below — that baseline is
-    // also what a partition re-anchor requires.
-    let baseline_filename = generate_baseline_filename(latest_migration.version);
-    let baseline_path = baselines_dir.join(&baseline_filename);
-    let should_update_baseline = should_manage_baseline_for_migration(
+    let generated = generate(
         config,
-        &baseline_path,
-        config.migration.create_baselines_by_default,
-    );
+        root_dir,
+        shadow,
+        GenerationRequest {
+            version: latest_migration.version,
+            // The original description is kept; only the content is rewritten.
+            description: latest_migration.description.clone(),
+            starting_state: StartingState::Before(latest_migration.version),
+            baseline: BaselinePolicy::IfManaged,
+            reanchor_hint: REANCHOR_HINT,
+            dry_run,
+            stub_migration: false,
+        },
+    )
+    .await?;
 
-    let module_gen = evaluate_module_generation(
-        config,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-        should_update_baseline,
-        // `migrate update` has no --create-baseline flag; re-anchoring is owned
-        // by `migrate new`, so point the user there rather than at a flag this
-        // subcommand would reject as unknown.
-        "run 'pgmt migrate new <description> --create-baseline' to emit a re-anchoring baseline.",
-    )?;
-    let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
-
-    if !migration_result.has_changes && !partition_diverged {
+    if generated.is_empty() {
         println!("No changes detected - updating migration to be empty");
 
-        // Update the migration file to be empty since no changes are needed
         if dry_run {
             println!(
                 "🔄 Would update: {} (now empty)",
@@ -178,8 +66,7 @@ pub async fn cmd_migrate_update_with_options(
             );
             println!("🔍 Dry-run complete! No changes were made.");
         } else {
-            let empty_migration_sql = "-- No changes detected\n";
-            std::fs::write(&latest_migration.path, empty_migration_sql)?;
+            std::fs::write(&latest_migration.path, NO_CHANGES_SQL)?;
             println!(
                 "Updated migration: {} (now empty)",
                 latest_migration.path.display()
@@ -189,72 +76,19 @@ pub async fn cmd_migrate_update_with_options(
         return Ok(());
     }
 
-    // Step 5 runs before step 4 for module projects so the baseline is
-    // sectioned first. The migration's acquisition sections render the
-    // moved objects from the STARTING catalog, not the baseline, so they do
-    // not consume the baseline's sections — but the ordering is still natural.
-    if should_update_baseline {
-        let (write_dir, _scratch) = baseline_write_dir(&baselines_dir, dry_run)?;
-        let result = create_baseline(BaselineCreationRequest {
-            catalog: new_catalog.clone(),
-            base_catalog: shadow_base.clone(),
-            version: latest_migration.version,
-            description: "baseline".to_string(),
-            baselines_dir: write_dir,
-            // Verbose output would name the scratch path; the preview below
-            // names the real one.
-            verbose: baseline_config.verbose && !dry_run,
-        })
-        .await?;
-        section_baseline_if_moduled(
-            module_gen.as_ref(),
-            &result.path,
-            &new_catalog,
-            &file_mapping,
-            &historical,
-        )?;
-        if dry_run {
-            println!("🔄 Would update baseline: {}", baseline_path.display());
-        } else {
-            println!("Updated baseline: {}", result.path.display());
+    match &generated.baseline {
+        Some(baseline) if dry_run => {
+            println!("🔄 Would update baseline: {}", baseline.path.display())
         }
-
-        // Step 6: Validate that the baseline matches the intended schema using pure logic
-        if baseline_config.validate_consistency {
-            let (baseline_path, catalog, roles, cfg) =
-                (&result.path, &new_catalog, &roles_file, &baseline_config);
-            shadow
-                .with_fresh(|pool| async move {
-                    validate_baseline_against_catalog(
-                        &pool,
-                        baseline_path,
-                        catalog,
-                        cfg,
-                        roles,
-                        config,
-                    )
-                    .await
-                })
-                .await?;
-        }
-    } else {
-        println!(
+        Some(baseline) => println!("Updated baseline: {}", baseline.path.display()),
+        None => println!(
             "Skipping baseline update (baseline does not exist and create_baselines_by_default is false)"
-        );
+        ),
     }
 
-    // Step 4 (after 5 by design): update the migration file — ordinary diff
-    // sections plus, at a re-anchor, the acquisition sections.
-    let migration_sql: String = render_generated_migration(
-        module_gen.as_ref(),
-        migration_result.has_changes,
-        &migration_result.migration_sql,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-    )?
-    .unwrap_or_else(|| "-- No changes detected\n".to_string());
+    let migration_sql = generated
+        .migration_sql
+        .unwrap_or_else(|| NO_CHANGES_SQL.to_string());
     if dry_run {
         println!(
             "📝 Preview: Generated migration content ({} chars)",
@@ -291,23 +125,18 @@ pub async fn cmd_migrate_update_specific(
         println!("Updating migration: {}", version_str);
     }
 
-    // Create necessary directories
     let migrations_dir = root_dir.join(&config.directories.migrations);
     let baselines_dir = root_dir.join(&config.directories.baselines);
     std::fs::create_dir_all(&migrations_dir)?;
     std::fs::create_dir_all(&baselines_dir)?;
 
-    // Find the target migration
-    let target_migration = find_migration_by_version(&migrations_dir, version_str)?;
-    let target_migration = match target_migration {
-        Some(migration) => migration,
-        None => {
-            return Err(anyhow!(
+    let target_migration =
+        find_migration_by_version(&migrations_dir, version_str)?.ok_or_else(|| {
+            anyhow!(
                 "Migration '{}' not found. Use 'pgmt migrate status' to see available migrations.",
                 version_str
-            ));
-        }
-    };
+            )
+        })?;
 
     println!(
         "Found migration: {} ({})",
@@ -315,123 +144,60 @@ pub async fn cmd_migrate_update_specific(
         target_migration.description
     );
 
-    // Create backup if requested
-    if backup && !dry_run {
+    if backup {
         let backup_path = target_migration.path.with_extension("sql.bak");
-        std::fs::copy(&target_migration.path, &backup_path)?;
-        println!("💾 Backup created: {}", backup_path.display());
-    } else if backup && dry_run {
-        let backup_path = target_migration.path.with_extension("sql.bak");
-        println!("💾 Would create backup: {}", backup_path.display());
+        if dry_run {
+            println!("💾 Would create backup: {}", backup_path.display());
+        } else {
+            std::fs::copy(&target_migration.path, &backup_path)?;
+            println!("💾 Backup created: {}", backup_path.display());
+        }
     }
 
-    // Check if this is the latest migration
-    let latest_migration = find_latest_migration(&migrations_dir)?;
-    let is_latest = latest_migration
+    let is_latest = find_latest_migration(&migrations_dir)?
         .map(|latest| latest.version == target_migration.version)
         .unwrap_or(false);
 
-    // Get the baseline state before this migration
-    let baseline_config = BaselineConfig {
-        validate_consistency: config.migration.validate_baseline_consistency,
-        verbose: true,
-    };
-    let roles_file = root_dir.join(&config.directories.roles);
-
-    // Fresh branch per pristine-start phase (see `migrate new`): the replay
-    // dirties the shadow and branch cleans are no-ops, so reuse would collide.
-    let mut historical = HistoricalAttribution::default();
-    let attribution = config.modules.is_enabled().then_some(&mut historical);
-    let (baselines, migrations_from, roles, cfg) = (
-        &baselines_dir,
-        &migrations_dir,
-        &roles_file,
-        &baseline_config,
-    );
-    let version = target_migration.version;
-    let old_catalog = shadow
-        .with_fresh(|pool| async move {
-            get_migration_update_starting_state(
-                &pool,
-                baselines,
-                migrations_from,
-                version,
-                roles,
-                cfg,
-                config,
-                attribution,
-            )
-            .await
-        })
-        .await?;
-
-    // Apply current schema to shadow database
-    debug!("Applying current schema to shadow database");
-    let crate::schema_ops::DesiredState {
-        base: shadow_base,
-        catalog: new_catalog,
-        mapping: file_mapping,
-    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-        .await?;
-
-    // Validate column ordering before generating migration
-    crate::validation::apply_column_order_validation(
-        &old_catalog,
-        &new_catalog,
-        config.migration.column_order,
-    )?;
-
-    // Determine version and description for the new migration
-    let (new_version, new_description) = if is_latest {
-        // For latest migration, keep same version and description
-        (
-            target_migration.version,
-            target_migration.description.clone(),
-        )
+    // The latest migration keeps its version; an older one is renumbered to the
+    // head of the log, since its replacement has to apply after everything that
+    // already ran.
+    let new_version = if is_latest {
+        target_migration.version
     } else {
-        // For older migration, generate new timestamp
-        let new_version = SystemTime::now()
+        SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| anyhow!("System time is before Unix epoch: {}", e))?
-            .as_secs();
-        (new_version, target_migration.description.clone())
+            .as_secs()
     };
+    let new_description = target_migration.description.clone();
 
-    // Generate migration content
-    debug!("Generating updated migration steps");
-    let migration_result = generate_migration(MigrationGenerationInput {
-        old_catalog: old_catalog.clone(),
-        new_catalog: new_catalog.clone(),
-        description: new_description.clone(),
-        version: new_version,
-        filename_prefix: config.migration.filename_prefix.clone(),
-    })?;
-
-    // Whether a paired baseline will be (re)generated below — required for a
-    // partition re-anchor.
-    let baseline_filename = generate_baseline_filename(new_version);
-    let baseline_path = baselines_dir.join(&baseline_filename);
-    let should_update_baseline = should_manage_baseline_for_migration(
+    let generated = generate(
         config,
-        &baseline_path,
-        config.migration.create_baselines_by_default,
+        root_dir,
+        shadow,
+        GenerationRequest {
+            version: new_version,
+            description: new_description.clone(),
+            // Replayed up to the migration being rewritten, whatever version
+            // its replacement takes.
+            starting_state: StartingState::Before(target_migration.version),
+            baseline: BaselinePolicy::IfManaged,
+            reanchor_hint: REANCHOR_HINT,
+            dry_run,
+            stub_migration: false,
+        },
+    )
+    .await?;
+
+    let renumbered_filename = format!(
+        "{}{}_{}.sql",
+        config.migration.filename_prefix,
+        new_version,
+        new_description.replace(' ', "_")
     );
+    let renumbered_path = migrations_dir.join(&renumbered_filename);
 
-    let module_gen = evaluate_module_generation(
-        config,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-        should_update_baseline,
-        // `migrate update` has no --create-baseline flag; re-anchoring is owned
-        // by `migrate new`, so point the user there rather than at a flag this
-        // subcommand would reject as unknown.
-        "run 'pgmt migrate new <description> --create-baseline' to emit a re-anchoring baseline.",
-    )?;
-    let partition_diverged = module_gen.as_ref().is_some_and(|m| m.diverged);
-
-    if !migration_result.has_changes {
+    if !generated.has_changes {
         if is_latest {
             println!("No changes detected - updating migration to be empty");
             if dry_run {
@@ -440,8 +206,7 @@ pub async fn cmd_migrate_update_specific(
                     target_migration.path.display()
                 );
             } else {
-                let empty_migration_sql = "-- No changes detected\n";
-                std::fs::write(&target_migration.path, empty_migration_sql)?;
+                std::fs::write(&target_migration.path, NO_CHANGES_SQL)?;
                 println!(
                     "Updated migration: {} (now empty)",
                     target_migration.path.display()
@@ -450,22 +215,15 @@ pub async fn cmd_migrate_update_specific(
         } else {
             println!("No changes detected - conflicts resolved by other migrations");
             // An older migration is still renumbered when it has no changes.
-            let new_filename = format!(
-                "{}{}_{}.sql",
-                config.migration.filename_prefix,
-                new_version,
-                new_description.replace(' ', "_")
-            );
-            let new_path = migrations_dir.join(&new_filename);
             if dry_run {
                 println!(
                     "🔄 Would rename {} → {}",
                     target_migration.version, new_version
                 );
                 println!("   Delete: {}", target_migration.path.display());
-                println!("   Create: {}", new_path.display());
+                println!("   Create: {}", renumbered_path.display());
             } else {
-                let empty_migration_content = format!(
+                let content = format!(
                     "-- Migration: {}\n-- Version: {}{}\n-- Generated by pgmt migrate update (renumbered from {}{})\n-- No changes needed - conflicts resolved by intervening migrations\n",
                     new_description,
                     config.migration.filename_prefix,
@@ -474,95 +232,43 @@ pub async fn cmd_migrate_update_specific(
                     target_migration.version
                 );
                 std::fs::remove_file(&target_migration.path)?;
-                std::fs::write(&new_path, &empty_migration_content)?;
+                std::fs::write(&renumbered_path, &content)?;
                 println!(
                     "Migration {} updated to {} (no changes needed)",
                     target_migration.version, new_version
                 );
-                println!("Created: {}", new_path.display());
+                println!("Created: {}", renumbered_path.display());
             }
         }
-        if !partition_diverged {
+
+        if !generated.partition_diverged {
             if dry_run {
                 println!("🔍 Dry-run complete! No changes were made.");
             }
             return Ok(());
         }
-        // Pure re-tag: fall through so the re-anchoring baseline regenerates.
+        // Pure re-tag: fall through so the re-anchoring baseline is reported
+        // and any acquisition sections are written.
     }
 
-    // Handle baseline updates FIRST for module projects so the baseline is
-    // sectioned first. The migration's acquisition sections render the
-    // moved objects from the STARTING catalog rather than the baseline.
-    if should_update_baseline {
-        let (write_dir, _scratch) = baseline_write_dir(&baselines_dir, dry_run)?;
-        let result = create_baseline(BaselineCreationRequest {
-            catalog: new_catalog.clone(),
-            base_catalog: shadow_base.clone(),
-            version: new_version,
-            description: "baseline".to_string(),
-            baselines_dir: write_dir,
-            // Verbose output would name the scratch path; the preview below
-            // names the real one.
-            verbose: baseline_config.verbose && !dry_run,
-        })
-        .await?;
-        section_baseline_if_moduled(
-            module_gen.as_ref(),
-            &result.path,
-            &new_catalog,
-            &file_mapping,
-            &historical,
-        )?;
-        if dry_run {
+    match &generated.baseline {
+        Some(baseline) if dry_run => {
             let verb = if is_latest { "update" } else { "create" };
-            println!("🔄 Would {} baseline: {}", verb, baseline_path.display());
-        } else if is_latest {
-            println!("Updated baseline: {}", result.path.display());
-        } else {
-            println!("Created baseline: {}", result.path.display());
+            println!("🔄 Would {} baseline: {}", verb, baseline.path.display())
         }
-
-        if baseline_config.validate_consistency {
-            let (baseline_path, catalog, roles, cfg) =
-                (&result.path, &new_catalog, &roles_file, &baseline_config);
-            shadow
-                .with_fresh(|pool| async move {
-                    validate_baseline_against_catalog(
-                        &pool,
-                        baseline_path,
-                        catalog,
-                        cfg,
-                        roles,
-                        config,
-                    )
-                    .await
-                })
-                .await?;
+        Some(baseline) if is_latest => {
+            println!("Updated baseline: {}", baseline.path.display())
         }
-    } else if is_latest {
-        println!(
+        Some(baseline) => println!("Created baseline: {}", baseline.path.display()),
+        None if is_latest => println!(
             "Skipping baseline update (baseline does not exist and create_baselines_by_default is false)"
-        );
-    } else {
-        println!("Skipping baseline creation (create_baselines_by_default is false)");
+        ),
+        None => println!("Skipping baseline creation (create_baselines_by_default is false)"),
     }
 
-    // The migration content: ordinary diff sections plus, at a re-anchor, the
-    // acquisition sections. `None` = nothing to write (the
-    // no-changes handling above already produced the file).
-    let migration_sql: Option<String> = render_generated_migration(
-        module_gen.as_ref(),
-        migration_result.has_changes,
-        &migration_result.migration_sql,
-        &old_catalog,
-        &new_catalog,
-        &file_mapping,
-        &historical,
-    )?;
-
-    // Write the migration file
-    if let Some(migration_sql) = &migration_sql {
+    // `None` means there is nothing left to write: the no-changes handling
+    // above already produced the file.
+    if let Some(migration_sql) = &generated.migration_sql {
         if dry_run {
             println!(
                 "📝 Preview: Generated migration content ({} chars)",
@@ -571,46 +277,30 @@ pub async fn cmd_migrate_update_specific(
             if is_latest {
                 println!("🔄 Would update: {}", target_migration.path.display());
             } else {
-                let new_filename = format!(
-                    "{}{}_{}.sql",
-                    config.migration.filename_prefix,
-                    new_version,
-                    new_description.replace(' ', "_")
-                );
-                let new_path = migrations_dir.join(&new_filename);
                 println!(
                     "🔄 Would rename {} → {}",
                     target_migration.version, new_version
                 );
                 println!("   Delete: {}", target_migration.path.display());
-                println!("   Create: {}", new_path.display());
+                println!("   Create: {}", renumbered_path.display());
             }
             println!("\n📋 Migration preview:\n{}", migration_sql);
         } else if is_latest {
-            // For latest migration, overwrite the existing file (current behavior)
             std::fs::write(&target_migration.path, migration_sql)?;
             println!("Updated migration: {}", target_migration.path.display());
         } else {
-            // For older migration, delete old file and create new one with a
-            // fresh timestamp. The no-changes fall-through (a pure re-tag with
-            // acquisitions) already moved the file; only delete what exists.
+            // The no-changes fall-through (a pure re-tag with acquisitions)
+            // already moved the file; only delete what still exists.
             if target_migration.path.exists() {
                 std::fs::remove_file(&target_migration.path)?;
                 println!("Deleted: {}", target_migration.path.display());
             }
-            let new_filename = format!(
-                "{}{}_{}.sql",
-                config.migration.filename_prefix,
-                new_version,
-                new_description.replace(' ', "_")
-            );
-            let new_path = migrations_dir.join(&new_filename);
-            std::fs::write(&new_path, migration_sql)?;
+            std::fs::write(&renumbered_path, migration_sql)?;
             println!(
                 "Migration {} updated to {} (renumbered)",
                 target_migration.version, new_version
             );
-            println!("Created: {}", new_path.display());
+            println!("Created: {}", renumbered_path.display());
         }
     }
 

@@ -83,6 +83,71 @@ mod migrate_new_tests {
         .await
     }
 
+    /// `--empty` suppresses the generated SQL, not the paired baseline: the
+    /// stub is a real migration the author fills in by hand, so it still gets
+    /// an anchor. The baseline is built from the schema files, so it is written
+    /// even when the diff against history is empty.
+    #[tokio::test]
+    async fn test_migrate_new_empty_with_create_baseline_writes_both() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL);",
+            )?;
+
+            // An ordinary migration first, so the stub below has nothing left
+            // to diff and the baseline is the only reason to read the database.
+            helper
+                .command()
+                .args(["migrate", "new", "create_users"])
+                .assert()
+                .success();
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+            helper
+                .command()
+                .args([
+                    "migrate",
+                    "new",
+                    "backfill_names",
+                    "--empty",
+                    "--create-baseline",
+                ])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Created baseline:"))
+                .stdout(predicate::str::contains("Created empty migration:"));
+
+            let migrations = helper.list_migration_files()?;
+            assert_eq!(migrations.len(), 2);
+            let stub = migrations
+                .iter()
+                .find(|m| m.contains("backfill_names"))
+                .expect("the stub migration");
+            assert!(
+                helper.read_migration_file(stub)?.is_empty(),
+                "the stub keeps no SQL of its own"
+            );
+
+            let baselines = helper.list_baseline_files()?;
+            assert_eq!(
+                baselines.len(),
+                1,
+                "--empty must still produce the requested baseline"
+            );
+            assert!(
+                helper.read_baseline_file(&baselines[0])?.contains("users"),
+                "the baseline snapshots the schema files, not the empty stub"
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
     /// Test that baselines are NOT created by default when --create-baseline is not provided
     #[tokio::test]
     async fn test_migrate_new_without_baseline_creation() -> Result<()> {
