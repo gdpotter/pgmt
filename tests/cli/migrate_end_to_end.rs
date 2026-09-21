@@ -1048,6 +1048,263 @@ COMMENT ON COLUMN users.email IS 'Email address for login';"#,
         .await
     }
 
+    /// A dry run of the no-version `migrate update` previews the work and
+    /// leaves both the latest migration file and its paired baseline byte-for-
+    /// byte as they were.
+    #[tokio::test]
+    async fn test_migrate_update_latest_dry_run_writes_nothing() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+            )?;
+            helper
+                .command()
+                .args(["migrate", "new", "create_users", "--create-baseline"])
+                .assert()
+                .success();
+
+            let migration_files = helper.list_migration_files()?;
+            let baseline_files = helper.list_baseline_files()?;
+            assert_eq!(migration_files.len(), 1);
+            assert_eq!(baseline_files.len(), 1);
+            let migration_before = helper.read_migration_file(&migration_files[0])?;
+            let baseline_before = helper.read_baseline_file(&baseline_files[0])?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
+            )?;
+
+            let preview = helper
+                .command()
+                .args(["migrate", "update", "--dry-run"])
+                .assert()
+                .success();
+
+            assert_eq!(helper.list_migration_files()?, migration_files);
+            assert_eq!(helper.list_baseline_files()?, baseline_files);
+            assert_eq!(
+                helper.read_migration_file(&migration_files[0])?,
+                migration_before,
+                "dry run rewrote the migration file"
+            );
+            assert_eq!(
+                helper.read_baseline_file(&baseline_files[0])?,
+                baseline_before,
+                "dry run rewrote the baseline file"
+            );
+
+            preview
+                .stdout(predicate::str::contains("Dry-run mode: previewing"))
+                .stdout(predicate::str::contains("Would update:"))
+                .stdout(predicate::str::contains("Would update baseline:"))
+                .stdout(predicate::str::contains(
+                    "Dry-run complete! No changes were made",
+                ));
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// A dry run of `migrate update V<version>` leaves the paired baseline
+    /// alone, not just the migration file.
+    #[tokio::test]
+    async fn test_migrate_update_specific_dry_run_leaves_baseline_untouched() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+            )?;
+            helper
+                .command()
+                .args(["migrate", "new", "create_users", "--create-baseline"])
+                .assert()
+                .success();
+
+            let migration_files = helper.list_migration_files()?;
+            let baseline_files = helper.list_baseline_files()?;
+            assert_eq!(migration_files.len(), 1);
+            assert_eq!(baseline_files.len(), 1);
+            let version = migration_files[0]
+                .split('_')
+                .next()
+                .unwrap()
+                .trim_start_matches('V')
+                .to_string();
+            let migration_before = helper.read_migration_file(&migration_files[0])?;
+            let baseline_before = helper.read_baseline_file(&baseline_files[0])?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
+            )?;
+
+            let preview = helper
+                .command()
+                .args(["migrate", "update", &format!("V{}", version), "--dry-run"])
+                .assert()
+                .success();
+
+            assert_eq!(helper.list_baseline_files()?, baseline_files);
+            assert_eq!(
+                helper.read_migration_file(&migration_files[0])?,
+                migration_before,
+                "dry run rewrote the migration file"
+            );
+            assert_eq!(
+                helper.read_baseline_file(&baseline_files[0])?,
+                baseline_before,
+                "dry run rewrote the baseline file"
+            );
+
+            preview
+                .stdout(predicate::str::contains("Would update baseline:"))
+                .stdout(predicate::str::contains(
+                    "Dry-run complete! No changes were made",
+                ));
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// `--backup` under `--dry-run` reports the backup it would take without
+    /// creating the .sql.bak file.
+    #[tokio::test]
+    async fn test_migrate_update_dry_run_with_backup_creates_no_backup_file() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+            )?;
+            helper
+                .command()
+                .args(["migrate", "new", "create_users", "--create-baseline"])
+                .assert()
+                .success();
+
+            let migration_files = helper.list_migration_files()?;
+            let version = migration_files[0]
+                .split('_')
+                .next()
+                .unwrap()
+                .trim_start_matches('V')
+                .to_string();
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
+            )?;
+
+            helper
+                .command()
+                .args([
+                    "migrate",
+                    "update",
+                    &format!("V{}", version),
+                    "--dry-run",
+                    "--backup",
+                ])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Would create backup:"));
+
+            let backups: Vec<String> = std::fs::read_dir(helper.migrations_dir())?
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                .filter(|name| name.ends_with(".bak"))
+                .collect();
+            assert!(
+                backups.is_empty(),
+                "dry run created backup files: {:?}",
+                backups
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Previewing first must not change what the real update then produces:
+    /// a dry run followed by a real update yields the same migration and
+    /// baseline as the real update on its own.
+    #[tokio::test]
+    async fn test_migrate_update_dry_run_does_not_perturb_the_real_run() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY);",
+            )?;
+            helper
+                .command()
+                .args(["migrate", "new", "create_users", "--create-baseline"])
+                .assert()
+                .success();
+
+            let migration_files = helper.list_migration_files()?;
+            let baseline_files = helper.list_baseline_files()?;
+            let migration_name = migration_files[0].clone();
+            let baseline_name = baseline_files[0].clone();
+            let migration_before = helper.read_migration_file(&migration_name)?;
+            let baseline_before = helper.read_baseline_file(&baseline_name)?;
+
+            helper.write_schema_file(
+                "tables/users.sql",
+                "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
+            )?;
+
+            // Preview, then apply for real.
+            helper
+                .command()
+                .args(["migrate", "update", "--dry-run"])
+                .assert()
+                .success();
+            helper
+                .command()
+                .args(["migrate", "update"])
+                .assert()
+                .success();
+            let migration_after_preview = helper.read_migration_file(&migration_name)?;
+            let baseline_after_preview = helper.read_baseline_file(&baseline_name)?;
+
+            // Restore the pre-update files and apply for real with no preview.
+            helper.write_migration_file(&migration_name, &migration_before)?;
+            std::fs::write(
+                helper.baselines_dir().join(&baseline_name),
+                &baseline_before,
+            )?;
+            helper
+                .command()
+                .args(["migrate", "update"])
+                .assert()
+                .success();
+
+            assert_eq!(
+                helper.read_migration_file(&migration_name)?,
+                migration_after_preview,
+                "a preceding dry run changed the migration the real update produced"
+            );
+            assert_eq!(
+                helper.read_baseline_file(&baseline_name)?,
+                baseline_after_preview,
+                "a preceding dry run changed the baseline the real update produced"
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
     #[tokio::test]
     async fn test_migrate_update_backup_flag() -> Result<()> {
         with_cli_helper(async |helper| {

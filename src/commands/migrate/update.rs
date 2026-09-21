@@ -11,9 +11,47 @@ use crate::modules::{
     section_baseline_if_moduled,
 };
 use anyhow::{Result, anyhow};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
+
+/// A temporary directory removed when the value drops.
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new() -> Result<Self> {
+        let path =
+            std::env::temp_dir().join(format!("pgmt-dry-run-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The directory a baseline regeneration writes into.
+///
+/// A dry run still regenerates the baseline: module sectioning rewrites the
+/// file in place and baseline validation reads it back, so those steps need a
+/// real file. It is produced in a scratch directory that is discarded, leaving
+/// the project's baselines directory alone while the preview reports the real
+/// path. The returned guard must stay alive until the file is no longer needed.
+fn baseline_write_dir(
+    baselines_dir: &Path,
+    dry_run: bool,
+) -> Result<(PathBuf, Option<ScratchDir>)> {
+    if dry_run {
+        let scratch = ScratchDir::new()?;
+        let dir = scratch.0.clone();
+        Ok((dir, Some(scratch)))
+    } else {
+        Ok((baselines_dir.to_path_buf(), None))
+    }
+}
 
 pub async fn cmd_migrate_update_with_options(
     config: &Config,
@@ -133,12 +171,20 @@ pub async fn cmd_migrate_update_with_options(
         println!("No changes detected - updating migration to be empty");
 
         // Update the migration file to be empty since no changes are needed
-        let empty_migration_sql = "-- No changes detected\n";
-        std::fs::write(&latest_migration.path, empty_migration_sql)?;
-        println!(
-            "Updated migration: {} (now empty)",
-            latest_migration.path.display()
-        );
+        if dry_run {
+            println!(
+                "🔄 Would update: {} (now empty)",
+                latest_migration.path.display()
+            );
+            println!("🔍 Dry-run complete! No changes were made.");
+        } else {
+            let empty_migration_sql = "-- No changes detected\n";
+            std::fs::write(&latest_migration.path, empty_migration_sql)?;
+            println!(
+                "Updated migration: {} (now empty)",
+                latest_migration.path.display()
+            );
+        }
 
         return Ok(());
     }
@@ -148,13 +194,16 @@ pub async fn cmd_migrate_update_with_options(
     // moved objects from the STARTING catalog, not the baseline, so they do
     // not consume the baseline's sections — but the ordering is still natural.
     if should_update_baseline {
+        let (write_dir, _scratch) = baseline_write_dir(&baselines_dir, dry_run)?;
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
             base_catalog: shadow_base.clone(),
             version: latest_migration.version,
             description: "baseline".to_string(),
-            baselines_dir: baselines_dir.clone(),
-            verbose: baseline_config.verbose,
+            baselines_dir: write_dir,
+            // Verbose output would name the scratch path; the preview below
+            // names the real one.
+            verbose: baseline_config.verbose && !dry_run,
         })
         .await?;
         section_baseline_if_moduled(
@@ -164,7 +213,11 @@ pub async fn cmd_migrate_update_with_options(
             &file_mapping,
             &historical,
         )?;
-        println!("Updated baseline: {}", result.path.display());
+        if dry_run {
+            println!("🔄 Would update baseline: {}", baseline_path.display());
+        } else {
+            println!("Updated baseline: {}", result.path.display());
+        }
 
         // Step 6: Validate that the baseline matches the intended schema using pure logic
         if baseline_config.validate_consistency {
@@ -202,10 +255,19 @@ pub async fn cmd_migrate_update_with_options(
         &historical,
     )?
     .unwrap_or_else(|| "-- No changes detected\n".to_string());
-    std::fs::write(&latest_migration.path, &migration_sql)?;
-    println!("Updated migration: {}", latest_migration.path.display());
-
-    println!("Migration update complete!");
+    if dry_run {
+        println!(
+            "📝 Preview: Generated migration content ({} chars)",
+            migration_sql.len()
+        );
+        println!("🔄 Would update: {}", latest_migration.path.display());
+        println!("\n📋 Migration preview:\n{}", migration_sql);
+        println!("🔍 Dry-run complete! No changes were made.");
+    } else {
+        std::fs::write(&latest_migration.path, &migration_sql)?;
+        println!("Updated migration: {}", latest_migration.path.display());
+        println!("Migration update complete!");
+    }
     Ok(())
 }
 
@@ -372,41 +434,46 @@ pub async fn cmd_migrate_update_specific(
     if !migration_result.has_changes {
         if is_latest {
             println!("No changes detected - updating migration to be empty");
-            let empty_migration_sql = "-- No changes detected\n";
-            std::fs::write(&target_migration.path, empty_migration_sql)?;
-            println!(
-                "Updated migration: {} (now empty)",
-                target_migration.path.display()
-            );
-        } else {
-            println!("No changes detected - conflicts resolved by other migrations");
-            // For older migrations with no changes, still create/update the file with a comment
-            let empty_migration_content = format!(
-                "-- Migration: {}\n-- Version: {}{}\n-- Generated by pgmt migrate update (renumbered from {}{})\n-- No changes needed - conflicts resolved by intervening migrations\n",
-                new_description,
-                config.migration.filename_prefix,
-                new_version,
-                config.migration.filename_prefix,
-                target_migration.version
-            );
-
-            if is_latest {
-                // Overwrite existing file
-                std::fs::write(&target_migration.path, &empty_migration_content)?;
+            if dry_run {
                 println!(
-                    "Updated migration: {} (no changes needed)",
+                    "🔄 Would update: {} (now empty)",
                     target_migration.path.display()
                 );
             } else {
-                // Delete old file and create new one
-                std::fs::remove_file(&target_migration.path)?;
-                let new_filename = format!(
-                    "{}{}_{}.sql",
+                let empty_migration_sql = "-- No changes detected\n";
+                std::fs::write(&target_migration.path, empty_migration_sql)?;
+                println!(
+                    "Updated migration: {} (now empty)",
+                    target_migration.path.display()
+                );
+            }
+        } else {
+            println!("No changes detected - conflicts resolved by other migrations");
+            // An older migration is still renumbered when it has no changes.
+            let new_filename = format!(
+                "{}{}_{}.sql",
+                config.migration.filename_prefix,
+                new_version,
+                new_description.replace(' ', "_")
+            );
+            let new_path = migrations_dir.join(&new_filename);
+            if dry_run {
+                println!(
+                    "🔄 Would rename {} → {}",
+                    target_migration.version, new_version
+                );
+                println!("   Delete: {}", target_migration.path.display());
+                println!("   Create: {}", new_path.display());
+            } else {
+                let empty_migration_content = format!(
+                    "-- Migration: {}\n-- Version: {}{}\n-- Generated by pgmt migrate update (renumbered from {}{})\n-- No changes needed - conflicts resolved by intervening migrations\n",
+                    new_description,
                     config.migration.filename_prefix,
                     new_version,
-                    new_description.replace(' ', "_")
+                    config.migration.filename_prefix,
+                    target_migration.version
                 );
-                let new_path = migrations_dir.join(&new_filename);
+                std::fs::remove_file(&target_migration.path)?;
                 std::fs::write(&new_path, &empty_migration_content)?;
                 println!(
                     "Migration {} updated to {} (no changes needed)",
@@ -416,6 +483,9 @@ pub async fn cmd_migrate_update_specific(
             }
         }
         if !partition_diverged {
+            if dry_run {
+                println!("🔍 Dry-run complete! No changes were made.");
+            }
             return Ok(());
         }
         // Pure re-tag: fall through so the re-anchoring baseline regenerates.
@@ -425,13 +495,16 @@ pub async fn cmd_migrate_update_specific(
     // sectioned first. The migration's acquisition sections render the
     // moved objects from the STARTING catalog rather than the baseline.
     if should_update_baseline {
+        let (write_dir, _scratch) = baseline_write_dir(&baselines_dir, dry_run)?;
         let result = create_baseline(BaselineCreationRequest {
             catalog: new_catalog.clone(),
             base_catalog: shadow_base.clone(),
             version: new_version,
             description: "baseline".to_string(),
-            baselines_dir: baselines_dir.clone(),
-            verbose: baseline_config.verbose,
+            baselines_dir: write_dir,
+            // Verbose output would name the scratch path; the preview below
+            // names the real one.
+            verbose: baseline_config.verbose && !dry_run,
         })
         .await?;
         section_baseline_if_moduled(
@@ -441,7 +514,10 @@ pub async fn cmd_migrate_update_specific(
             &file_mapping,
             &historical,
         )?;
-        if is_latest {
+        if dry_run {
+            let verb = if is_latest { "update" } else { "create" };
+            println!("🔄 Would {} baseline: {}", verb, baseline_path.display());
+        } else if is_latest {
             println!("Updated baseline: {}", result.path.display());
         } else {
             println!("Created baseline: {}", result.path.display());
