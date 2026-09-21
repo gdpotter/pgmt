@@ -1,5 +1,5 @@
 use crate::catalog::Catalog;
-use crate::config::{ColumnOrderMode, Config, ObjectFilter};
+use crate::config::{ColumnOrderMode, Config};
 use crate::diff::operations::{MigrationStep, SqlRenderer};
 use crate::diff::plan;
 use crate::schema_ops::apply_current_schema_to_shadow;
@@ -53,30 +53,26 @@ pub async fn validate_database_against_schema_files(
     validate_catalogs(dev_catalog, &expected_catalog, config, validation_config)
 }
 
-/// Compare two catalogs and return validation result
+/// Compare two catalogs and return validation result.
 ///
-/// Catalogs arrive managed from every current caller; the filter here is a
-/// defensive, idempotent re-scope since this sink accepts catalogs from
-/// arbitrary callers.
+/// Both catalogs must already be managed — scoping is the loader's job, and
+/// re-scoping here would silently accept a physical catalog that has no
+/// business being compared against schema files.
 pub fn validate_catalogs(
     actual_catalog: &Catalog,
     expected_catalog: &Catalog,
     config: &Config,
     validation_config: &ValidationConfig,
 ) -> Result<ValidationResult> {
-    let filter = ObjectFilter::from_config(config);
-    let actual = filter.filter_catalog(actual_catalog.clone());
-    let expected = filter.filter_catalog(expected_catalog.clone());
-
     if validation_config.verbose {
         println!("🔍 Comparing schemas...");
     }
 
-    let ordered_steps = plan(&actual, &expected)?;
+    let ordered_steps = plan(actual_catalog, expected_catalog)?;
 
     // Check column order mismatches (respecting ColumnOrderMode)
     let column_order_mismatches = if config.migration.column_order != ColumnOrderMode::Relaxed {
-        find_column_order_mismatches(&actual, &expected)
+        find_column_order_mismatches(actual_catalog, expected_catalog)
     } else {
         Vec::new()
     };

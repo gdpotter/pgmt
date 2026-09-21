@@ -46,25 +46,8 @@ fn test_schema_generator_basic() {
     );
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
-        views: vec![],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
-        indexes: vec![],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
-        forward_deps: BTreeMap::new(),
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     let config = SchemaGeneratorConfig::default();
@@ -135,25 +118,10 @@ fn test_file_organization_by_object_type() {
     );
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
         views: vec![view],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
-        indexes: vec![],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
         forward_deps,
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     let config = SchemaGeneratorConfig::default();
@@ -207,25 +175,8 @@ fn test_config_filtering() {
     );
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
-        views: vec![],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
-        indexes: vec![],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
-        forward_deps: BTreeMap::new(),
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     // Test with comments disabled
@@ -308,25 +259,10 @@ fn test_no_self_referential_dependencies() {
     );
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
-        views: vec![],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
         indexes: vec![index],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
         forward_deps,
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     let config = SchemaGeneratorConfig::default();
@@ -430,25 +366,9 @@ fn test_gist_index_rendering() {
     };
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
-        views: vec![],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
         indexes: vec![gist_index],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
-        forward_deps: BTreeMap::new(),
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     let config = SchemaGeneratorConfig::default();
@@ -502,25 +422,8 @@ fn test_detailed_config_variations() {
     );
 
     let catalog = Catalog {
-        schemas: vec![],
         tables: vec![table],
-        views: vec![],
-        types: vec![],
-        domains: vec![],
-        collations: vec![],
-        functions: vec![],
-        aggregates: vec![],
-        operators: vec![],
-        casts: vec![],
-        sequences: vec![],
-        indexes: vec![],
-        constraints: vec![],
-        triggers: vec![],
-        policies: vec![],
-        extensions: vec![],
-        grants: vec![],
-        forward_deps: BTreeMap::new(),
-        reverse_deps: BTreeMap::new(),
+        ..Catalog::empty()
     };
 
     // Test with all features disabled

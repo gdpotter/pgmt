@@ -48,6 +48,16 @@ pub fn plan_annotated(
     new: &Catalog,
     module_of: &mut dyn FnMut(&MigrationStep) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<Vec<PlannedStep>> {
+    // Both sides must describe the same world. A physical side paired with a
+    // managed one turns image-provided substrate into steps: drops when the
+    // managed side omits it, creates when the physical side carries it.
+    debug_assert!(
+        old.scope.comparable_with(new.scope),
+        "cannot diff a {:?} catalog against a {:?} one",
+        old.scope,
+        new.scope
+    );
+
     let steps = diff_all(old, new);
     let expanded = cascade::expand(steps, old, new);
     planning::order_planned(expanded, old, new, module_of)
@@ -218,4 +228,51 @@ pub fn diff_list<T, I: Eq + Ord + Clone, R>(
     }
 
     results
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::catalog::CatalogScope;
+
+    fn catalog(scope: CatalogScope) -> Catalog {
+        Catalog {
+            scope,
+            ..Catalog::empty()
+        }
+    }
+
+    /// A catalog assembled in memory makes no claim about a world, so it pairs
+    /// with either one — that is what lets an empty catalog stand in as the
+    /// base for a project with no prior state.
+    #[test]
+    fn synthetic_pairs_with_either_world() {
+        for other in [
+            CatalogScope::Physical,
+            CatalogScope::Managed,
+            CatalogScope::Synthetic,
+        ] {
+            assert!(CatalogScope::Synthetic.comparable_with(other));
+            assert!(other.comparable_with(CatalogScope::Synthetic));
+        }
+    }
+
+    #[test]
+    fn same_world_is_comparable() {
+        assert!(CatalogScope::Managed.comparable_with(CatalogScope::Managed));
+        assert!(CatalogScope::Physical.comparable_with(CatalogScope::Physical));
+    }
+
+    /// Diffing the physical catalog against the managed one would turn
+    /// image-provided substrate into migration steps. The debug assertion in
+    /// the planner rejects the pair instead — and is compiled out of release
+    /// builds, so the test only means anything where it is enabled.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "cannot diff")]
+    fn planning_across_worlds_panics() {
+        let physical = catalog(CatalogScope::Physical);
+        let managed = catalog(CatalogScope::Managed);
+        let _ = plan(&physical, &managed);
+    }
 }

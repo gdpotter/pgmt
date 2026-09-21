@@ -36,8 +36,43 @@ pub mod triggers;
 pub mod utils;
 pub mod view;
 
+/// Which of the two catalog worlds a [`Catalog`] holds.
+///
+/// pgmt reads two views of a database: the **physical** catalog (everything the
+/// server has, including image-provided substrate) and the **managed** universe
+/// (the physical catalog scoped by the `objects` config). Comparing across the
+/// two silently mixes worlds — a managed side that legitimately omits substrate
+/// reads as a pile of drops, and a physical side re-creates substrate the
+/// target already has.
+///
+/// The scope travels with the catalog so a mismatched pair trips a debug
+/// assertion in [`crate::diff::plan_annotated`] — the bug class fails in tests
+/// rather than surviving into a generated migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogScope {
+    /// Loaded from a server without scoping: includes image-provided substrate.
+    Physical,
+    /// Scoped by the `objects` config. What diff, render and validation consume.
+    Managed,
+    /// Assembled in memory rather than loaded — an empty catalog, a test
+    /// fixture. It makes no claim about a world, so it pairs with either.
+    Synthetic,
+}
+
+impl CatalogScope {
+    /// Whether two catalogs describe the same world closely enough to diff.
+    /// `Synthetic` makes no claim, so it pairs with anything.
+    pub fn comparable_with(self, other: Self) -> bool {
+        self == other || self == Self::Synthetic || other == Self::Synthetic
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Catalog {
+    /// Which world this catalog describes. Set by whatever produced it; see
+    /// [`CatalogScope`].
+    pub scope: CatalogScope,
+
     pub schemas: Vec<schema::Schema>,
     pub tables: Vec<table::Table>,
     pub views: Vec<view::View>,
@@ -217,6 +252,7 @@ impl Catalog {
         insert_deps(&grants, &mut forward, &mut reverse);
 
         let mut catalog = Self {
+            scope: CatalogScope::Physical,
             schemas,
             tables,
             views,
@@ -473,6 +509,7 @@ impl Catalog {
     pub fn attached_objects(&self) -> Vec<&dyn crate::catalog::attached::Attached> {
         use crate::catalog::attached::Attached;
         let Catalog {
+            scope: _,
             schemas,
             tables,
             views,
@@ -684,6 +721,7 @@ impl Catalog {
     /// Create an empty catalog for baseline generation
     pub fn empty() -> Self {
         Self {
+            scope: CatalogScope::Synthetic,
             schemas: Vec::new(),
             tables: Vec::new(),
             views: Vec::new(),

@@ -94,7 +94,12 @@ impl ObjectFilter {
     /// Apply filter to a catalog, removing objects that shouldn't be managed
     /// based on include/exclude patterns. Schema files are the source of truth
     /// for what object types to manage (grants, triggers, extensions, etc.).
+    ///
+    /// This is the physical → managed conversion, and the only thing that
+    /// produces a [`catalog::CatalogScope::Managed`] catalog.
     pub fn filter_catalog(&self, mut catalog: catalog::Catalog) -> catalog::Catalog {
+        catalog.scope = catalog::CatalogScope::Managed;
+
         // Filter schemas
         catalog
             .schemas

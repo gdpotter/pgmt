@@ -13,24 +13,23 @@ pub async fn verify_final_state(
 ) -> Result<()> {
     info!("Verifying final database state...");
 
-    // Load the current dev database catalog after changes, scoped the same
-    // way as the diff; expected may come from any caller, so filter it too
-    // (idempotent).
+    // Load the current dev database catalog after changes, scoped the same way
+    // as the diff. `expected` arrives managed from its own loader; re-scoping
+    // it here would only hide a caller that passed the physical world.
     let filter = ObjectFilter::from_config(config);
     let current_filtered = Catalog::load_managed(dev_pool, &filter)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load final catalog for verification: {}", e))?;
-    let expected_filtered = filter.filter_catalog(expected_catalog.clone());
 
     // Compare key metrics
     let current_table_count = current_filtered.tables.len();
-    let expected_table_count = expected_filtered.tables.len();
+    let expected_table_count = expected_catalog.tables.len();
 
     let current_view_count = current_filtered.views.len();
-    let expected_view_count = expected_filtered.views.len();
+    let expected_view_count = expected_catalog.views.len();
 
     let current_function_count = current_filtered.functions.len();
-    let expected_function_count = expected_filtered.functions.len();
+    let expected_function_count = expected_catalog.functions.len();
 
     if current_table_count != expected_table_count {
         warn!(
