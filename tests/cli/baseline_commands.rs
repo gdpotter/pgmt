@@ -197,6 +197,52 @@ mod baseline_tests {
         .await
     }
 
+    /// `--keep-migrations` narrows what a real checkpoint deletes; it must not
+    /// turn a preview into a real run. The dry-run block used to be gated on
+    /// both flags, so combining them skipped the preview entirely and wrote the
+    /// baseline while reporting that nothing would change.
+    #[tokio::test]
+    async fn test_migrate_baseline_dry_run_with_keep_migrations_writes_nothing() -> Result<()> {
+        with_cli_helper(async |helper| {
+            helper.init_project()?;
+
+            helper.write_schema_file("users.sql", "CREATE TABLE users (id SERIAL);")?;
+            helper
+                .command()
+                .args(["migrate", "new", "add_users"])
+                .assert()
+                .success();
+
+            let migrations_before = helper.list_migration_files()?;
+            assert_eq!(migrations_before.len(), 1);
+            assert_eq!(helper.list_baseline_files()?.len(), 0);
+
+            helper
+                .command()
+                .args(["migrate", "baseline", "--dry-run", "--keep-migrations"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("DRY RUN"))
+                .stdout(predicate::str::contains("would be kept"));
+
+            // The checkpoint itself is what must not happen: no baseline file,
+            // and the migrations left exactly as they were.
+            assert_eq!(
+                helper.list_baseline_files()?.len(),
+                0,
+                "dry run wrote a baseline"
+            );
+            assert_eq!(
+                helper.list_migration_files()?,
+                migrations_before,
+                "dry run changed the migrations"
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
     /// Test migrate baseline deletes old baselines too
     #[tokio::test]
     async fn test_migrate_baseline_cleans_old_baselines() -> Result<()> {

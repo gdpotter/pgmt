@@ -20,7 +20,7 @@ use tracing::debug;
 /// checkpoint and surfaces in the next `migrate new`, where it belongs.
 ///
 /// When `keep_migrations` is true, migrations are preserved (baseline-only mode).
-/// When `dry_run` is true, shows what would happen without making changes.
+/// When `dry_run` is true, nothing is written.
 pub async fn cmd_migrate_baseline(
     config: &Config,
     root_dir: &std::path::Path,
@@ -49,32 +49,39 @@ pub async fn cmd_migrate_baseline(
     }
     let version = migrations.last().expect("checked non-empty").version;
 
-    if dry_run && !keep_migrations {
-        // Show what would happen
+    // A preview writes nothing whatever the other flags say. `--keep-migrations`
+    // changes only which files a real run would delete, so it selects what the
+    // preview reports rather than whether there is one.
+    if dry_run {
         println!("DRY RUN - no files will be changed\n");
         println!("Would create baseline at version {}", version);
 
-        if !migrations.is_empty() {
+        if keep_migrations {
             println!();
-            println!("Migrations to delete ({}):", migrations.len());
-            for m in &migrations {
-                println!(
-                    "  - {} ({})",
-                    m.version,
-                    m.path.file_name().unwrap().to_str().unwrap()
-                );
+            println!("Migrations and old baselines would be kept (--keep-migrations).");
+        } else {
+            if !migrations.is_empty() {
+                println!();
+                println!("Migrations to delete ({}):", migrations.len());
+                for m in &migrations {
+                    println!(
+                        "  - {} ({})",
+                        m.version,
+                        m.path.file_name().unwrap().to_str().unwrap()
+                    );
+                }
             }
-        }
 
-        if !existing_baselines.is_empty() {
-            println!();
-            println!("Old baselines to delete ({}):", existing_baselines.len());
-            for b in &existing_baselines {
-                println!(
-                    "  - {} ({})",
-                    b.version,
-                    b.path.file_name().unwrap().to_str().unwrap()
-                );
+            if !existing_baselines.is_empty() {
+                println!();
+                println!("Old baselines to delete ({}):", existing_baselines.len());
+                for b in &existing_baselines {
+                    println!(
+                        "  - {} ({})",
+                        b.version,
+                        b.path.file_name().unwrap().to_str().unwrap()
+                    );
+                }
             }
         }
 
