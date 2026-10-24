@@ -107,3 +107,33 @@ async fn test_settle_fails_when_the_plan_loses_an_object() -> Result<()> {
     })
     .await
 }
+
+/// Settling sends each section to the server as one batch, and the error from
+/// a failed multi-statement batch does not say which statement broke. The
+/// error must still name it, since that statement is what a bug report needs.
+/// A view whose definition no longer parses stands in for a plan that fails.
+#[tokio::test]
+async fn test_settle_names_the_statement_that_fails() -> Result<()> {
+    with_test_db(async |written_db| {
+        with_test_db(async |settle_db| {
+            written_db.execute("CREATE TABLE kept (id int)").await;
+            written_db
+                .execute("CREATE VIEW broken AS SELECT id FROM kept")
+                .await;
+            let mut written = Catalog::load_unfiltered(written_db.pool()).await?;
+            written.views[0].definition = " SELECT id FROM missing_table;".to_string();
+
+            let result = settle(settle_db.pool(), &written, async |pool| {
+                Catalog::load_unfiltered(pool).await
+            })
+            .await;
+
+            let error = format!("{:#}", result.err().expect("settle should fail"));
+            assert!(error.contains("Failing statement:"), "{error}");
+            assert!(error.contains("missing_table"), "{error}");
+            Ok(())
+        })
+        .await
+    })
+    .await
+}

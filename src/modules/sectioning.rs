@@ -229,8 +229,24 @@ pub fn sectionize_steps(
     };
 
     let ordered = crate::diff::plan_annotated(old_catalog, new_catalog, &mut module_of)?;
+    Ok(cut_sections(ordered))
+}
 
-    // Cut the (now maximally contiguous) order at module boundaries.
+/// Section a diff with every step in the base: the planning pipeline's order,
+/// cut by the same rule as [`sectionize_steps`]. For a project without
+/// modules, or a caller to whom modules do not matter, these are the sections
+/// a migration of the same steps would run.
+pub fn sectionize_unmoduled(
+    old_catalog: &Catalog,
+    new_catalog: &Catalog,
+) -> Result<Vec<StepSection>> {
+    let ordered = crate::diff::plan_annotated(old_catalog, new_catalog, &mut |_| Ok(None))?;
+    Ok(cut_sections(ordered))
+}
+
+/// Cut an already-ordered plan into sections, starting a new one wherever the
+/// owning module changes. Never re-orders.
+fn cut_sections(ordered: Vec<crate::diff::PlannedStep>) -> Vec<StepSection> {
     let mut sections: Vec<StepSection> = Vec::new();
     for node in ordered {
         match sections.last_mut() {
@@ -245,8 +261,7 @@ pub fn sectionize_steps(
         }
     }
     assign_section_names(&mut sections);
-
-    Ok(sections)
+    sections
 }
 
 /// Render sectioned steps as a migration file: one `-- pgmt:section` header

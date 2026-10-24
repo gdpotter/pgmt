@@ -76,7 +76,7 @@ pub use runtime::{
 };
 pub use sectioning::{
     evaluate_module_generation, render_generated_migration, render_sectioned_migration,
-    section_baseline_if_moduled, sectionize_steps,
+    section_baseline_if_moduled, sectionize_steps, sectionize_unmoduled,
 };
 
 // Public API surface reachable through pub-fn signatures and the integration

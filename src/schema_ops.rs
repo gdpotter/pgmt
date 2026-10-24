@@ -158,21 +158,36 @@ pub async fn settle(
     written: &Catalog,
     load: impl AsyncFn(&PgPool) -> Result<Catalog>,
 ) -> Result<Settled> {
+    const PLAN_FAILED: &str = "pgmt could not apply its own plan for the schema files to a \
+        fresh shadow database. This is likely a pgmt bug; please report it with the \
+        schema that triggers it.";
+
     let base = load(pool).await?;
 
-    for step in crate::diff::plan(&base, written)? {
-        for rendered in step.to_sql() {
-            sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql.clone()))
-                .execute(pool)
-                .await
-                .with_context(|| {
-                    format!(
-                        "pgmt could not apply its own plan for the schema files to a \
-                        fresh shadow database. This is likely a pgmt bug; please report \
-                        it with the schema that triggers it.\n\nFailing statement:\n{}",
-                        rendered.sql
-                    )
-                })?;
+    for section in crate::modules::sectionize_unmoduled(&base, written)? {
+        let statements: Vec<String> = section
+            .steps
+            .iter()
+            .flat_map(|step| step.to_sql())
+            .map(|rendered| rendered.sql)
+            .collect();
+
+        // One round trip per section, run as `migrate apply` runs a
+        // transactional section. A failed section rolls back whole, so
+        // replaying it one statement at a time names the statement that
+        // broke, which the error from a multi-statement batch does not.
+        let batch = sqlx::raw_sql(sqlx::AssertSqlSafe(statements.join("\n")))
+            .execute(pool)
+            .await;
+        if let Err(batch_error) = batch {
+            for statement in &statements {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(statement.clone()))
+                    .execute(pool)
+                    .await
+                    .with_context(|| format!("{PLAN_FAILED}\n\nFailing statement:\n{statement}"))?;
+            }
+            return Err(batch_error)
+                .with_context(|| format!("{PLAN_FAILED}\n\nFailing section: {}", section.name));
         }
     }
 
