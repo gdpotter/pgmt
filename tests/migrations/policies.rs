@@ -980,3 +980,33 @@ async fn test_drop_policy_and_view_together() -> Result<()> {
         .await?;
     Ok(())
 }
+
+/// A varchar `IN (...)` list renders as `ARRAY['a'::character varying]::text[]`
+/// and re-parses as `ARRAY['a'::character varying::text]`. Once applied,
+/// the policy's USING clause must not be altered by every later plan.
+#[tokio::test]
+async fn test_policy_on_varchar_in_list_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE TABLE orders (id INT, status VARCHAR(20))",
+                "ALTER TABLE orders ENABLE ROW LEVEL SECURITY",
+            ],
+            &[],
+            &["CREATE POLICY open_orders ON orders USING (status IN ('pending', 'completed'))"],
+            |_, final_catalog| {
+                assert!(
+                    final_catalog
+                        .policies
+                        .iter()
+                        .any(|p| p.name == "open_orders")
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

@@ -876,3 +876,30 @@ async fn test_domain_cascade_on_base_type_change() -> Result<()> {
     })
     .await
 }
+
+/// A varchar `IN (...)` list renders as `ARRAY['a'::character varying]::text[]`
+/// and re-parses as `ARRAY['a'::character varying::text]`. Once applied,
+/// the domain's CHECK must not be dropped and re-added by every later plan.
+#[tokio::test]
+async fn test_domain_check_on_varchar_in_list_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &["CREATE DOMAIN order_status AS VARCHAR(20) CHECK (VALUE IN ('pending', 'completed'))"],
+            |_, final_catalog| {
+                assert!(
+                    final_catalog
+                        .domains
+                        .iter()
+                        .any(|d| d.name == "order_status")
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

@@ -732,3 +732,33 @@ async fn test_trigger_dependency_ordering() -> Result<()> {
         .await?;
     Ok(())
 }
+
+/// A varchar `IN (...)` list renders as `ARRAY['a'::character varying]::text[]`
+/// and re-parses as `ARRAY['a'::character varying::text]`. Once applied,
+/// the trigger must not be dropped and recreated by every later plan.
+#[tokio::test]
+async fn test_trigger_when_on_varchar_in_list_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[
+                "CREATE TABLE orders (id INT, status VARCHAR(20))",
+                "CREATE FUNCTION noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+            ],
+            &[],
+            &["CREATE TRIGGER orders_open BEFORE UPDATE ON orders FOR EACH ROW WHEN (NEW.status IN ('pending', 'completed')) EXECUTE FUNCTION noop()"],
+            |_, final_catalog| {
+                assert!(
+                    final_catalog
+                        .triggers
+                        .iter()
+                        .any(|t| t.name == "orders_open")
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

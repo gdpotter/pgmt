@@ -547,3 +547,30 @@ async fn test_collation_change_recreates_overriding_index() -> Result<()> {
     target_db.cleanup().await;
     Ok(())
 }
+
+/// A varchar `IN (...)` list renders as `ARRAY['a'::character varying]::text[]`
+/// and re-parses as `ARRAY['a'::character varying::text]`. Once applied,
+/// the partial index must not be rebuilt by every later plan.
+#[tokio::test]
+async fn test_partial_index_on_varchar_in_list_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE orders (id INT, status VARCHAR(20))"],
+            &[],
+            &["CREATE INDEX orders_open_idx ON orders (id) WHERE status IN ('pending', 'completed')"],
+            |_, final_catalog| {
+                assert!(
+                    final_catalog
+                        .indexes
+                        .iter()
+                        .any(|i| i.name == "orders_open_idx")
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

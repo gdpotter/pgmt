@@ -543,3 +543,30 @@ async fn test_no_fk_cascade_without_column_type_change() -> Result<()> {
 
     Ok(())
 }
+
+/// A varchar `IN (...)` list renders as `ARRAY['a'::character varying]::text[]`
+/// and re-parses as `ARRAY['a'::character varying::text]`. Once applied,
+/// the CHECK constraint must not be dropped and re-added by every later plan.
+#[tokio::test]
+async fn test_check_constraint_on_varchar_in_list_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &["CREATE TABLE orders (id INT, status VARCHAR(20))"],
+            &[],
+            &["ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'completed'))"],
+            |_, final_catalog| {
+                assert!(
+                    final_catalog
+                        .constraints
+                        .iter()
+                        .any(|c| c.name == "orders_status_check")
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
