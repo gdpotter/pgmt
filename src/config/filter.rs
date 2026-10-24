@@ -461,6 +461,7 @@ mod substrate_filter_tests {
                 version: "3.5".to_string(),
                 relocatable: false,
                 comment: None,
+                default_comment: None,
                 depends_on: vec![],
             },
             Extension {
@@ -469,6 +470,7 @@ mod substrate_filter_tests {
                 version: "3.5".to_string(),
                 relocatable: false,
                 comment: None,
+                default_comment: None,
                 depends_on: vec![DbObjectId::Schema {
                     name: "topology".to_string(),
                 }],

@@ -749,6 +749,7 @@ mod tests {
                     version: "1.0".to_string(),
                     relocatable: false,
                     comment: None,
+                    default_comment: None,
                     depends_on: vec![],
                 },
             }),

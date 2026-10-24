@@ -2,7 +2,8 @@
 //!
 //! The fetch keeps the OIDs the converter resolves with; an extension has no
 //! server-side-function output to carry, since `pg_extension` already holds its
-//! name, version and relocatability. Schema-name resolution, the exclusion of the
+//! name, version and relocatability, and `pg_available_extensions` the
+//! control-file comment `CREATE EXTENSION` attaches. Schema-name resolution, the exclusion of the
 //! extension every database ships with, the schema dependency and comment
 //! attachment happen in the converter, where the OIDs die.
 //!
@@ -31,6 +32,8 @@ pub struct RawExtension {
     pub namespace: Oid,
     pub version: String,
     pub relocatable: bool,
+    /// `pg_available_extensions.comment`, read from the control file.
+    pub default_comment: Option<String>,
 }
 
 /// Fetch every installed extension, unresolved and unfiltered.
@@ -43,8 +46,10 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawExtension>> {
             e.extname AS "name!",
             e.extnamespace AS "namespace!",
             e.extversion AS "version!",
-            e.extrelocatable AS "relocatable!"
+            e.extrelocatable AS "relocatable!",
+            ae.comment AS "default_comment?"
         FROM pg_extension e
+        LEFT JOIN pg_available_extensions ae ON ae.name = e.extname
         ORDER BY e.oid
         "#
     )
@@ -59,6 +64,7 @@ pub async fn fetch(conn: &mut PgConnection) -> Result<Vec<RawExtension>> {
             namespace: row.namespace,
             version: row.version,
             relocatable: row.relocatable,
+            default_comment: row.default_comment,
         })
         .collect())
 }
@@ -146,6 +152,7 @@ pub fn convert(
                 version: row.version.clone(),
                 relocatable: row.relocatable,
                 comment: None,
+                default_comment: row.default_comment.clone(),
                 depends_on,
             },
         ));

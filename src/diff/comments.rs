@@ -4,7 +4,8 @@
 //! [`crate::catalog::attached`]). This module is the ONE place that decides comment
 //! migration steps, instead of every per-object diff re-implementing it:
 //!
-//! - **created** object → emit a `SET` for every present comment target;
+//! - **created** object → diff from the comments the server attaches at
+//!   creation (none, except an extension's control-file comment);
 //! - **in-place** object → diff its comment targets (set / drop / update);
 //! - **recreated** object → corrected afterward by the cascade recreate pass,
 //!   since a DROP discards the object's comments (see
@@ -27,13 +28,12 @@ fn drop(target: AttrTarget) -> MigrationStep {
 }
 
 /// Full comment state for an object created from scratch (brand new, or recreated
-/// via DROP+CREATE): a `SET` for every present comment target. The empty ones are
-/// skipped — a freshly created object has no comments to drop.
+/// via DROP+CREATE): the comment steps from what the server attaches at creation
+/// to the desired comments. For most objects that is a `SET` for every present
+/// target; an extension created with a control-file comment it should not keep
+/// needs a `DROP` or a different `SET`.
 pub fn desired_comment_steps(obj: &dyn Attached) -> Vec<MigrationStep> {
-    obj.comment_targets()
-        .into_iter()
-        .filter_map(|(target, comment)| comment.map(|c| set(target, c)))
-        .collect()
+    diff_targets(&obj.created_comment_targets(), &obj.comment_targets())
 }
 
 /// Diff comments for every attached object present in both/either catalog.

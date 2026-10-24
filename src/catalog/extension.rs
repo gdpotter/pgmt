@@ -13,6 +13,10 @@ pub struct Extension {
     pub version: String,
     pub relocatable: bool,
     pub comment: Option<String>,
+    /// The comment `CREATE EXTENSION` attaches from the control file. A newly
+    /// created extension starts with it, so a desired `comment` that differs,
+    /// absent included, needs a comment step after the create.
+    pub default_comment: Option<String>,
     pub depends_on: Vec<DbObjectId>,
 }
 

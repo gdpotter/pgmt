@@ -299,3 +299,57 @@ async fn test_multiple_extensions_migration() -> Result<()> {
 
     Ok(())
 }
+
+/// `CREATE EXTENSION` attaches the control file's comment. An extension whose
+/// desired comment is absent must have that comment dropped after the create,
+/// or the created extension keeps a comment the desired state does not have.
+#[tokio::test]
+async fn test_create_extension_without_comment_drops_default_comment() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &[
+                "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"",
+                "COMMENT ON EXTENSION \"uuid-ossp\" IS NULL",
+            ],
+            |_, final_catalog| -> Result<()> {
+                let ext = final_catalog
+                    .extensions
+                    .iter()
+                    .find(|e| e.name == "uuid-ossp")
+                    .expect("Extension should exist in final catalog");
+                assert_eq!(ext.comment, None);
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// An extension whose desired comment is the control file's own needs no
+/// comment step: `CREATE EXTENSION` already attaches it.
+#[tokio::test]
+async fn test_create_extension_with_default_comment_emits_no_comment_step() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &["CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""],
+            |steps, _| -> Result<()> {
+                assert!(
+                    !steps.iter().any(|s| matches!(s, MigrationStep::Comment(_))),
+                    "unexpected comment step: {steps:?}"
+                );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}

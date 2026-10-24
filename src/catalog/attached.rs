@@ -48,6 +48,13 @@ pub trait Attached {
         targets.extend(self.sub_comments());
         targets
     }
+
+    /// The comments the server attaches when this object is created, before
+    /// any `COMMENT` runs; a target absent here starts with none. Default:
+    /// none at all.
+    fn created_comment_targets(&self) -> Vec<(AttrTarget, Option<String>)> {
+        Vec::new()
+    }
 }
 
 impl Attached for View {
@@ -171,5 +178,19 @@ macro_rules! impl_attached {
 
 impl_attached!(
     Domain, Collation, Function, Aggregate, Operator, Cast, Sequence, Index, Constraint, Trigger,
-    Policy, Extension,
+    Policy,
 );
+
+impl Attached for Extension {
+    fn object_id(&self) -> DbObjectId {
+        self.id()
+    }
+
+    fn own_comment(&self) -> Option<String> {
+        self.comment.clone()
+    }
+
+    fn created_comment_targets(&self) -> Vec<(AttrTarget, Option<String>)> {
+        vec![(AttrTarget::object(self.id()), self.default_comment.clone())]
+    }
+}

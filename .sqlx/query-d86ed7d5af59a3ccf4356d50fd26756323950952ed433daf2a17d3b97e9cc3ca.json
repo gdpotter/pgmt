@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            e.oid AS \"oid!\",\n            e.extname AS \"name!\",\n            e.extnamespace AS \"namespace!\",\n            e.extversion AS \"version!\",\n            e.extrelocatable AS \"relocatable!\"\n        FROM pg_extension e\n        ORDER BY e.oid\n        ",
+  "query": "\n        SELECT\n            e.oid AS \"oid!\",\n            e.extname AS \"name!\",\n            e.extnamespace AS \"namespace!\",\n            e.extversion AS \"version!\",\n            e.extrelocatable AS \"relocatable!\",\n            ae.comment AS \"default_comment?\"\n        FROM pg_extension e\n        LEFT JOIN pg_available_extensions ae ON ae.name = e.extname\n        ORDER BY e.oid\n        ",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,17 @@
             "name": "extrelocatable"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "default_comment?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pg_available_extensions",
+            "name": "comment"
+          }
+        }
       }
     ],
     "parameters": {
@@ -67,8 +78,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "274b2b559d0f07f633fad0a341c693afe054d58b8a750f60b61c7b08ac44ea76"
+  "hash": "d86ed7d5af59a3ccf4356d50fd26756323950952ed433daf2a17d3b97e9cc3ca"
 }

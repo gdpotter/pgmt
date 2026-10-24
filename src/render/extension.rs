@@ -62,6 +62,7 @@ mod tests {
             version: "1.1".to_string(),
             relocatable: true,
             comment: None,
+            default_comment: None,
             depends_on: vec![],
         }
     }
