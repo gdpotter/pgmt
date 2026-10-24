@@ -46,6 +46,13 @@ pub struct RawConstraint {
     pub referenced_namespace: Option<Oid>,
     pub referenced_table: Option<String>,
     pub referenced_columns: Vec<String>,
+    /// The unique key a foreign key's referenced columns match, which must
+    /// exist before the foreign key can be added: the index Postgres resolved
+    /// it to (`conindid`), and the primary-key or unique constraint that index
+    /// implements, if any, with its `contype`.
+    pub referenced_key_index: Option<String>,
+    pub referenced_key_constraint: Option<String>,
+    pub referenced_key_contype: Option<String>,
     /// `pg_constraint.confdeltype` / `confupdtype`: the referential action char.
     pub on_delete: Option<String>,
     pub on_update: Option<String>,
@@ -187,6 +194,9 @@ async fn fetch_constraints(conn: &mut PgConnection) -> Result<Vec<RawConstraint>
                     )
                 ELSE ARRAY[]::name[]
             END AS "referenced_columns!: Vec<String>",
+            ki.relname AS "referenced_key_index?",
+            kc.conname AS "referenced_key_constraint?",
+            kc.contype::text AS "referenced_key_contype?",
 
             NULLIF(c.confdeltype, '')::text AS "on_delete?",
             NULLIF(c.confupdtype, '')::text AS "on_update?",
@@ -256,6 +266,11 @@ async fn fetch_constraints(conn: &mut PgConnection) -> Result<Vec<RawConstraint>
         FROM pg_constraint c
         JOIN pg_class cl ON c.conrelid = cl.oid
         LEFT JOIN pg_class fcl ON c.confrelid = fcl.oid
+        LEFT JOIN pg_class ki ON c.contype = 'f' AND ki.oid = c.conindid
+        LEFT JOIN pg_constraint kc ON c.contype = 'f'
+            AND kc.conindid = c.conindid
+            AND kc.conrelid = c.confrelid
+            AND kc.contype IN ('p', 'u')
         WHERE cl.relkind = 'r'
           AND c.contype IN ('u', 'f', 'c', 'x')
         ORDER BY c.oid
@@ -277,6 +292,9 @@ async fn fetch_constraints(conn: &mut PgConnection) -> Result<Vec<RawConstraint>
             referenced_namespace: row.referenced_namespace,
             referenced_table: row.referenced_table,
             referenced_columns: row.referenced_columns,
+            referenced_key_index: row.referenced_key_index,
+            referenced_key_constraint: row.referenced_key_constraint,
+            referenced_key_contype: row.referenced_key_contype,
             on_delete: row.on_delete,
             on_update: row.on_update,
             deferrable: row.deferrable,
@@ -417,6 +435,26 @@ pub fn convert(
                     schema: referenced_schema.clone(),
                     name: referenced_table.clone(),
                 });
+                // The referenced columns must already carry a unique key. A
+                // primary key is part of its table; a unique constraint or a
+                // standalone unique index is an object of its own, and an
+                // index lives in its table's schema.
+                match (
+                    row.referenced_key_contype.as_deref(),
+                    &row.referenced_key_constraint,
+                    &row.referenced_key_index,
+                ) {
+                    (Some("u"), Some(constraint), _) => depends_on.push(DbObjectId::Constraint {
+                        schema: referenced_schema.clone(),
+                        table: referenced_table.clone(),
+                        name: constraint.clone(),
+                    }),
+                    (None, _, Some(index)) => depends_on.push(DbObjectId::Index {
+                        schema: referenced_schema.clone(),
+                        name: index.clone(),
+                    }),
+                    _ => {}
+                }
 
                 ConstraintType::ForeignKey {
                     columns: row.columns.clone(),
@@ -519,6 +557,9 @@ mod tests {
             referenced_namespace,
             referenced_table: referenced_table.map(String::from),
             referenced_columns: vec!["id".to_string()],
+            referenced_key_index: None,
+            referenced_key_constraint: None,
+            referenced_key_contype: None,
             on_delete: None,
             on_update: None,
             deferrable: false,

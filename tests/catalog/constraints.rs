@@ -260,6 +260,55 @@ async fn test_fetch_constraint_dependencies() -> Result<()> {
     .await
 }
 
+/// A foreign key to columns other than the primary key needs the unique key
+/// on them to exist first. When that key is a unique constraint or a
+/// standalone unique index, it is an object of its own, and the foreign key
+/// depends on it, not only on the referenced table.
+#[tokio::test]
+async fn test_fetch_foreign_key_depends_on_referenced_unique_key() -> Result<()> {
+    with_test_db(async |db| {
+        db.execute("CREATE TABLE users (id INT PRIMARY KEY, tenant_id INT UNIQUE, email TEXT)")
+            .await;
+        db.execute("CREATE UNIQUE INDEX users_email_key_idx ON users (email)")
+            .await;
+        db.execute(
+            "CREATE TABLE orders (
+                tenant_id INT REFERENCES users (tenant_id),
+                email TEXT REFERENCES users (email)
+            )",
+        )
+        .await;
+
+        let constraints = fetch(&mut *db.conn().await).await.unwrap();
+        let fk_on = |column: &str| {
+            constraints
+                .iter()
+                .find(|c| {
+                    matches!(&c.constraint_type, ConstraintType::ForeignKey { columns, .. }
+                        if columns == &[column.to_string()])
+                })
+                .unwrap_or_else(|| panic!("foreign key on {column}"))
+        };
+
+        assert!(
+            fk_on("tenant_id")
+                .depends_on()
+                .contains(&DbObjectId::Constraint {
+                    schema: "public".to_string(),
+                    table: "users".to_string(),
+                    name: "users_tenant_id_key".to_string(),
+                })
+        );
+        assert!(fk_on("email").depends_on().contains(&DbObjectId::Index {
+            schema: "public".to_string(),
+            name: "users_email_key_idx".to_string(),
+        }));
+
+        Ok(())
+    })
+    .await
+}
+
 /// A CHECK expression can name a function or an operator that appears nowhere
 /// in the `pg_constraint` row itself; both are dependencies of the constraint.
 #[tokio::test]

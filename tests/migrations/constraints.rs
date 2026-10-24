@@ -1,6 +1,7 @@
 //! Tests for constraint migrations
 use crate::helpers::migration::MigrationTestHelper;
 use anyhow::Result;
+use pgmt::catalog::constraint::ConstraintType;
 use pgmt::diff::operations::{ColumnAction, ConstraintOperation, MigrationStep, TableOperation};
 
 #[tokio::test]
@@ -563,6 +564,40 @@ async fn test_check_constraint_on_varchar_in_list_converges() -> Result<()> {
                         .iter()
                         .any(|c| c.name == "orders_status_check")
                 );
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A foreign key to a unique constraint or a standalone unique index can only
+/// be added once that key exists. Building both tables from nothing must
+/// create the key before the foreign key.
+#[tokio::test]
+async fn test_foreign_key_to_unique_key_created_from_scratch() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &[
+                "CREATE TABLE users (id INT PRIMARY KEY, tenant_id INT UNIQUE, email TEXT)",
+                "CREATE UNIQUE INDEX users_email_key_idx ON users (email)",
+                "CREATE TABLE orders (
+                    tenant_id INT REFERENCES users (tenant_id),
+                    email TEXT REFERENCES users (email)
+                )",
+            ],
+            |_, final_catalog| {
+                let foreign_keys = final_catalog
+                    .constraints
+                    .iter()
+                    .filter(|c| matches!(c.constraint_type, ConstraintType::ForeignKey { .. }))
+                    .count();
+                assert_eq!(foreign_keys, 2);
                 Ok(())
             },
         )
