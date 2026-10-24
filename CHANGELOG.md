@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- `pgmt apply`, `pgmt diff`, and `pgmt migrate new` no longer report the same change again after it has been applied ([#21](https://github.com/gdpotter/pgmt/issues/21)). Postgres does not always store a statement the same way when it parses its own output back in: a `CHECK (status IN (...))` on a `varchar` column comes back with its casts moved, and an untyped `NULL` in a later `UNION` arm gains a column alias. pgmt compared targets against your schema files as Postgres first stored them, not against what pgmt's generated SQL produces, so some objects never matched. Every `pgmt apply` and every new migration changed them again: a view replaced, a CHECK or domain constraint dropped and re-added (which revalidates the table), a partial index rebuilt, a policy altered, a trigger recreated. pgmt now runs its own generated SQL on a second fresh shadow database and compares against the result, which makes these commands slower, and generated SQL now writes these expressions the way Postgres stores them. If the generated SQL cannot build your schema from scratch, the command fails and names the statement, instead of the problem going unnoticed until a baseline or a fresh database hits it.
+- A foreign key to columns covered by a `UNIQUE` constraint or a unique index, rather than the primary key, no longer breaks building the schema from scratch. The foreign key could be ordered before the key it references and fail with `there is no unique constraint matching given keys`. This broke `pgmt apply` to an empty database, migrations that create both tables, and `pgmt migrate provision` from a baseline.
+- An extension created with its comment removed (`COMMENT ON EXTENSION ... IS NULL`) no longer keeps the comment from its control file. `CREATE EXTENSION` attaches that comment and pgmt emitted nothing to clear it. An extension that keeps its default comment no longer gets a redundant `COMMENT ON EXTENSION`.
+
 ## 0.6.5 - 2026-09-22
 
 ### Bug Fixes
