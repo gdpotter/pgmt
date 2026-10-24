@@ -4,6 +4,28 @@ use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{MigrationStep, SqlRenderer};
 use pgmt::diff::plan;
 
+/// Assert that a database the plan was applied to needs no further migration:
+/// planning from its catalog to the desired one yields no steps. pgmt emits
+/// server-rendered text (`pg_get_viewdef`, `pg_get_expr`, ...) and the server
+/// re-parses it, so a rendering that does not reproduce itself on re-parse
+/// shows up here as a diff that would recur on every run.
+pub fn assert_converged(applied: &Catalog, desired: &Catalog) -> Result<()> {
+    let residual = plan(applied, desired)?;
+    if !residual.is_empty() {
+        let sql: Vec<String> = residual
+            .iter()
+            .flat_map(|step| step.to_sql())
+            .map(|rendered| rendered.sql)
+            .collect();
+        panic!(
+            "applying the plan did not converge; re-planning still yields {} step(s):\n{}",
+            residual.len(),
+            sql.join("\n")
+        );
+    }
+    Ok(())
+}
+
 /// Helper for migration tests that eliminates boilerplate setup
 pub struct MigrationTestHelper {
     pg: PgTestInstance,
@@ -104,6 +126,7 @@ impl MigrationTestHelper {
 
         // Verify final state
         let final_catalog = Catalog::load_unfiltered(fresh_db.pool()).await?;
+        assert_converged(&final_catalog, &target_catalog)?;
         verification(&steps, &final_catalog)?;
 
         // Cleanup test databases

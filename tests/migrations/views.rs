@@ -1160,3 +1160,31 @@ async fn test_collation_change_cascades_dependent_view() -> Result<()> {
     target_db.cleanup().await;
     Ok(())
 }
+
+/// An untyped NULL in a later UNION arm renders as `SELECT NULL::text` with no
+/// alias, since column names in non-first set-operation arms are invisible.
+/// Re-parsing names that column `text`, so it re-renders as
+/// `SELECT NULL::text AS text`. Once applied, the view must not be replaced by
+/// every later plan.
+#[tokio::test]
+async fn test_view_with_coerced_union_arm_converges() -> Result<()> {
+    let helper = MigrationTestHelper::new().await;
+
+    helper
+        .run_migration_test(
+            &[],
+            &[],
+            &["CREATE VIEW public.test AS SELECT * FROM (SELECT NULL UNION ALL SELECT NULL) s"],
+            |steps, final_catalog| {
+                assert!(steps.iter().any(|s| matches!(
+                    s,
+                    MigrationStep::View(ViewOperation::Create { name, .. }) if name == "test"
+                )));
+                assert_eq!(final_catalog.views.len(), 1);
+                Ok(())
+            },
+        )
+        .await?;
+
+    Ok(())
+}
