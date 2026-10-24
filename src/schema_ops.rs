@@ -1,10 +1,11 @@
 use crate::catalog::Catalog;
-use crate::catalog::file_dependencies::FileToObjectMapping;
+use crate::catalog::file_dependencies::{FileDependencyAugmentation, FileToObjectMapping};
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
 use crate::db::error_context::SqlErrorContext;
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+use crate::diff::operations::SqlRenderer;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::path::Path;
@@ -57,9 +58,35 @@ fn truncate_for_log(s: &str) -> String {
     }
 }
 
-/// Build the desired-state catalog on a shadow database: clean it, apply the
-/// roles file and schema files, and return the **managed** catalog (the shadow
-/// branch inherits image substrate, which is outside the managed universe).
+/// The desired state, plus the two things a caller that writes a baseline
+/// needs alongside it.
+pub struct DesiredState {
+    /// The shadow's state before any schema file ran: whatever the image
+    /// provides (extensions, platform schemas), on top of a cleaned database
+    /// with the roles file applied. A baseline is the diff FROM this, so
+    /// substrate cancels structurally instead of relying on the `objects`
+    /// predicate to name it.
+    pub base: Catalog,
+    /// What the schema files describe, as a target holds it once pgmt's plan
+    /// for it is applied.
+    pub catalog: Catalog,
+    /// Which file produced which object, for module attribution.
+    pub mapping: FileToObjectMapping,
+}
+
+/// Build the desired state on the shadow database, as two pristine phases:
+///
+/// 1. Clean the shadow, apply the roles file and the schema files, and load
+///    the **managed** catalog (the shadow inherits image substrate, which is
+///    outside the managed universe).
+/// 2. [`settle`] that catalog on a fresh shadow: apply pgmt's plan for it and
+///    load what the server made of the plan.
+///
+/// A target never receives the schema files, only pgmt's rendering of each
+/// object, and Postgres does not always reproduce its own rendering when it
+/// re-parses it: `col::text = ANY (ARRAY[...]::text[])` comes back with the
+/// cast moved onto each element. Phase 1 alone is therefore not a state any
+/// target can reach, and diffing against it would never converge.
 ///
 /// This is THE desired-state source. Every command that needs "what the schema
 /// files describe" — apply, diff, migrate new/update/validate/diff, baseline —
@@ -68,11 +95,107 @@ fn truncate_for_log(s: &str) -> String {
 pub async fn build_desired_state(
     config: &Config,
     root_dir: &Path,
-    shadow_pool: &PgPool,
-) -> Result<Catalog> {
-    clean_shadow_for_schema(config, root_dir, shadow_pool).await?;
-    let (catalog, _) = apply_schema_files_to_shadow(config, root_dir, shadow_pool).await?;
-    Ok(ObjectFilter::from_config(config).filter_catalog(catalog))
+    shadow: &crate::config::ShadowDatabase,
+) -> Result<DesiredState> {
+    let filter = ObjectFilter::from_config(config);
+
+    let (written, mapping, augmentation) = shadow
+        .with_fresh(|pool| async move {
+            clean_shadow_for_schema(config, root_dir, &pool).await?;
+            apply_schema_files_to_shadow(config, root_dir, &pool).await
+        })
+        .await?;
+    // File-declared edges order the plan that settles the state, and are laid
+    // back over the reloaded catalog, which knows nothing of files.
+    let written = with_augmentation(filter.filter_catalog(written), augmentation.as_ref());
+
+    info!("🔁 Replaying generated SQL on a fresh shadow database...");
+    let settled = shadow
+        .with_fresh(|pool| async move {
+            clean_shadow_for_schema(config, root_dir, &pool).await?;
+            settle(&pool, &written, async |pool| {
+                Catalog::load_managed(pool, &filter).await
+            })
+            .await
+        })
+        .await?;
+
+    Ok(DesiredState {
+        base: settled.base,
+        catalog: with_augmentation(settled.catalog, augmentation.as_ref()),
+        mapping,
+    })
+}
+
+fn with_augmentation(
+    catalog: Catalog,
+    augmentation: Option<&FileDependencyAugmentation>,
+) -> Catalog {
+    match augmentation {
+        Some(augmentation) => catalog.with_file_dependencies_augmented(augmentation.clone()),
+        None => catalog,
+    }
+}
+
+/// A desired state after [`settle`].
+pub struct Settled {
+    /// The pristine database the plan was applied to, as loaded before it.
+    pub base: Catalog,
+    /// The same database after the plan.
+    pub catalog: Catalog,
+}
+
+/// Apply pgmt's plan for `written` to `pool`, a pristine database, and load
+/// the result with `load` (which also loads the base the plan starts from).
+///
+/// The result is what every target holds after pgmt migrates it to `written`,
+/// so it is the state to diff targets against. Settling must not change which
+/// objects exist, only how the server renders them: an object the plan drops
+/// or invents is a planner bug, and failing here keeps it from being absorbed
+/// silently into the desired state.
+pub async fn settle(
+    pool: &PgPool,
+    written: &Catalog,
+    load: impl AsyncFn(&PgPool) -> Result<Catalog>,
+) -> Result<Settled> {
+    let base = load(pool).await?;
+
+    for step in crate::diff::plan(&base, written)? {
+        for rendered in step.to_sql() {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql.clone()))
+                .execute(pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "pgmt could not apply its own plan for the schema files to a \
+                        fresh shadow database. This is likely a pgmt bug; please report \
+                        it with the schema that triggers it.\n\nFailing statement:\n{}",
+                        rendered.sql
+                    )
+                })?;
+        }
+    }
+
+    let catalog = load(pool).await?;
+
+    let written_ids = written.object_ids();
+    let settled_ids = catalog.object_ids();
+    if written_ids != settled_ids {
+        let mut missing: Vec<_> = written_ids.difference(&settled_ids).collect();
+        let mut extra: Vec<_> = settled_ids.difference(&written_ids).collect();
+        missing.sort();
+        extra.sort();
+        anyhow::bail!(
+            "pgmt's own plan for the schema files does not reproduce them on a fresh \
+            shadow database. This is likely a pgmt bug; please report it with the \
+            schema that triggers it.\n\nMissing after the plan: {:?}\nNot in the \
+            schema files: {:?}",
+            missing,
+            extra
+        );
+    }
+
+    Ok(Settled { base, catalog })
 }
 
 /// Clean the shadow database and apply the roles file, leaving it ready for
@@ -94,13 +217,18 @@ async fn clean_shadow_for_schema(
 }
 
 /// Apply the schema files to an already-cleaned shadow and return the
-/// resulting **unfiltered** catalog plus the file→object mapping (callers
-/// apply the managed-universe filter if needed).
+/// resulting **unfiltered**, unaugmented catalog, the file→object mapping, and
+/// the file-declared dependency edges when
+/// `schema.augment_dependencies_from_files` is on.
 async fn apply_schema_files_to_shadow(
     config: &Config,
     root_dir: &Path,
     shadow_pool: &PgPool,
-) -> Result<(Catalog, FileToObjectMapping)> {
+) -> Result<(
+    Catalog,
+    FileToObjectMapping,
+    Option<FileDependencyAugmentation>,
+)> {
     let schema_dir = root_dir.join(&config.directories.schema);
 
     let processor_config = SchemaProcessorConfig {
@@ -125,78 +253,30 @@ async fn apply_schema_files_to_shadow(
             )
         })?;
 
-    let file_mapping = processed_schema.file_mapping.clone();
-    let catalog = if config.schema.augment_dependencies_from_files {
-        processed_schema.with_file_dependencies_applied()
-    } else {
-        processed_schema.catalog
-    };
+    let augmentation = config
+        .schema
+        .augment_dependencies_from_files
+        .then_some(processed_schema.augmentation);
 
     info!("🔍 Validating applied schema...");
     validate_schema_applied(shadow_pool).await?;
     info!("✅ Schema validation completed");
 
-    Ok((catalog, file_mapping))
+    Ok((
+        processed_schema.catalog,
+        processed_schema.file_mapping,
+        augmentation,
+    ))
 }
 
-/// Connect to the given shadow database, build the desired state on it,
-/// and return the managed catalog. Convenience wrapper around
-/// [`build_desired_state`] for commands that don't hold a shadow pool.
+/// The desired-state catalog alone, for commands that need neither the base
+/// nor the file mapping. See [`build_desired_state`].
 pub async fn apply_current_schema_to_shadow(
     config: &Config,
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
 ) -> Result<Catalog> {
-    // The branch is reclaimed on every exit path rather than leaked per call,
-    // which matters for long-running callers like `apply --watch`.
-    shadow
-        .with_fresh(|pool| async move { build_desired_state(config, root_dir, &pool).await })
-        .await
-}
-
-/// The desired state, plus the two things a caller that writes a baseline
-/// needs alongside it.
-pub struct DesiredState {
-    /// The shadow's state before any schema file ran: whatever the image
-    /// provides (extensions, platform schemas), on top of a cleaned database
-    /// with the roles file applied. A baseline is the diff FROM this, so
-    /// substrate cancels structurally instead of relying on the `objects`
-    /// predicate to name it.
-    pub base: Catalog,
-    /// What the schema files describe.
-    pub catalog: Catalog,
-    /// Which file produced which object, for module attribution.
-    pub mapping: FileToObjectMapping,
-}
-
-/// Like [`apply_current_schema_to_shadow`], but also returns the shadow's
-/// pre-schema base and the file→object mapping. Identical shadow work — the
-/// base is a load at a point the shadow already passes through, and the
-/// mapping is computed by the schema processor either way.
-///
-/// Both catalogs are scoped to the managed universe by the same filter, so
-/// they are directly diffable.
-pub async fn apply_current_schema_to_shadow_with_mapping(
-    config: &Config,
-    root_dir: &Path,
-    shadow: &crate::config::ShadowDatabase,
-) -> Result<DesiredState> {
-    shadow
-        .with_fresh(|pool| async move {
-            let filter = ObjectFilter::from_config(config);
-
-            clean_shadow_for_schema(config, root_dir, &pool).await?;
-            let base = Catalog::load_managed(&pool, &filter).await?;
-
-            let (catalog, mapping) = apply_schema_files_to_shadow(config, root_dir, &pool).await?;
-
-            Ok(DesiredState {
-                base,
-                catalog: filter.filter_catalog(catalog),
-                mapping,
-            })
-        })
-        .await
+    Ok(build_desired_state(config, root_dir, shadow).await?.catalog)
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

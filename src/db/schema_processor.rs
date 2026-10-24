@@ -54,14 +54,6 @@ pub struct ProcessedSchema {
     pub file_dependencies: BTreeMap<String, Vec<String>>,
 }
 
-impl ProcessedSchema {
-    /// Get a catalog with file dependencies applied
-    pub fn with_file_dependencies_applied(self) -> Catalog {
-        self.catalog
-            .with_file_dependencies_augmented(self.augmentation)
-    }
-}
-
 /// Unified schema processor that handles the complete schema processing workflow
 pub struct SchemaProcessor {
     pool: PgPool,

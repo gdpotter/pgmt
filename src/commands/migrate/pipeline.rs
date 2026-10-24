@@ -161,8 +161,7 @@ pub async fn generate(
         base: shadow_base,
         catalog: new_catalog,
         mapping: file_mapping,
-    } = crate::schema_ops::apply_current_schema_to_shadow_with_mapping(config, root_dir, shadow)
-        .await?;
+    } = crate::schema_ops::build_desired_state(config, root_dir, shadow).await?;
 
     crate::validation::apply_column_order_validation(
         &old_catalog,

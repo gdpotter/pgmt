@@ -71,7 +71,7 @@ For `pgmt migrate new`, there's no target database specified. Instead, pgmt reco
    - All migrations after that baseline
    - This represents "current production state"
 
-2. **Build desired state** - Apply your schema files to a shadow database (this represents "desired state")
+2. **Build desired state** - Apply your schema files to a shadow database, then replay pgmt's own plan for the result on a fresh shadow. Targets receive pgmt's generated SQL rather than your files, and Postgres can store re-parsed SQL slightly differently from the original, so the replayed state is the one your targets will actually hold.
 
 3. **Diff** - Compare the two catalogs
 

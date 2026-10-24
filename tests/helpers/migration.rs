@@ -3,6 +3,7 @@ use anyhow::Result;
 use pgmt::catalog::Catalog;
 use pgmt::diff::operations::{MigrationStep, SqlRenderer};
 use pgmt::diff::plan;
+use pgmt::schema_ops::settle;
 
 /// Assert that a database the plan was applied to needs no further migration:
 /// planning from its catalog to the desired one yields no steps. pgmt emits
@@ -71,10 +72,10 @@ impl MigrationTestHelper {
 
     /// Complete end-to-end migration test with clear 3-vector approach:
     /// 1. Setup initial and target databases with provided SQL
-    /// 2. Load catalogs
+    /// 2. Load catalogs, settling the target as the CLI settles its desired state
     /// 3. Run migration pipeline
     /// 4. Apply migration to fresh database
-    /// 5. Verify final state matches target
+    /// 5. Verify final state matches target: re-planning yields nothing
     /// 6. Return migration steps for additional assertions
     pub async fn run_migration_test<F>(
         &self,
@@ -105,9 +106,18 @@ impl MigrationTestHelper {
             target_db.execute(sql).await;
         }
 
-        // Load catalogs
+        // Load catalogs. The target is settled the way the CLI settles its
+        // desired state, so the plan aims at what the server makes of pgmt's
+        // rendering rather than at the source SQL.
         let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
-        let target_catalog = Catalog::load_unfiltered(target_db.pool()).await?;
+        let settle_db = self.pg.create_test_database().await;
+        let target_catalog = settle(
+            settle_db.pool(),
+            &Catalog::load_unfiltered(target_db.pool()).await?,
+            async |pool| Catalog::load_unfiltered(pool).await,
+        )
+        .await?
+        .catalog;
 
         // Run migration pipeline
         let steps = self
@@ -132,6 +142,7 @@ impl MigrationTestHelper {
         // Cleanup test databases
         initial_db.cleanup().await;
         target_db.cleanup().await;
+        settle_db.cleanup().await;
         fresh_db.cleanup().await;
 
         Ok(steps)
