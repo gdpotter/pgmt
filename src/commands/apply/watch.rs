@@ -44,7 +44,11 @@ pub async fn cmd_apply_watch_impl(
 
     // Perform initial apply
     println!("\n🚀 Performing initial schema apply...");
-    perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await?;
+    let initial_apply =
+        perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await;
+    if let Err(e) = initial_apply {
+        println!("❌ Failed to apply schema: {:#}", e);
+    };
 
     // Set up file watching
     let schema_dir = root_dir.join(&config.directories.schema);
