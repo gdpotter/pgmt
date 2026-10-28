@@ -30,6 +30,8 @@ import {
 } from './theme/patterns';
 
 export default defineConfig({
+  presets: ['@pandacss/preset-base', '@pandacss/preset-panda'],
+
   // Whether to use css reset
   preflight: true,
 
@@ -55,7 +57,7 @@ export default defineConfig({
       comparisonItem: ['*'],
       comparisonHeader: ['*'],
       comparisonContent: ['*'],
-      tabs: ['*'],
+      tabsContainer: ['*'],
       tabsList: ['*'],
       tab: ['*'],
       tabPanel: ['*'],

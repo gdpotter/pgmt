@@ -1,5 +1,5 @@
 import { definePattern } from '@pandacss/dev';
-import type { SystemStyleObject } from '../styled-system/types';
+import type { SystemStyleObject } from '@pandacss/types';
 
 export const heroPattern = definePattern({
   description: 'A hero section pattern with consistent spacing and alignment',
