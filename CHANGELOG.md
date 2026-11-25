@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.6.6 - 2026-11-25
+
 ### Bug Fixes
 
 - `pgmt apply --watch` keeps watching when the initial apply fails, so a broken schema file no longer means restarting it by hand until the schema applies ([#24](https://github.com/gdpotter/pgmt/pull/24)). A failed apply now shows the Postgres error behind it ([#22](https://github.com/gdpotter/pgmt/pull/22)): watch mode logged only the outermost message, so a schema file that failed to apply showed a generic list of causes rather than the database error, and nothing at all when `RUST_LOG` filtered pgmt's logs. A save made while the initial apply runs is also no longer missed.
