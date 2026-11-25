@@ -83,7 +83,10 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
+          # Pin PGDATA so every image version uses the same tmpfs mount.
+          PGDATA: /pgmt-test-data
         options: >-
+          --tmpfs /pgmt-test-data:rw,size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
