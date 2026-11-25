@@ -1,9 +1,10 @@
 use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use sqlx::PgPool;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{error, info};
 
 use crate::catalog::Catalog;
@@ -69,90 +70,107 @@ pub async fn cmd_apply_watch_impl(
 
     watcher.watch(&schema_dir, RecursiveMode::Recursive)?;
 
-    let mut last_apply = Instant::now();
-
     loop {
-        // Check for shutdown signal
         if shutdown_signal.is_shutdown() {
             println!("🛑 Shutdown signal received, stopping watch mode...");
             break;
         }
 
-        match rx.recv_timeout(WATCH_POLL_TIMEOUT) {
-            Ok(event) => {
-                // Check shutdown again before processing events
-                if shutdown_signal.is_shutdown() {
-                    println!("🛑 Shutdown signal received, stopping watch mode...");
+        let first = match rx.recv_timeout(WATCH_POLL_TIMEOUT) {
+            Ok(event) => match get_changed_sql_file(&event) {
+                Some(path) => path.to_path_buf(),
+                None => continue,
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        let changed = collect_changes(first, &rx, WATCH_DEBOUNCE_DURATION);
+
+        if shutdown_signal.is_shutdown() {
+            println!("🛑 Shutdown signal received, stopping watch mode...");
+            break;
+        }
+
+        println!(
+            "\n🔄 Change detected: {}",
+            describe_changes(&changed, root_dir)
+        );
+
+        match perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone())
+            .await
+        {
+            Ok(outcome) => match outcome {
+                ApplyOutcome::NoChanges => {
+                    println!("✅ No schema changes needed");
+                }
+                ApplyOutcome::Applied => {
+                    // Concise output already printed by execute_plan
+                }
+                ApplyOutcome::Skipped => {
+                    println!("✅ Safe operations applied (destructive skipped)");
+                }
+                ApplyOutcome::DestructiveRequired => {
+                    println!("⚠️  Destructive operations require --force");
+                }
+                ApplyOutcome::Cancelled => {
+                    println!("❌ Operation cancelled");
+                }
+            },
+            Err(e) => {
+                if shutdown_signal.is_shutdown() || is_prompt_interrupt(&e) {
+                    println!("🛑 Operation interrupted, shutting down...");
                     break;
                 }
-
-                // Debounce rapid changes
-                if last_apply.elapsed() < WATCH_DEBOUNCE_DURATION {
-                    continue;
-                }
-
-                // Check if this is a relevant file change
-                if let Some(changed_file) = get_changed_sql_file(&event) {
-                    // Show which file triggered the change
-                    let file_display = changed_file
-                        .strip_prefix(root_dir)
-                        .unwrap_or(changed_file)
-                        .display();
-                    println!("\n🔄 Change detected: {}", file_display);
-
-                    match perform_single_apply(
-                        config,
-                        root_dir,
-                        &dev_pool,
-                        shadow,
-                        execution_mode.clone(),
-                    )
-                    .await
-                    {
-                        Ok(outcome) => {
-                            match outcome {
-                                ApplyOutcome::NoChanges => {
-                                    println!("✅ No schema changes needed");
-                                }
-                                ApplyOutcome::Applied => {
-                                    // Concise output already printed by execute_plan
-                                }
-                                ApplyOutcome::Skipped => {
-                                    println!("✅ Safe operations applied (destructive skipped)");
-                                }
-                                ApplyOutcome::DestructiveRequired => {
-                                    println!("⚠️  Destructive operations require --force");
-                                }
-                                ApplyOutcome::Cancelled => {
-                                    println!("❌ Operation cancelled");
-                                }
-                            }
-                            last_apply = Instant::now();
-                        }
-                        Err(e) => {
-                            if shutdown_signal.is_shutdown() || is_prompt_interrupt(&e) {
-                                println!("🛑 Operation interrupted, shutting down...");
-                                break;
-                            }
-                            println!("❌ Failed to apply schema: {:#}", e);
-                            println!("⚠️  Will retry on next file change");
-                        }
-                    }
-
-                    println!("\n👁️  Continuing to watch for changes...");
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Normal timeout, continue watching
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break;
+                println!("❌ Failed to apply schema: {:#}", e);
+                println!("⚠️  Will retry on next file change");
             }
         }
+
+        println!("\n👁️  Continuing to watch for changes...");
     }
 
     println!("👋 Watch mode stopped");
     Ok(ApplyOutcome::Cancelled)
+}
+
+/// Wait out a burst of changes, starting from `first`: keep receiving until
+/// no SQL file has changed for `quiet`, and return every file that did.
+/// Editors emit several events per save, so one save becomes one apply.
+/// Events that arrive after the burst stay queued, so a save made while an
+/// apply runs triggers the next apply rather than being lost.
+fn collect_changes(
+    first: PathBuf,
+    rx: &mpsc::Receiver<Event>,
+    quiet: Duration,
+) -> BTreeSet<PathBuf> {
+    let mut changed = BTreeSet::from([first]);
+    let mut deadline = Instant::now() + quiet;
+    // A timeout ends the burst; a closed channel ends it too, and the watch
+    // loop sees the disconnect on its next receive.
+    while let Ok(event) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        if let Some(path) = get_changed_sql_file(&event) {
+            changed.insert(path.to_path_buf());
+            deadline = Instant::now() + quiet;
+        }
+    }
+    changed
+}
+
+/// "schema/a.sql", or "schema/a.sql and 2 more" for a burst across files
+fn describe_changes(changed: &BTreeSet<PathBuf>, root_dir: &Path) -> String {
+    let first = changed
+        .first()
+        .map(|path| {
+            path.strip_prefix(root_dir)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        })
+        .unwrap_or_default();
+    match changed.len() {
+        0 | 1 => first,
+        n => format!("{first} and {} more", n - 1),
+    }
 }
 
 /// Whether `error` is the user pressing Ctrl+C at a prompt. The prompt fails
@@ -221,7 +239,9 @@ async fn perform_single_apply(
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use notify::event::ModifyKind;
     use std::io;
+    use std::thread;
 
     fn prompt_error(kind: io::ErrorKind) -> anyhow::Error {
         anyhow::Error::from(dialoguer::Error::IO(io::Error::new(kind, "read")))
@@ -245,5 +265,89 @@ mod tests {
         assert!(!is_prompt_interrupt(&anyhow!(
             "new row violates check constraint: status <> 'cancelled' (interrupted)"
         )));
+    }
+
+    fn save(path: &str) -> Event {
+        Event::new(EventKind::Modify(ModifyKind::Any)).add_path(PathBuf::from(path))
+    }
+
+    #[test]
+    fn a_burst_of_events_is_one_change_set() {
+        let (tx, rx) = mpsc::channel();
+        // An editor's save: several events for the same file, plus a non-SQL file
+        tx.send(save("/p/schema/a.sql")).unwrap();
+        tx.send(save("/p/schema/a.sql")).unwrap();
+        tx.send(save("/p/schema/a.sql.swp")).unwrap();
+        tx.send(save("/p/schema/b.sql")).unwrap();
+
+        let changed = collect_changes(
+            PathBuf::from("/p/schema/a.sql"),
+            &rx,
+            Duration::from_millis(50),
+        );
+
+        assert_eq!(
+            changed,
+            BTreeSet::from([
+                PathBuf::from("/p/schema/a.sql"),
+                PathBuf::from("/p/schema/b.sql")
+            ])
+        );
+    }
+
+    #[test]
+    fn a_change_inside_the_quiet_window_extends_it() {
+        let (tx, rx) = mpsc::channel();
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            tx.send(save("/p/schema/b.sql")).unwrap();
+        });
+
+        let changed = collect_changes(
+            PathBuf::from("/p/schema/a.sql"),
+            &rx,
+            Duration::from_millis(300),
+        );
+        sender.join().unwrap();
+
+        assert!(changed.contains(Path::new("/p/schema/b.sql")));
+    }
+
+    #[test]
+    fn a_change_after_the_quiet_window_stays_queued() {
+        let (tx, rx) = mpsc::channel();
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            tx.send(save("/p/schema/b.sql")).unwrap();
+        });
+
+        let changed = collect_changes(
+            PathBuf::from("/p/schema/a.sql"),
+            &rx,
+            Duration::from_millis(20),
+        );
+        sender.join().unwrap();
+
+        assert_eq!(changed, BTreeSet::from([PathBuf::from("/p/schema/a.sql")]));
+        // Not dropped: the watch loop receives it and applies again
+        let queued = rx.try_recv().unwrap();
+        assert_eq!(
+            get_changed_sql_file(&queued),
+            Some(Path::new("/p/schema/b.sql"))
+        );
+    }
+
+    #[test]
+    fn describes_a_burst_by_its_first_file() {
+        let root = Path::new("/p");
+        let one = BTreeSet::from([PathBuf::from("/p/schema/a.sql")]);
+        let three = BTreeSet::from([
+            PathBuf::from("/p/schema/c.sql"),
+            PathBuf::from("/p/schema/a.sql"),
+            PathBuf::from("/p/schema/b.sql"),
+        ]);
+
+        assert_eq!(describe_changes(&one, root), "schema/a.sql");
+        assert_eq!(describe_changes(&three, root), "schema/a.sql and 2 more");
     }
 }
