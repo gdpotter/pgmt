@@ -6,7 +6,7 @@
 
 set -e
 
-VERSION=${1:-18}
+VERSION=${1:-19}
 CONTAINER="pgmt-test-pg${VERSION}"
 
 # Check if container is running
@@ -25,7 +25,7 @@ if [ "$HEALTH" != "healthy" ]; then
 fi
 
 # Get the dynamically assigned port
-PORT=$(docker port ${CONTAINER} 5432/tcp | cut -d: -f2)
+PORT=$(docker port "${CONTAINER}" 5432/tcp | awk -F: 'NR == 1 { print $NF }')
 
 if [ -z "$PORT" ]; then
     echo "Error: Could not determine port for ${CONTAINER}" >&2

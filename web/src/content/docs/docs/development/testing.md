@@ -193,7 +193,7 @@ See the [contributing guide](contributing.md) for complete testing patterns.
 
 ## Test Database Configuration
 
-Tests use Docker containers for PostgreSQL versions 13, 14, 15, 16, 17, and 18. Run `./scripts/test-setup.sh` once to start all containers.
+Tests use Docker containers for PostgreSQL versions 13 through 19. Run `./scripts/test-setup.sh` once to start all containers and configure PostgreSQL 19 as the default test database in `.env`.
 
 **Test against a specific version:**
 

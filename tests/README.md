@@ -21,7 +21,7 @@ tests/
 ## Running Tests
 
 ```bash
-# One-time setup: Start PostgreSQL containers (versions 13-18)
+# One-time setup: Start PostgreSQL 13–19 and configure 19 as the default
 ./scripts/test-setup.sh
 
 # Run all tests

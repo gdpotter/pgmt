@@ -5,6 +5,8 @@
 
 set -e
 
+VERSIONS=(13 14 15 16 17 18 19)
+
 echo "🐘 Setting up pgmt test databases..."
 
 # Check if Docker is running
@@ -34,7 +36,7 @@ while true; do
     
     # Check if all containers are healthy
     ALL_HEALTHY=true
-    for VERSION in 13 14 15 16 17 18; do
+    for VERSION in "${VERSIONS[@]}"; do
         CONTAINER="pgmt-test-pg${VERSION}"
         HEALTH=$(docker inspect --format='{{.State.Health.Status}}' ${CONTAINER} 2>/dev/null || echo "unknown")
         if [ "$HEALTH" != "healthy" ]; then
@@ -51,9 +53,9 @@ while true; do
     sleep 2
 done
 
-# Set up default .env file with PostgreSQL 18
-echo "📝 Setting up .env file with PostgreSQL 18 as default..."
-DEFAULT_URL=$(./scripts/test-db-url.sh 18)
+# Set up the default test connection in .env
+echo "📝 Setting up .env file with PostgreSQL 19 as default..."
+DEFAULT_URL=$(./scripts/test-db-url.sh)
 
 # Preserve existing DATABASE_URL in .env if it exists and user wants to keep it
 if [ -f .env ] && grep -q "^DATABASE_URL=" .env; then
@@ -64,7 +66,7 @@ if [ -f .env ] && grep -q "^DATABASE_URL=" .env; then
         echo "✅ Test setup complete!"
         echo ""
         echo "Available PostgreSQL versions:"
-        for VERSION in 13 14 15 16 17 18; do
+        for VERSION in "${VERSIONS[@]}"; do
             URL=$(./scripts/test-db-url.sh ${VERSION})
             echo "  PostgreSQL ${VERSION}: ${URL}"
         done
@@ -85,15 +87,12 @@ fi
 echo "✅ Test setup complete!"
 echo ""
 echo "📚 Quick start:"
-echo "  cargo test                    # Uses PostgreSQL 18 (default)"
+echo "  cargo test                    # Uses PostgreSQL 19 (default)"
 echo ""
 echo "🔄 Test specific versions:"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 13) cargo test  # PostgreSQL 13"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 14) cargo test  # PostgreSQL 14"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 15) cargo test  # PostgreSQL 15"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 16) cargo test  # PostgreSQL 16"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 17) cargo test  # PostgreSQL 17"
-echo "  DATABASE_URL=\$(./scripts/test-db-url.sh 18) cargo test  # PostgreSQL 18"
+for VERSION in "${VERSIONS[@]}"; do
+    echo "  DATABASE_URL=\$(./scripts/test-db-url.sh ${VERSION}) cargo test  # PostgreSQL ${VERSION}"
+done
 echo ""
 echo "🧪 Test all versions:"
 echo "  ./scripts/test-all-versions.sh"

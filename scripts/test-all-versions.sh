@@ -5,7 +5,7 @@
 
 set -e
 
-VERSIONS=(13 14 15 16 17 18)
+VERSIONS=(13 14 15 16 17 18 19)
 FAILED_VERSIONS=()
 
 echo "🧪 Testing pgmt against all PostgreSQL versions..."

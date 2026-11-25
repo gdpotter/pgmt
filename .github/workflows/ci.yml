@@ -74,7 +74,7 @@ jobs:
       fail-fast: false
       matrix:
         pg_version:
-          [13-alpine, 14-alpine, 15-alpine, 16-alpine, 17-alpine, 18-alpine, 19beta2-alpine]
+          [13-alpine, 14-alpine, 15-alpine, 16-alpine, 17-alpine, 18-alpine, 19-alpine]
     
     services:
       postgres:
