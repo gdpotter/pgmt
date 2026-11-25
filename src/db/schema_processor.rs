@@ -84,17 +84,7 @@ impl SchemaProcessor {
         // Step 2: Load and order schema files
         info!("📁 Loading schema files from: {}", schema_dir.display());
         let loader = SchemaLoader::new(SchemaLoaderConfig::new(schema_dir.to_path_buf()));
-        let schema_files = loader.load_ordered_schema_files().with_context(|| {
-            format!(
-                "Failed to load and order schema files from directory: {}\n\n\
-                    Common causes:\n\
-                    • Schema directory doesn't exist or is empty\n\
-                    • Circular dependencies between files (A requires B, B requires A)\n\
-                    • Missing dependency files referenced in '-- require:' headers\n\
-                    • Invalid file paths in dependency declarations",
-                schema_dir.display()
-            )
-        })?;
+        let schema_files = loader.load_ordered_schema_files()?;
 
         info!(
             "📁 Loaded {} schema files with dependency information",

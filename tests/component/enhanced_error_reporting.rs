@@ -49,6 +49,72 @@ async fn test_schema_executor_reports_specific_file_on_error() -> Result<()> {
             error_str.contains("🐘 Database Error:"),
             "Error should include PostgreSQL error details"
         );
+        assert!(
+            error_str.contains("`-- require:`"),
+            "An undefined object should point at the require header"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_syntax_error_has_no_suggestion() -> Result<()> {
+    with_test_db(async |db| {
+        let temp_dir = TempDir::new()?;
+        fs::write(
+            temp_dir.path().join("view.sql"),
+            "CREATE VIEW feed AS SELEC 1;",
+        )?;
+
+        use pgmt::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+        let processor_config = SchemaProcessorConfig {
+            clean_before_apply: false,
+            ..Default::default()
+        };
+        let processor = SchemaProcessor::new(db.pool().clone(), processor_config);
+        let error = processor
+            .process_schema_directory(temp_dir.path())
+            .await
+            .unwrap_err();
+        let error_str = format!("{:#}", error);
+
+        assert!(error_str.contains("syntax error at or near \"SELEC\""));
+        assert!(
+            !error_str.contains("💡"),
+            "Postgres already explains a syntax error: {error_str}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn test_loader_errors_are_not_wrapped() -> Result<()> {
+    with_test_db(async |db| {
+        let temp_dir = TempDir::new()?;
+        fs::write(
+            temp_dir.path().join("view.sql"),
+            "-- require: missing.sql\nCREATE VIEW feed AS SELECT 1;",
+        )?;
+
+        use pgmt::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+        let processor_config = SchemaProcessorConfig {
+            clean_before_apply: false,
+            ..Default::default()
+        };
+        let processor = SchemaProcessor::new(db.pool().clone(), processor_config);
+        let error = processor
+            .process_schema_directory(temp_dir.path())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", error),
+            "Missing dependency 'missing.sql' required by 'view.sql'"
+        );
 
         Ok(())
     })
@@ -177,7 +243,6 @@ fn test_error_display_formatting() {
         pg_hint: None,
         pg_context: None,
         suggestion: Some("Check for typos in data type names".to_string()),
-        troubleshooting_tips: vec![],
         dependencies_info: None,
     };
 

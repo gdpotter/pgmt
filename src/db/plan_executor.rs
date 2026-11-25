@@ -11,7 +11,7 @@
 use anyhow::{Result, anyhow};
 use sqlx::{PgConnection, PgPool};
 
-use crate::db::schema_executor::{ErrorLevel, SourceContextStyle, SqlExecutionError};
+use crate::db::schema_executor::{SourceContextStyle, SqlExecutionError};
 use crate::diff::operations::SqlRenderer;
 use crate::migration::section_parser::TransactionMode;
 use crate::modules::StepSection;
@@ -159,7 +159,7 @@ async fn locate_failure(
 
 fn statement_error(error: &sqlx::Error, sql: &str, number: usize) -> anyhow::Error {
     let error = SqlExecutionError::from_sqlx_error(error, sql, &format!("step {number}"));
-    anyhow!(error.format_error(&ErrorLevel::Enhanced, &SourceContextStyle::Step, 250))
+    anyhow!(error.format_error(&SourceContextStyle::Step, 250))
 }
 
 #[cfg(test)]

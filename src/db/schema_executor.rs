@@ -13,8 +13,6 @@ pub struct SqlContentExecutor {
 /// Configuration for SQL content execution behavior
 #[derive(Debug, Clone)]
 pub struct SqlExecutorConfig {
-    /// Level of error formatting detail
-    pub error_level: ErrorLevel,
     /// Characters to show before truncating content in error messages
     pub content_truncation: usize,
     /// Type of source context for error messages
@@ -22,12 +20,6 @@ pub struct SqlExecutorConfig {
     /// Whether to continue on certain types of errors (reserved for future implementation)
     #[allow(dead_code)]
     pub continue_on_error: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ErrorLevel {
-    Enhanced, // Include line numbers, better formatting
-    WithTips, // Include troubleshooting tips and suggestions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +33,6 @@ pub enum SourceContextStyle {
 impl Default for SqlExecutorConfig {
     fn default() -> Self {
         Self {
-            error_level: ErrorLevel::Enhanced,
             content_truncation: 300,
             source_context: SourceContextStyle::File,
             continue_on_error: false,
@@ -60,7 +51,6 @@ pub struct SqlExecutionError {
     pub pg_hint: Option<String>,
     pub pg_context: Option<String>,
     pub suggestion: Option<String>,
-    pub troubleshooting_tips: Vec<String>,
     pub dependencies_info: Option<String>,
 }
 
@@ -76,18 +66,12 @@ impl SqlExecutionError {
             pg_detail: ctx.detail,
             pg_hint: ctx.hint,
             pg_context: ctx.context,
-            suggestion: SqlContentExecutor::generate_suggestion(error),
-            troubleshooting_tips: SqlContentExecutor::generate_troubleshooting_tips(error),
+            suggestion: None,
             dependencies_info: None,
         }
     }
 
-    pub fn format_error(
-        &self,
-        error_level: &ErrorLevel,
-        context_style: &SourceContextStyle,
-        truncate_at: usize,
-    ) -> String {
+    pub fn format_error(&self, context_style: &SourceContextStyle, truncate_at: usize) -> String {
         let mut error_msg = String::new();
 
         // Format header based on context style
@@ -110,10 +94,7 @@ impl SqlExecutionError {
         error_msg.push_str("\n\n🐘 Database Error:\n");
         error_msg.push_str(&self.postgres_error);
 
-        // Add line number for enhanced error level
-        if matches!(error_level, ErrorLevel::Enhanced | ErrorLevel::WithTips)
-            && let Some(line_num) = self.line_number
-        {
+        if let Some(line_num) = self.line_number {
             error_msg.push_str(&format!(" (Line {})", line_num));
         }
 
@@ -145,21 +126,10 @@ impl SqlExecutionError {
             }
         };
 
-        error_msg.push_str(&format!("\n\n📄 Content:\n{}", content_preview));
+        error_msg.push_str(&format!("\n\n📄 Content:\n{}", content_preview.trim_end()));
 
-        // Add troubleshooting tips for WithTips error level
-        if matches!(error_level, ErrorLevel::WithTips) && !self.troubleshooting_tips.is_empty() {
-            error_msg.push_str("\n\nTroubleshooting tips:\n");
-            for tip in &self.troubleshooting_tips {
-                error_msg.push_str(&format!("• {}\n", tip));
-            }
-        }
-
-        // Add basic suggestion for enhanced levels
-        if matches!(error_level, ErrorLevel::Enhanced | ErrorLevel::WithTips)
-            && let Some(suggestion) = &self.suggestion
-        {
-            error_msg.push_str(&format!("\n💡 Suggestion: {}", suggestion));
+        if let Some(suggestion) = &self.suggestion {
+            error_msg.push_str(&format!("\n\n💡 Suggestion: {}", suggestion));
         }
 
         error_msg
@@ -228,11 +198,7 @@ impl SqlExecutionError {
 impl std::fmt::Display for SqlExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Default to enhanced formatting with reasonable truncation
-        write!(
-            f,
-            "{}",
-            self.format_error(&ErrorLevel::Enhanced, &SourceContextStyle::File, 500)
-        )
+        write!(f, "{}", self.format_error(&SourceContextStyle::File, 500))
     }
 }
 
@@ -264,15 +230,13 @@ impl SqlContentExecutor {
             Ok(_) => Ok(()),
             Err(sqlx_error) => {
                 let error_info = SqlExecutionError {
+                    suggestion: Self::schema_file_suggestion(&sqlx_error),
                     dependencies_info: deps_info,
                     ..SqlExecutionError::from_sqlx_error(&sqlx_error, content, source)
                 };
 
-                let formatted_error = error_info.format_error(
-                    &self.config.error_level,
-                    &self.config.source_context,
-                    self.config.content_truncation,
-                );
+                let formatted_error = error_info
+                    .format_error(&self.config.source_context, self.config.content_truncation);
                 Err(anyhow!(formatted_error))
             }
         }
@@ -291,101 +255,28 @@ impl SqlContentExecutor {
     }
 }
 
-// Static helper methods for error analysis
 impl SqlContentExecutor {
-    /// Generate helpful suggestions based on common error patterns
-    fn generate_suggestion(error: &sqlx::Error) -> Option<String> {
-        let error_str = error.to_string().to_lowercase();
-
-        if error_str.contains("type") && error_str.contains("does not exist") {
-            Some("Check for typos in data type names. Common types: TEXT, INTEGER, BOOLEAN, TIMESTAMP".to_string())
-        } else if error_str.contains("syntax error") && error_str.contains("check") {
-            Some(
-                "Syntax error near CHECK. Verify CHECK constraint syntax and parentheses."
+    /// A pgmt-specific next step for a schema file error, where one exists.
+    /// Anything Postgres already explains (syntax, permissions, type
+    /// mismatches) gets nothing, so the database error stays the focus.
+    fn schema_file_suggestion(error: &sqlx::Error) -> Option<String> {
+        let code = error.as_database_error()?.code()?;
+        match code.as_ref() {
+            // undefined_table, undefined_object, undefined_function, invalid_schema_name
+            "42P01" | "42704" | "42883" | "3F000" => Some(
+                "If this is defined in another schema file, add a `-- require:` header \
+                 for that file so it's applied first."
                     .to_string(),
-            )
-        } else if error_str.contains("column") && error_str.contains("does not exist") {
-            Some(
-                "Verify column names and ensure tables are created before referencing them."
+            ),
+            // duplicate_table, duplicate_object, duplicate_function, duplicate_schema
+            "42P07" | "42710" | "42723" | "42P06" => Some(
+                "The shadow database is rebuilt from your schema files on every run, so \
+                 something earlier in this run already created it -- usually a duplicate \
+                 definition in another schema file."
                     .to_string(),
-            )
-        } else if error_str.contains("relation") && error_str.contains("does not exist") {
-            Some("Table/view does not exist. Check dependency order and table names.".to_string())
-        } else if error_str.contains("syntax error at or near") {
-            if let Some(near_word) = Self::extract_near_word(&error_str) {
-                Some(format!(
-                    "Syntax error near '{}'. Check SQL syntax and keywords.",
-                    near_word
-                ))
-            } else {
-                Some("SQL syntax error. Verify SQL syntax and keywords.".to_string())
-            }
-        } else {
-            None
+            ),
+            _ => None,
         }
-    }
-
-    /// Generate contextual troubleshooting tips based on error patterns
-    fn generate_troubleshooting_tips(error: &sqlx::Error) -> Vec<String> {
-        let error_str = error.to_string();
-        let mut tips = Vec::new();
-
-        if error_str.contains("cannot insert multiple commands into a prepared statement") {
-            tips.push(
-                "Multiple SQL commands detected. This should be handled automatically.".to_string(),
-            );
-            tips.push(
-                "Ensure each SQL statement ends with a semicolon and is separated by newlines."
-                    .to_string(),
-            );
-        }
-
-        if error_str.contains("already exists") {
-            tips.push(
-                "This object already exists. Check if this file is being applied multiple times."
-                    .to_string(),
-            );
-            tips.push(
-                "Consider if there are duplicate definitions or manual changes to the database."
-                    .to_string(),
-            );
-        }
-
-        if error_str.contains("does not exist") {
-            tips.push(
-                "A referenced object doesn't exist. Check if dependencies are properly specified."
-                    .to_string(),
-            );
-            tips.push("Verify that dependent files are listed in the correct order.".to_string());
-            tips.push("Check if `-- require:` headers are present and correct.".to_string());
-        }
-
-        if error_str.contains("syntax error") || error_str.contains("parse error") {
-            tips.push(
-                "There's a SQL syntax error. Check the SQL syntax in this content.".to_string(),
-            );
-            tips.push("Look for missing semicolons, unmatched parentheses, or typos.".to_string());
-        }
-
-        if error_str.contains("permission denied") {
-            tips.push(
-                "Permission denied. Check database user permissions for this operation."
-                    .to_string(),
-            );
-        }
-
-        tips
-    }
-
-    /// Extract the word mentioned in "syntax error at or near" messages
-    fn extract_near_word(error_str: &str) -> Option<String> {
-        if let Some(start) = error_str.find("at or near \"") {
-            let start = start + 12; // Length of "at or near \""
-            if let Some(end) = error_str[start..].find('"') {
-                return Some(error_str[start..start + end].to_string());
-            }
-        }
-        None
     }
 }
 
@@ -397,7 +288,6 @@ pub struct SchemaFileExecutor {
 impl SchemaFileExecutor {
     pub fn new(pool: PgPool) -> Self {
         let config = SqlExecutorConfig {
-            error_level: ErrorLevel::WithTips,
             content_truncation: 400,
             source_context: SourceContextStyle::File,
             continue_on_error: false,
@@ -429,7 +319,6 @@ mod tests {
             pg_hint: Some("Check spelling of type name".to_string()),
             pg_context: None,
             suggestion: Some("Check for typos in data type names".to_string()),
-            troubleshooting_tips: vec![],
             dependencies_info: None,
         };
 
@@ -451,7 +340,6 @@ mod tests {
             pg_hint: None,
             pg_context: Some("PL/pgSQL function test() line 1 at SQL statement".to_string()),
             suggestion: None,
-            troubleshooting_tips: vec![],
             dependencies_info: None,
         };
 

@@ -229,21 +229,7 @@ async fn apply_schema_files_to_shadow(
         objects: config.objects.clone(),
     };
     let processor = SchemaProcessor::new(shadow_pool.clone(), processor_config);
-    let processed_schema = processor
-        .process_schema_directory(&schema_dir)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to process schema files from directory: {}\n\n\
-                Common causes:\n\
-                • Schema directory doesn't exist or is empty\n\
-                • Circular dependencies between files (A requires B, B requires A)\n\
-                • Missing dependency files referenced in '-- require:' headers\n\
-                • Invalid file paths in dependency declarations\n\
-                • SQL syntax errors in schema files",
-                schema_dir.display()
-            )
-        })?;
+    let processed_schema = processor.process_schema_directory(&schema_dir).await?;
 
     let augmentation = config
         .schema
