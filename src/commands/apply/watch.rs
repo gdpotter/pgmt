@@ -130,10 +130,7 @@ pub async fn cmd_apply_watch_impl(
                             last_apply = Instant::now();
                         }
                         Err(e) => {
-                            // Check if error is due to shutdown
-                            if e.to_string().contains("interrupted")
-                                || e.to_string().contains("cancelled")
-                            {
+                            if shutdown_signal.is_shutdown() || is_prompt_interrupt(&e) {
                                 println!("🛑 Operation interrupted, shutting down...");
                                 break;
                             }
@@ -156,6 +153,18 @@ pub async fn cmd_apply_watch_impl(
 
     println!("👋 Watch mode stopped");
     Ok(ApplyOutcome::Cancelled)
+}
+
+/// Whether `error` is the user pressing Ctrl+C at a prompt. The prompt fails
+/// with an interrupted read and raises SIGINT, but the shutdown flag that
+/// SIGINT sets may not be set yet when the error arrives.
+fn is_prompt_interrupt(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<dialoguer::Error>(),
+            Some(dialoguer::Error::IO(io)) if io.kind() == std::io::ErrorKind::Interrupted
+        )
+    })
 }
 
 /// Get the first changed SQL file from an event, if any
@@ -206,4 +215,35 @@ async fn perform_single_apply(
     );
 
     execution::execute_plan(&sections, dev_pool, execution_mode, &new, config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+    use std::io;
+
+    fn prompt_error(kind: io::ErrorKind) -> anyhow::Error {
+        anyhow::Error::from(dialoguer::Error::IO(io::Error::new(kind, "read")))
+    }
+
+    #[test]
+    fn ctrl_c_at_a_prompt_is_an_interrupt() {
+        assert!(is_prompt_interrupt(&prompt_error(
+            io::ErrorKind::Interrupted
+        )));
+        assert!(is_prompt_interrupt(
+            &prompt_error(io::ErrorKind::Interrupted).context("Failed to review steps")
+        ));
+    }
+
+    #[test]
+    fn other_errors_are_not_interrupts() {
+        assert!(!is_prompt_interrupt(&prompt_error(
+            io::ErrorKind::UnexpectedEof
+        )));
+        assert!(!is_prompt_interrupt(&anyhow!(
+            "new row violates check constraint: status <> 'cancelled' (interrupted)"
+        )));
+    }
 }
