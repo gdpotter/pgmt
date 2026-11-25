@@ -293,8 +293,15 @@ pub async fn cmd_migrate_validate(
     if !validation_options.quiet {
         eprintln!("🔍 Loading desired state from current schema files...");
     }
-    let desired_catalog =
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow).await?;
+    let comparison = crate::schema_ops::desired_and_target(
+        config,
+        root_dir,
+        shadow,
+        std::future::ready(Ok(expected_catalog)),
+    )
+    .await?;
+    let expected_catalog = comparison.target;
+    let desired_catalog = comparison.desired.catalog;
 
     // Step 3: Compare expected state (baseline + migrations) vs desired state (schema files)
     if !validation_options.quiet {

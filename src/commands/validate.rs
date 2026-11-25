@@ -1,6 +1,7 @@
 use crate::catalog::Catalog;
 use crate::config::Config;
-use crate::validation::{ValidationConfig, validate_database_against_schema_files};
+use crate::schema_ops::desired_and_target;
+use crate::validation::{ValidationConfig, validate_catalogs};
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
@@ -17,18 +18,23 @@ pub async fn cmd_validate(
 
     println!("📊 Loading current database schema...");
     let filter = crate::config::filter::ObjectFilter::from_config(config);
-    let db_catalog = Catalog::load_managed(&dev_pool, &filter).await?;
-
     let validation_config = ValidationConfig::default();
 
-    let result = validate_database_against_schema_files(
-        &db_catalog,
+    println!("🔍 Validating database against schema files...");
+    let comparison = desired_and_target(
         config,
         root_dir,
-        &validation_config,
         shadow,
+        Catalog::load_managed(&dev_pool, &filter),
     )
     .await?;
+
+    let result = validate_catalogs(
+        &comparison.target,
+        &comparison.desired.catalog,
+        config,
+        &validation_config,
+    )?;
 
     if result.passed {
         println!("✅ {}", result.message);

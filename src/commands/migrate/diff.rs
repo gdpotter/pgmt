@@ -9,7 +9,7 @@ use crate::catalog::Catalog;
 use crate::commands::diff_output::{DiffContext, DiffFormat, has_differences, output_diff};
 use crate::config::{Config, ObjectFilter};
 use crate::diff::plan;
-use crate::schema_ops::apply_current_schema_to_shadow;
+use crate::schema_ops::desired_and_target;
 use anyhow::Result;
 use std::path::Path;
 
@@ -50,15 +50,14 @@ pub async fn cmd_migrate_diff(
     // at the same time.
     eprintln!("Loading schema files and target database...");
     let filter = ObjectFilter::from_config(config);
-    let (schema_catalog, target_catalog) = tokio::try_join!(
-        apply_current_schema_to_shadow(config, root_dir, shadow),
-        async {
-            let target_pool =
-                crate::db::connection::connect_to_database(target.as_str(), "target database")
-                    .await?;
-            Catalog::load_managed(&target_pool, &filter).await
-        },
-    )?;
+    let comparison = desired_and_target(config, root_dir, shadow, async {
+        let target_pool =
+            crate::db::connection::connect_to_database(target.as_str(), "target database").await?;
+        Catalog::load_managed(&target_pool, &filter).await
+    })
+    .await?;
+    let schema_catalog = comparison.desired.catalog;
+    let target_catalog = comparison.target;
 
     // Compute differences (target -> schema, so SQL shows how to fix target)
     eprintln!("Computing differences...\n");

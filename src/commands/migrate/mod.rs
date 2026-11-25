@@ -1,5 +1,4 @@
 pub mod apply;
-pub mod common;
 pub mod diff;
 pub mod new;
 pub mod pipeline;

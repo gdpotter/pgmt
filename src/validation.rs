@@ -2,10 +2,8 @@ use crate::catalog::Catalog;
 use crate::config::{ColumnOrderMode, Config};
 use crate::diff::operations::{MigrationStep, SqlRenderer};
 use crate::diff::plan;
-use crate::schema_ops::apply_current_schema_to_shadow;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::path::Path;
 
 /// Validation configuration
 #[derive(Debug, Clone)]
@@ -34,23 +32,6 @@ pub struct ValidationResult {
     pub differences: Vec<MigrationStep>,
     /// Summary message
     pub message: String,
-}
-
-/// Validate that a database matches the expected schema from files
-pub async fn validate_database_against_schema_files(
-    dev_catalog: &Catalog,
-    config: &Config,
-    root_dir: &Path,
-    validation_config: &ValidationConfig,
-    shadow: &crate::config::ShadowDatabase,
-) -> Result<ValidationResult> {
-    if validation_config.verbose {
-        println!("🔍 Validating database against schema files...");
-    }
-
-    let expected_catalog = apply_current_schema_to_shadow(config, root_dir, shadow).await?;
-
-    validate_catalogs(dev_catalog, &expected_catalog, config, validation_config)
 }
 
 /// Compare two catalogs and return validation result.

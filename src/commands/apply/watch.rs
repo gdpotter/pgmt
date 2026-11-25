@@ -249,10 +249,15 @@ async fn perform_single_apply(
     // (branch cleans are no-ops) and leak a branch per file-save.
     // The dev catalog loads while the schema files are applied.
     let filter = ObjectFilter::from_config(config);
-    let (new, old) = tokio::try_join!(
-        crate::schema_ops::apply_current_schema_to_shadow(config, root_dir, shadow),
+    let comparison = crate::schema_ops::desired_and_target(
+        config,
+        root_dir,
+        shadow,
         Catalog::load_managed(dev_pool, &filter),
-    )?;
+    )
+    .await?;
+    let new = comparison.desired.catalog;
+    let old = comparison.target;
 
     let sections = sectionize_unmoduled(&old, &new)?;
     let step_count: usize = sections.iter().map(|s| s.steps.len()).sum();

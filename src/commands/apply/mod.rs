@@ -43,7 +43,7 @@ use crate::catalog::Catalog;
 use crate::config::{Config, DevUrl, ObjectFilter, ShadowDatabase};
 use crate::db::plan_executor::render_sections;
 use crate::modules::sectionize_unmoduled;
-use crate::schema_ops::apply_current_schema_to_shadow;
+use crate::schema_ops::desired_and_target;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
@@ -71,14 +71,14 @@ pub async fn cmd_apply(
     // schema files are applied.
     info!("Processing schema to shadow database and analyzing the dev database...");
     let filter = ObjectFilter::from_config(config);
-    let (new, old) = tokio::try_join!(
-        apply_current_schema_to_shadow(config, root_dir, shadow),
-        async {
-            Catalog::load_managed(&dev_pool, &filter)
-                .await
-                .context("Failed to load catalog from development database")
-        },
-    )?;
+    let comparison = desired_and_target(config, root_dir, shadow, async {
+        Catalog::load_managed(&dev_pool, &filter)
+            .await
+            .context("Failed to load catalog from development database")
+    })
+    .await?;
+    let new = comparison.desired.catalog;
+    let old = comparison.target;
 
     info!("Computing schema differences...");
     let sections = sectionize_unmoduled(&old, &new)?;
@@ -116,10 +116,15 @@ pub async fn cmd_apply(
                 info!(
                     "Re-processing schema to shadow database and re-analyzing the dev database..."
                 );
-                let (new_filtered, old_filtered) = tokio::try_join!(
-                    apply_current_schema_to_shadow(config, root_dir, shadow),
+                let comparison = desired_and_target(
+                    config,
+                    root_dir,
+                    shadow,
                     Catalog::load_managed(&dev_pool, &filter),
-                )?;
+                )
+                .await?;
+                let new_filtered = comparison.desired.catalog;
+                let old_filtered = comparison.target;
 
                 info!("Re-computing schema differences...");
                 let new_sections = sectionize_unmoduled(&old_filtered, &new_filtered)?;

@@ -247,14 +247,34 @@ async fn apply_schema_files_to_shadow(
     ))
 }
 
-/// The desired-state catalog alone, for commands that need neither the base
-/// nor the file mapping. See [`build_desired_state`].
-pub async fn apply_current_schema_to_shadow(
+/// The two sides of a comparison against the schema files.
+pub struct Comparison {
+    /// What the schema files describe. See [`build_desired_state`].
+    pub desired: DesiredState,
+    /// The state being compared with it: a live database, or the replay of
+    /// baseline + migrations.
+    pub target: Catalog,
+}
+
+/// Build the desired state and load the target it is compared with.
+///
+/// This is THE comparison source. Every command that diffs some state against
+/// the schema files — apply, diff, validate, migrate new/update/validate/diff
+/// — gets both sides here, so a rule about how the two are made comparable
+/// applies to all of them.
+///
+/// `load_target` runs concurrently with the shadow work. A loader that itself
+/// needs a fresh shadow (the migration replay) is awaited by its caller first
+/// and passed in ready.
+pub async fn desired_and_target(
     config: &Config,
     root_dir: &Path,
     shadow: &crate::config::ShadowDatabase,
-) -> Result<Catalog> {
-    Ok(build_desired_state(config, root_dir, shadow).await?.catalog)
+    load_target: impl Future<Output = Result<Catalog>>,
+) -> Result<Comparison> {
+    let (desired, target) =
+        tokio::try_join!(build_desired_state(config, root_dir, shadow), load_target)?;
+    Ok(Comparison { desired, target })
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

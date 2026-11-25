@@ -157,11 +157,19 @@ pub async fn generate(
         .await?;
 
     debug!("Applying current schema to shadow database");
+    let comparison = crate::schema_ops::desired_and_target(
+        config,
+        root_dir,
+        shadow,
+        std::future::ready(Ok(old_catalog)),
+    )
+    .await?;
+    let old_catalog = comparison.target;
     let crate::schema_ops::DesiredState {
         base: shadow_base,
         catalog: new_catalog,
         mapping: file_mapping,
-    } = crate::schema_ops::build_desired_state(config, root_dir, shadow).await?;
+    } = comparison.desired;
 
     crate::validation::apply_column_order_validation(
         &old_catalog,
