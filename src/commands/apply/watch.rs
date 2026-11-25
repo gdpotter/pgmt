@@ -9,6 +9,7 @@ use tracing::{error, info};
 
 use crate::catalog::Catalog;
 use crate::config::{Config, ObjectFilter};
+use crate::db::schema_executor::RenderedSqlError;
 use crate::modules::sectionize_unmoduled;
 
 use super::ApplyOutcome;
@@ -43,18 +44,13 @@ pub async fn cmd_apply_watch_impl(
     let dev_pool =
         crate::db::connection::connect_to_database(dev.as_str(), "development database").await?;
 
-    // Perform initial apply
-    println!("\n🚀 Performing initial schema apply...");
-    let initial_apply =
-        perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await;
-    if let Err(e) = initial_apply {
-        println!("❌ Failed to apply schema: {:#}", e);
-    };
-
-    // Set up file watching
+    // Watch before the initial apply, so a save made while it runs is queued
+    // rather than missed.
     let schema_dir = root_dir.join(&config.directories.schema);
-    println!("\n👁️  Watching for changes in: {}", schema_dir.display());
-
+    // Event paths are absolute and resolved, so changed files are shown
+    // relative to the resolved project root. `root_dir` is empty when the
+    // config file is in the working directory.
+    let project_root = std::env::current_dir()?.join(root_dir).canonicalize()?;
     let (tx, rx) = mpsc::channel();
     let mut watcher: RecommendedWatcher = Watcher::new(
         move |result: notify::Result<Event>| match result {
@@ -67,8 +63,16 @@ pub async fn cmd_apply_watch_impl(
         },
         notify::Config::default(),
     )?;
-
     watcher.watch(&schema_dir, RecursiveMode::Recursive)?;
+    println!("\n👁️  Watching for changes in: {}", schema_dir.display());
+
+    println!("\n🚀 Performing initial schema apply...");
+    let initial =
+        perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await;
+    if !report_apply(initial, &shutdown_signal) {
+        println!("👋 Watch mode stopped");
+        return Ok(ApplyOutcome::Cancelled);
+    }
 
     loop {
         if shutdown_signal.is_shutdown() {
@@ -93,13 +97,27 @@ pub async fn cmd_apply_watch_impl(
 
         println!(
             "\n🔄 Change detected: {}",
-            describe_changes(&changed, root_dir)
+            describe_changes(&changed, &project_root)
         );
 
-        match perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone())
-            .await
-        {
-            Ok(outcome) => match outcome {
+        let result =
+            perform_single_apply(config, root_dir, &dev_pool, shadow, execution_mode.clone()).await;
+        if !report_apply(result, &shutdown_signal) {
+            break;
+        }
+    }
+
+    println!("👋 Watch mode stopped");
+    Ok(ApplyOutcome::Cancelled)
+}
+
+/// Print how an apply went. A failure ends with a one-line status, so the
+/// file, line and error stay on screen however long the full error runs.
+/// Returns false when the user interrupted the apply.
+fn report_apply(result: Result<ApplyOutcome>, shutdown_signal: &ShutdownSignal) -> bool {
+    match result {
+        Ok(outcome) => {
+            match outcome {
                 ApplyOutcome::NoChanges => {
                     println!("✅ No schema changes needed");
                 }
@@ -115,22 +133,39 @@ pub async fn cmd_apply_watch_impl(
                 ApplyOutcome::Cancelled => {
                     println!("❌ Operation cancelled");
                 }
-            },
-            Err(e) => {
-                if shutdown_signal.is_shutdown() || is_prompt_interrupt(&e) {
-                    println!("🛑 Operation interrupted, shutting down...");
-                    break;
-                }
-                println!("❌ Failed to apply schema: {:#}", e);
-                println!("⚠️  Will retry on next file change");
             }
+            true
         }
-
-        println!("\n👁️  Continuing to watch for changes...");
+        Err(e) if shutdown_signal.is_shutdown() || is_prompt_interrupt(&e) => {
+            println!("🛑 Operation interrupted, shutting down...");
+            false
+        }
+        Err(e) => {
+            let full = format!("{e:#}");
+            let status = status_line(&e);
+            if status != full {
+                println!("{full}\n");
+            }
+            println!("❌ {status}");
+            true
+        }
     }
+}
 
-    println!("👋 Watch mode stopped");
-    Ok(ApplyOutcome::Cancelled)
+/// An apply failure in one line: where a SQL error happened and what
+/// Postgres said, or the first line of any other error.
+fn status_line(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<RenderedSqlError>())
+        .map(RenderedSqlError::summary)
+        .unwrap_or_else(|| {
+            format!("{error:#}")
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
 }
 
 /// Wait out a burst of changes, starting from `first`: keep receiving until
@@ -238,6 +273,7 @@ async fn perform_single_apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::schema_executor::{SourceContextStyle, SqlExecutionError};
     use anyhow::anyhow;
     use notify::event::ModifyKind;
     use std::io;
@@ -349,5 +385,49 @@ mod tests {
 
         assert_eq!(describe_changes(&one, root), "schema/a.sql");
         assert_eq!(describe_changes(&three, root), "schema/a.sql and 2 more");
+    }
+
+    fn sql_error(source: &str, style: SourceContextStyle) -> anyhow::Error {
+        SqlExecutionError {
+            source_context: source.to_string(),
+            sql_content: "select null::text;".to_string(),
+            line_number: Some(5),
+            postgres_error: "UNION types jsonb and text cannot be matched".to_string(),
+            pg_detail: None,
+            pg_hint: None,
+            pg_context: None,
+            suggestion: None,
+            dependencies_info: None,
+        }
+        .into_rendered(style, 400)
+        .into()
+    }
+
+    #[test]
+    fn status_line_names_the_file_and_line() {
+        let error = sql_error("blog/index.sql", SourceContextStyle::File);
+        assert_eq!(
+            status_line(&error),
+            "blog/index.sql:5: UNION types jsonb and text cannot be matched"
+        );
+        assert_eq!(
+            status_line(&error.context("Failed to apply schema")),
+            "blog/index.sql:5: UNION types jsonb and text cannot be matched"
+        );
+    }
+
+    #[test]
+    fn status_line_leaves_out_a_line_within_a_step() {
+        let error = sql_error("step 3", SourceContextStyle::Step);
+        assert_eq!(
+            status_line(&error),
+            "step 3: UNION types jsonb and text cannot be matched"
+        );
+    }
+
+    #[test]
+    fn status_line_of_a_one_line_error_is_the_error() {
+        let error = anyhow!("Missing dependency 'nope.sql' required by 'blog/index.sql'");
+        assert_eq!(status_line(&error), format!("{error:#}"));
     }
 }

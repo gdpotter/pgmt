@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use sqlx::PgPool;
 
 use crate::db::error_context::SqlErrorContext;
@@ -204,6 +204,56 @@ impl std::fmt::Display for SqlExecutionError {
 
 impl std::error::Error for SqlExecutionError {}
 
+impl SqlExecutionError {
+    /// Render this error for the user, keeping its fields reachable through
+    /// the error chain for callers that summarize it.
+    pub fn into_rendered(
+        self,
+        context_style: SourceContextStyle,
+        truncate_at: usize,
+    ) -> RenderedSqlError {
+        RenderedSqlError {
+            rendered: self.format_error(&context_style, truncate_at),
+            context_style,
+            error: self,
+        }
+    }
+}
+
+/// A SQL failure as it is shown to the user
+#[derive(Debug)]
+pub struct RenderedSqlError {
+    pub error: SqlExecutionError,
+    context_style: SourceContextStyle,
+    rendered: String,
+}
+
+impl RenderedSqlError {
+    /// One line naming where it failed and why: `blog/index.sql:566: <error>`
+    /// for a schema file, `step 3: <error>` for a migration step, whose line
+    /// numbers are within the statement and would read like a file position.
+    pub fn summary(&self) -> String {
+        match (&self.context_style, self.error.line_number) {
+            (SourceContextStyle::File, Some(line)) => format!(
+                "{}:{}: {}",
+                self.error.source_context, line, self.error.postgres_error
+            ),
+            _ => format!(
+                "{}: {}",
+                self.error.source_context, self.error.postgres_error
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for RenderedSqlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.rendered)
+    }
+}
+
+impl std::error::Error for RenderedSqlError {}
+
 impl SqlContentExecutor {
     pub fn new(pool: PgPool, config: SqlExecutorConfig) -> Self {
         Self { pool, config }
@@ -235,9 +285,12 @@ impl SqlContentExecutor {
                     ..SqlExecutionError::from_sqlx_error(&sqlx_error, content, source)
                 };
 
-                let formatted_error = error_info
-                    .format_error(&self.config.source_context, self.config.content_truncation);
-                Err(anyhow!(formatted_error))
+                Err(error_info
+                    .into_rendered(
+                        self.config.source_context.clone(),
+                        self.config.content_truncation,
+                    )
+                    .into())
             }
         }
     }

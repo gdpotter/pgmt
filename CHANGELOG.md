@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- `pgmt apply --watch` keeps watching when the initial apply fails, so a broken schema file no longer means restarting it by hand until the schema applies ([#24](https://github.com/gdpotter/pgmt/pull/24)). A failed apply now shows the Postgres error behind it ([#22](https://github.com/gdpotter/pgmt/pull/22)): watch mode logged only the outermost message, so a schema file that failed to apply showed a generic list of causes rather than the database error, and nothing at all when `RUST_LOG` filtered pgmt's logs. A save made while the initial apply runs is also no longer missed.
 - `pgmt apply --watch` no longer loses a save made while an apply is running. Changes that arrived during an apply were ignored, leaving the dev database behind your schema files with nothing on screen to say so. Watch mode now waits until files stop changing for half a second, applies once, and applies again for anything saved in the meantime. A failed apply also no longer turns one save into several full applies, one per file event the editor emitted.
 - `pgmt apply --watch` no longer stops watching when an apply fails with an error that happens to contain "cancelled" or "interrupted", such as a statement comparing against a `'cancelled'` status value. Watch mode now stops only on Ctrl+C.
 - A schema file that fails to apply is no longer reported under a generic "Common causes" list and "Troubleshooting tips" ([#25](https://github.com/gdpotter/pgmt/issues/25)). The list was attached to every failure, so an error that named the exact file and line came with suggestions like "Schema directory doesn't exist" and "Circular dependencies", and the tips mostly repeated what Postgres had just said. The error now leads with the file, line, and Postgres message, and a missing `-- require:` file or a dependency cycle is reported in one line. An undefined object still points you at `-- require:` headers, and an object that already exists at a likely duplicate definition, since those say something Postgres can't.
@@ -20,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changing a column's default from one value to another now generates `ALTER COLUMN ... SET DEFAULT`. pgmt only noticed a default being added or removed, so `pgmt apply` and new migrations left a changed default at its old value.
 - Enum labels containing a single quote are now escaped in generated `CREATE TYPE` and `ALTER TYPE ... ADD VALUE` statements, which failed with a syntax error before.
 - The `schema.verbose_file_processing` setting is removed. It was documented as printing per-file progress while loading schema files, but it never did anything; `--verbose` already reports that progress. A `pgmt.yaml` that still sets it loads as before.
+
+### Features
+
+- `pgmt apply --watch` ends each failed apply with a one-line status naming the file, line, and Postgres error, such as `blog/index.sql:5: UNION types jsonb and text cannot be matched`, so the cause stays visible when the full error is taller than your terminal ([#25](https://github.com/gdpotter/pgmt/issues/25)). Changed files are now shown relative to the project instead of as absolute paths.
 
 ### Performance
 

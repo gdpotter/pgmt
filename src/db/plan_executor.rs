@@ -8,7 +8,7 @@
 //!
 //! [`sectionize_unmoduled`]: crate::modules::sectionize_unmoduled
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use sqlx::{PgConnection, PgPool};
 
 use crate::db::schema_executor::{SourceContextStyle, SqlExecutionError};
@@ -159,7 +159,7 @@ async fn locate_failure(
 
 fn statement_error(error: &sqlx::Error, sql: &str, number: usize) -> anyhow::Error {
     let error = SqlExecutionError::from_sqlx_error(error, sql, &format!("step {number}"));
-    anyhow!(error.format_error(&SourceContextStyle::Step, 250))
+    error.into_rendered(SourceContextStyle::Step, 250).into()
 }
 
 #[cfg(test)]
