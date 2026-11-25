@@ -76,7 +76,7 @@ impl MigrationTestHelper {
     /// 1. Setup initial and target databases with provided SQL
     /// 2. Load catalogs, settling the target as the CLI settles its desired state
     /// 3. Run migration pipeline
-    /// 4. Apply migration to fresh database, one transaction per section
+    /// 4. Apply migration to the initial database, one transaction per section
     /// 5. Verify final state matches target: re-planning yields nothing
     /// 6. Return migration steps for additional assertions
     pub async fn run_migration_test<F>(
@@ -111,7 +111,12 @@ impl MigrationTestHelper {
         // Load catalogs. The target is settled the way the CLI settles its
         // desired state, so the plan aims at what the server makes of pgmt's
         // rendering rather than at the source SQL.
-        let initial_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
+        // Catalog loading sets the session search_path. Keep the fixture pool
+        // unchanged for migration execution.
+        let catalog_pool = sqlx::PgPool::connect(&initial_db.url()).await?;
+        let initial_catalog = Catalog::load_unfiltered(&catalog_pool).await;
+        catalog_pool.close().await;
+        let initial_catalog = initial_catalog?;
         let settle_db = self.pg.create_test_database().await;
         let target_catalog = settle(
             settle_db.pool(),
@@ -128,21 +133,13 @@ impl MigrationTestHelper {
             .flat_map(|section| section.steps.iter().cloned())
             .collect();
 
-        // Apply migration to fresh database (starting from initial state)
-        let fresh_db = self.pg.create_test_database().await;
-        for sql in both_dbs_sql {
-            fresh_db.execute(sql).await;
-        }
-        for sql in initial_only_sql {
-            fresh_db.execute(sql).await;
-        }
         // Each section in one transaction, as `pgmt apply` and `migrate apply`
         // run it, so a statement that needs an earlier one committed fails
         // here as it would there.
-        execute_sections(fresh_db.pool(), &render_sections(&sections), |_| {}).await?;
+        execute_sections(initial_db.pool(), &render_sections(&sections), |_| {}).await?;
 
         // Verify final state
-        let final_catalog = Catalog::load_unfiltered(fresh_db.pool()).await?;
+        let final_catalog = Catalog::load_unfiltered(initial_db.pool()).await?;
         assert_converged(&final_catalog, &target_catalog)?;
         verification(&steps, &final_catalog)?;
 
@@ -150,7 +147,6 @@ impl MigrationTestHelper {
         initial_db.cleanup().await;
         target_db.cleanup().await;
         settle_db.cleanup().await;
-        fresh_db.cleanup().await;
 
         Ok(steps)
     }
