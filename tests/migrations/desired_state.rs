@@ -99,7 +99,7 @@ async fn test_settle_fails_when_the_plan_loses_an_object() -> Result<()> {
             .await;
 
             let error = format!("{:#}", result.err().expect("settle should fail"));
-            assert!(error.contains("does not reproduce them"), "{error}");
+            assert!(error.contains("does not reproduce the objects"), "{error}");
             assert!(error.contains("lost"), "{error}");
             Ok(())
         })

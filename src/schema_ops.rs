@@ -1,15 +1,18 @@
 use crate::catalog::Catalog;
 use crate::catalog::file_dependencies::{FileDependencyAugmentation, FileToObjectMapping};
+use crate::catalog::id::{DbObjectId, DependsOn};
 use crate::config::Config;
 use crate::config::filter::ObjectFilter;
 use crate::db::cleaner;
 use crate::db::error_context::SqlErrorContext;
 use crate::db::plan_executor::{execute_sections, render_sections};
 use crate::db::schema_processor::{SchemaProcessor, SchemaProcessorConfig};
+use crate::diff::grants::is_owner_grant;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use std::collections::HashSet;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Apply roles file to a database if it exists
 ///
@@ -72,6 +75,9 @@ pub struct DesiredState {
     pub catalog: Catalog,
     /// Which file produced which object, for module attribution.
     pub mapping: FileToObjectMapping,
+    /// The file-declared dependency edges laid over `catalog`, when
+    /// `schema.augment_dependencies_from_files` is on.
+    pub augmentation: Option<FileDependencyAugmentation>,
 }
 
 /// Build the desired state on the shadow database, as two pristine phases:
@@ -124,6 +130,7 @@ pub async fn build_desired_state(
         base: settled.base,
         catalog: with_augmentation(settled.catalog, augmentation.as_ref()),
         mapping,
+        augmentation,
     })
 }
 
@@ -137,7 +144,7 @@ fn with_augmentation(
     }
 }
 
-/// A desired state after [`settle`].
+/// A catalog after [`settle`].
 pub struct Settled {
     /// The pristine database the plan was applied to, as loaded before it.
     pub base: Catalog,
@@ -148,19 +155,23 @@ pub struct Settled {
 /// Apply pgmt's plan for `written` to `pool`, a pristine database, and load
 /// the result with `load` (which also loads the base the plan starts from).
 ///
-/// The result is what every target holds after pgmt migrates it to `written`,
-/// so it is the state to diff targets against. Settling must not change which
-/// objects exist, only how the server renders them: an object the plan drops
-/// or invents is a planner bug, and failing here keeps it from being absorbed
-/// silently into the desired state.
+/// The result is what every target holds after pgmt migrates it to `written`.
+/// Settling must not change which objects exist, only how the server renders
+/// them: an object the plan drops or invents is a planner bug, so settling
+/// fails rather than hand back a different set of objects.
+///
+/// Owner grants are left out of that check. The plan runs as the shadow's
+/// user and pgmt does not manage ownership, so the replay's owner grants name
+/// that user whoever owned `written`; the diff ignores owner grants for the
+/// same reason.
 pub async fn settle(
     pool: &PgPool,
     written: &Catalog,
     load: impl AsyncFn(&PgPool) -> Result<Catalog>,
 ) -> Result<Settled> {
-    const PLAN_FAILED: &str = "pgmt could not apply its own plan for the schema files to a \
-        fresh shadow database. This is likely a pgmt bug; please report it with the \
-        schema that triggers it.";
+    const PLAN_FAILED: &str = "pgmt could not apply its own plan to a fresh shadow \
+        database. This is likely a pgmt bug; please report it with the schema that \
+        triggers it.";
 
     let base = load(pool).await?;
 
@@ -171,24 +182,31 @@ pub async fn settle(
 
     let catalog = load(pool).await?;
 
-    let written_ids = written.object_ids();
-    let settled_ids = catalog.object_ids();
+    let written_ids = ids_without_owner_grants(written);
+    let settled_ids = ids_without_owner_grants(&catalog);
     if written_ids != settled_ids {
         let mut missing: Vec<_> = written_ids.difference(&settled_ids).collect();
         let mut extra: Vec<_> = settled_ids.difference(&written_ids).collect();
         missing.sort();
         extra.sort();
         anyhow::bail!(
-            "pgmt's own plan for the schema files does not reproduce them on a fresh \
-            shadow database. This is likely a pgmt bug; please report it with the \
-            schema that triggers it.\n\nMissing after the plan: {:?}\nNot in the \
-            schema files: {:?}",
+            "pgmt's own plan does not reproduce the objects it was made for on a fresh \
+            shadow database. This is likely a pgmt bug; please report it with the schema \
+            that triggers it.\n\nMissing after the plan: {:?}\nAdded by the plan: {:?}",
             missing,
             extra
         );
     }
 
     Ok(Settled { base, catalog })
+}
+
+fn ids_without_owner_grants(catalog: &Catalog) -> HashSet<DbObjectId> {
+    let mut ids = catalog.object_ids();
+    for grant in catalog.grants.iter().filter(|g| is_owner_grant(g)) {
+        ids.remove(&DependsOn::id(grant));
+    }
+    ids
 }
 
 /// Clean the shadow database and apply the roles file, leaving it ready for
@@ -266,6 +284,9 @@ pub struct Comparison {
 /// `load_target` runs concurrently with the shadow work. A loader that itself
 /// needs a fresh shadow (the migration replay) is awaited by its caller first
 /// and passed in ready.
+///
+/// The target that comes back is settled whenever it differs from the
+/// desired state; see [`settle_target`].
 pub async fn desired_and_target(
     config: &Config,
     root_dir: &Path,
@@ -274,7 +295,89 @@ pub async fn desired_and_target(
 ) -> Result<Comparison> {
     let (desired, target) =
         tokio::try_join!(build_desired_state(config, root_dir, shadow), load_target)?;
+    let target = settle_target(config, root_dir, shadow, target, &desired).await?;
     Ok(Comparison { desired, target })
+}
+
+/// The target as it compares with the settled desired state.
+///
+/// The desired state is in the form Postgres stores for pgmt's rendering. A
+/// target built from other SQL — hand-written migrations, or a database pgmt
+/// did not build — can hold the form Postgres stored for that SQL instead,
+/// and differ from the desired state only in how a definition renders: a
+/// varchar `IN (...)` list without the cast on each element, a later UNION arm
+/// without its column alias. Passing the target through the same rendering
+/// removes exactly those differences. The settled target has the target's
+/// objects, so a plan made from it applies to the target itself.
+///
+/// The replay is ordered by the same file-declared edges as the desired
+/// state's, where both ends exist in the target: a SQL function body is
+/// checked when it is created, and a call to another function is not a
+/// catalog dependency.
+///
+/// A target that already matches needs no settling. One the shadow cannot
+/// rebuild, such as a grant to a role the roles file does not create,
+/// compares as loaded.
+async fn settle_target(
+    config: &Config,
+    root_dir: &Path,
+    shadow: &crate::config::ShadowDatabase,
+    target: Catalog,
+    desired: &DesiredState,
+) -> Result<Catalog> {
+    if crate::diff::plan(&target, &desired.catalog)?.is_empty() {
+        return Ok(target);
+    }
+
+    let written = match &desired.augmentation {
+        Some(augmentation) => {
+            let present = target.object_ids();
+            let edges = FileDependencyAugmentation {
+                additional_dependencies: augmentation
+                    .additional_dependencies
+                    .iter()
+                    .filter(|(id, _)| Catalog::id_present_in(&present, id))
+                    .map(|(id, deps)| {
+                        let deps = deps
+                            .iter()
+                            .filter(|dep| Catalog::id_present_in(&present, dep))
+                            .cloned()
+                            .collect();
+                        (id.clone(), deps)
+                    })
+                    .collect(),
+            };
+            target.clone().with_file_dependencies_augmented(edges)
+        }
+        None => target.clone(),
+    };
+
+    info!("🔁 Replaying the target on a fresh shadow database to compare it...");
+    let filter = ObjectFilter::from_config(config);
+    let written = &written;
+    let settled = shadow
+        .with_fresh(|pool| async move {
+            clean_shadow_for_schema(config, root_dir, &pool).await?;
+            settle(&pool, written, async |pool| {
+                Catalog::load_managed(pool, &filter).await
+            })
+            .await
+        })
+        .await;
+
+    match settled {
+        Ok(settled) => Ok(settled.catalog),
+        Err(e) => {
+            warn!(
+                "Could not rebuild the target on a shadow database to compare it, so \
+                differences only in how Postgres renders a definition may be reported \
+                as changes: {}",
+                e.root_cause()
+            );
+            debug!("Settling the target failed: {e:#}");
+            Ok(target)
+        }
+    }
 }
 
 /// Validate that schema was applied correctly by checking basic connectivity and structure

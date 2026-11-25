@@ -169,6 +169,7 @@ pub async fn generate(
         base: shadow_base,
         catalog: new_catalog,
         mapping: file_mapping,
+        ..
     } = comparison.desired;
 
     crate::validation::apply_column_order_validation(

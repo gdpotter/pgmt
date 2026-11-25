@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes
+
+- `pgmt migrate validate` accepts migrations whose SQL was written by hand again, and `pgmt diff`, `pgmt apply`, `pgmt validate`, and `pgmt migrate diff` no longer report a change on a database built from hand-written SQL. Since 0.6.6 compares against what Postgres stores for pgmt's own generated SQL ([#21](https://github.com/gdpotter/pgmt/issues/21)), an object created from other SQL could differ only in how Postgres prints it, such as a `CHECK (status IN (...))` on a `varchar` column without a cast on each element, or a later `UNION` arm without a column alias. Those objects were reported as changed, and `pgmt migrate new` generated a migration to replace them, dropping and re-adding a CHECK constraint (which revalidates the table). When a database or the result of your migrations differs from your schema files, pgmt now also runs its generated SQL for that side on a fresh shadow database and compares the two results, so only real differences are reported. This costs another shadow database run when there are differences, and nothing when there are none.
+
 ## 0.6.6 - 2026-11-25
 
 ### Bug Fixes

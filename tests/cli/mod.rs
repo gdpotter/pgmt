@@ -49,5 +49,6 @@ pub mod modules_generation;
 pub mod nontransactional_sections;
 pub mod roles_file;
 pub mod section_checksums;
+pub mod settled_comparison;
 pub mod substrate;
 pub mod watermark_warning;
