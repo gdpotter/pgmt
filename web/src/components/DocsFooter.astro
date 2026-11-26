@@ -1,6 +1,7 @@
 ---
 import Default from '@astrojs/starlight/components/Footer.astro';
 import { links, externalLinkAttrs } from '../config/links';
+import NewsletterForm from './NewsletterForm.astro';
 ---
 
 <!-- Include Starlight's default footer (prev/next navigation, etc.) -->
@@ -18,6 +19,9 @@ import { links, externalLinkAttrs } from '../config/links';
       Report an Issue
     </a>
   </p>
+  <div class="custom-help-footer__newsletter">
+    <NewsletterForm variant="inline" />
+  </div>
 </div>
 
 <style>
@@ -32,6 +36,10 @@ import { links, externalLinkAttrs } from '../config/links';
   .custom-help-footer p {
     margin: 0;
     color: var(--sl-color-gray-2);
+  }
+
+  .custom-help-footer__newsletter {
+    margin-top: 1rem;
   }
 
   .custom-help-footer strong {

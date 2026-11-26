@@ -18,6 +18,12 @@ export const links = {
     issues: `${GITHUB_REPO}/issues`,
   },
 
+  // External - Newsletter (Buttondown)
+  newsletter: {
+    subscribe: 'https://buttondown.com/api/emails/embed-subscribe/pgmt',
+    archive: 'https://buttondown.com/pgmt',
+  },
+
   // Internal - Main pages
   home: '/',
   whyPgmt: '/why-pgmt',

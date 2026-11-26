@@ -1,0 +1,151 @@
+---
+import { links } from '../config/links';
+
+export interface Props {
+  /** `inline` is a single compact row for the docs footer. */
+  variant?: 'block' | 'inline';
+}
+
+const { variant = 'block' } = Astro.props;
+const inputId = `newsletter-email-${variant}`;
+---
+
+<form
+  action={links.newsletter.subscribe}
+  method="post"
+  target="_blank"
+  class:list={['newsletter', `newsletter--${variant}`]}
+>
+  {variant === 'block' ? (
+    <div class="newsletter__copy">
+      <p class="newsletter__title">Get pgmt release notes by email</p>
+      <p class="newsletter__subtitle">
+        A short digest every month or so: new features, breaking changes, and
+        what's next. No spam, unsubscribe anytime.
+      </p>
+    </div>
+  ) : (
+    <p class="newsletter__subtitle">
+      <strong>Release notes by email</strong>, every month or so.
+    </p>
+  )}
+  <div class="newsletter__row">
+    <label for={inputId} class="sr-only">
+      Email address
+    </label>
+    <input
+      type="email"
+      name="email"
+      id={inputId}
+      required
+      autocomplete="email"
+      placeholder="you@example.com"
+    />
+    <button type="submit">Subscribe</button>
+  </div>
+</form>
+
+<style>
+  .newsletter {
+    --nl-accent: var(--sl-color-accent, #4fc3f7);
+    --nl-text: var(--sl-color-white, #f5f5f5);
+    --nl-muted: var(--sl-color-gray-2, rgba(255, 255, 255, 0.65));
+    --nl-border: var(--sl-color-gray-5, rgba(255, 255, 255, 0.15));
+    --nl-bg: var(--sl-color-black, rgba(255, 255, 255, 0.04));
+  }
+
+  .newsletter--block {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem 2rem;
+  }
+
+  .newsletter--inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem 1rem;
+    margin: 0;
+  }
+
+  .newsletter__copy {
+    flex: 1 1 20rem;
+  }
+
+  .newsletter__title {
+    margin: 0 0 0.25rem;
+    font-weight: 600;
+    color: var(--nl-text);
+  }
+
+  .newsletter__subtitle {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--nl-muted);
+  }
+
+  .newsletter__subtitle strong {
+    color: var(--nl-text);
+  }
+
+  .newsletter__row {
+    display: flex;
+    gap: 0.5rem;
+    flex: 0 1 24rem;
+    min-width: 0;
+  }
+
+  .newsletter--inline .newsletter__row {
+    flex-basis: 20rem;
+  }
+
+  .newsletter input[type='email'] {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--nl-border);
+    border-radius: 0.375rem;
+    background: var(--nl-bg);
+    color: var(--nl-text);
+    font: inherit;
+    font-size: 0.875rem;
+  }
+
+  .newsletter input[type='email']:focus-visible,
+  .newsletter button:focus-visible {
+    outline: 2px solid var(--nl-accent);
+    outline-offset: 2px;
+  }
+
+  .newsletter button {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--nl-accent);
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--nl-accent);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+
+  .newsletter button:hover {
+    background: color-mix(in srgb, var(--nl-accent) 15%, transparent);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>

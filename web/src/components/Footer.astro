@@ -2,6 +2,7 @@
 import { css } from '../../styled-system/css';
 import { container, grid, vstack, hstack } from '../../styled-system/patterns';
 import { links, externalLinkAttrs } from '../config/links';
+import NewsletterForm from './NewsletterForm.astro';
 
 const footerClass = css({
   background:
@@ -92,6 +93,20 @@ const socialIconClass = css({
       </p>
     </div>
 
+    <!-- Newsletter -->
+    <div
+      class={css({
+        marginBottom: '2xl',
+        padding: 'lg',
+        borderRadius: 'lg',
+        border: '1px solid',
+        borderColor: 'rgba(79, 195, 247, 0.2)',
+        background: 'rgba(79, 195, 247, 0.04)',
+      })}
+    >
+      <NewsletterForm />
+    </div>
+
     <!-- Footer Links Grid -->
     <div
       class={grid({
@@ -114,6 +129,13 @@ const socialIconClass = css({
           class={footerLinkClass}
         >
           Releases
+        </a>
+        <a
+          href={links.newsletter.archive}
+          {...externalLinkAttrs}
+          class={footerLinkClass}
+        >
+          Newsletter
         </a>
       </div>
 
