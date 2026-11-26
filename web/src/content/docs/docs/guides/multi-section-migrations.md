@@ -12,20 +12,20 @@ Sections let you handle these in a single migration file instead of splitting ac
 **Without sections** - three files for one logical change:
 
 ```sql
--- V001__add_status_column.sql
+-- 1734567890_add_status_column.sql
 ALTER TABLE users ADD COLUMN status TEXT;
 
--- V002__create_status_index.sql (separate file for CONCURRENTLY)
+-- 1734567891_create_status_index.sql (separate file for CONCURRENTLY)
 CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 
--- V003__add_status_constraint.sql
+-- 1734567892_add_status_constraint.sql
 ALTER TABLE users ALTER COLUMN status SET NOT NULL;
 ```
 
 **With sections** - one file:
 
 ```sql
--- V001__add_user_status.sql
+-- 1734567890_add_user_status.sql
 
 -- pgmt:section name="add_column"
 ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';

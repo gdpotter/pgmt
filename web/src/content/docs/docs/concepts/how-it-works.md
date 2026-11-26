@@ -144,7 +144,7 @@ At the core of both `pgmt apply` and `pgmt migrate new` is the diff engine - the
 
 **Dependency ordering:**
 
-- Uses [dependency tracking](dependency-tracking) to ensure operations happen in the right order
+- Uses [dependency tracking](/docs/concepts/dependency-tracking) to ensure operations happen in the right order
 - CREATEs happen dependencies-first (schemas → tables → views)
 - DROPs happen dependents-first (views → tables → schemas)
 
@@ -152,6 +152,6 @@ At the core of both `pgmt apply` and `pgmt migrate new` is the diff engine - the
 
 **Related Concepts:**
 
-- [Philosophy](philosophy) - Why pgmt takes this approach
-- [Shadow Database](shadow-database) - Deep dive into shadow DB concept
-- [Dependency Tracking](dependency-tracking) - How pgmt orders operations
+- [Philosophy](/docs/concepts/philosophy) - Why pgmt takes this approach
+- [Shadow Database](/docs/concepts/shadow-database) - Deep dive into shadow DB concept
+- [Dependency Tracking](/docs/concepts/dependency-tracking) - How pgmt orders operations

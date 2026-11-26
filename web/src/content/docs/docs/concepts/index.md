@@ -7,10 +7,10 @@ pgmt takes a unique approach to PostgreSQL schema management: **declarative deve
 
 ## The Core Concepts
 
-1. **[Philosophy](philosophy)** - Why pgmt is built around a schema diffing engine
-2. **[How pgmt Works](how-it-works)** - The development workflow from local iteration to production deploy
-3. **[Shadow Database](shadow-database)** - How pgmt validates changes without touching your databases
-4. **[Dependency Tracking](dependency-tracking)** - How pgmt ensures operations happen in the right order
+1. **[Philosophy](/docs/concepts/philosophy)** - Why pgmt is built around a schema diffing engine
+2. **[How pgmt Works](/docs/concepts/how-it-works)** - The development workflow from local iteration to production deploy
+3. **[Shadow Database](/docs/concepts/shadow-database)** - How pgmt validates changes without touching your databases
+4. **[Dependency Tracking](/docs/concepts/dependency-tracking)** - How pgmt ensures operations happen in the right order
 
 ## Key Principles
 

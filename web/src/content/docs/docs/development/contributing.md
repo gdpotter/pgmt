@@ -12,7 +12,7 @@ cd pgmt
 cargo test                  # Run tests
 ```
 
-**Prerequisites:** Rust 1.85+, Docker
+**Prerequisites:** Rust 1.98+, Docker
 
 ## Code Style
 

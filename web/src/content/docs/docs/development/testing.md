@@ -189,7 +189,7 @@ When adding new database object support, create tests for:
 4. **Migration generation** - Verify create/drop/modify operations
 5. **Full pipeline** - Test `diff_all()` → `cascade::expand()` → `diff_order()`
 
-See the [contributing guide](contributing.md) for complete testing patterns.
+See the [contributing guide](/docs/development/contributing) for complete testing patterns.
 
 ## Test Database Configuration
 

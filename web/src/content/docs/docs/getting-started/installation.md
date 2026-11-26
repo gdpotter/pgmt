@@ -9,6 +9,10 @@ description: Install pgmt via shell script, npm, or cargo. Prerequisites, upgrad
 curl -fsSL https://pgmt.dev/install.sh | sh
 ```
 
+The script installs to `~/.pgmt/bin` and prints the line to add it to your
+`PATH` if it isn't there already. To pin a version, pass it as an argument
+(`sh -s -- v0.6.7`); to install somewhere else, set `PGMT_INSTALL`.
+
 **npm:**
 
 ```bash
@@ -58,11 +62,17 @@ prebuilt binary:
 # GitHub Actions
 - name: Install pgmt
   uses: gdpotter/pgmt@v0
+  # with:
+  #   version: v0.6.7 # defaults to the latest release
 ```
 
 ```yaml
 # Anywhere else (GitLab CI, etc.)
 - curl -fsSL https://pgmt.dev/install.sh | sh
+- export PATH="$HOME/.pgmt/bin:$PATH"
 ```
+
+The GitHub Action adds pgmt to the `PATH` for later steps. The install script
+doesn't, so add `~/.pgmt/bin` yourself as shown.
 
 See the [CI/CD guide](/docs/guides/ci-cd) for full pipeline examples.

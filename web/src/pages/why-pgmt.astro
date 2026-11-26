@@ -65,7 +65,7 @@ $ pgmt apply
 
   migration: `-- When ready for production:
 $ pgmt migrate new "improve scoring algorithm"
-✓ Generated migration: V20240315_143022__improve_scoring_algorithm.sql
+Created migration: migrations/1734567890_improve_scoring_algorithm.sql
 
 -- Review the exact SQL that will run in production:
 -- Drop dependent objects in correct order
@@ -901,7 +901,7 @@ $ pgmt apply
 
       <div class={css({ maxWidth: '4xl', marginX: 'auto' })}>
         <CodeBlock
-          code={`-- migrations/V001__user_migration.sql
+          code={`-- migrations/1734567890_user_migration.sql
 
 -- pgmt:section name="schema_changes"
 -- pgmt:  mode="transactional"
@@ -1027,7 +1027,7 @@ $ pgmt apply
 
 # When ready for production:
 $ pgmt migrate new "add user preferences"
-✓ Generated migration: V20240315__add_user_preferences.sql`}
+Created migration: migrations/1734567890_add_user_preferences.sql`}
             language="bash"
             title="Get started in minutes"
             showCopy={false}

@@ -89,7 +89,7 @@ CREATE INDEX CONCURRENTLY idx_users_verified ON users(verified);
 ## Requirements
 
 - **PostgreSQL 13+** (tested on 13–19)
-- **Rust 1.85+** for building from source
+- **Rust 1.98+** for building from source
 
 ## Contributing
 

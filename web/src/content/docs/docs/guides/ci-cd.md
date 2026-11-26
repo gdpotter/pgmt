@@ -248,6 +248,7 @@ validate-schema:
     PGMT_SHADOW_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
+    - export PATH="$HOME/.pgmt/bin:$PATH"
     - pgmt config validate
     - pgmt migrate validate
 
@@ -256,6 +257,7 @@ deploy-migrations:
   environment: production
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
+    - export PATH="$HOME/.pgmt/bin:$PATH"
     - pgmt migrate apply
   only:
     - main
@@ -271,6 +273,7 @@ check-drift:
     PGMT_SHADOW_URL: postgres://postgres:test@postgres/postgres
   script:
     - curl -fsSL https://pgmt.dev/install.sh | sh
+    - export PATH="$HOME/.pgmt/bin:$PATH"
     - pgmt migrate diff --format summary
   allow_failure: true # Don't block other pipelines
 ```

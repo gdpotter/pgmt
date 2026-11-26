@@ -21,7 +21,7 @@ Once you have reliable diffing, you can build everything else on top of it:
 
 **Drift detection** - Diff your expected schema against production. See what changed outside of migrations.
 
-**Debugging** - `pgmt diff --from dev --to prod` shows exactly how environments diverged.
+**Debugging** - `pgmt diff` shows exactly how your dev database differs from your schema files.
 
 One capability, applied to different problems.
 
@@ -73,7 +73,7 @@ Here's where pgmt differs from tools like Prisma Migrate or Django migrations.
 When you run `pgmt migrate new`, it generates a migration file that you review:
 
 ```sql
--- migrations/V1734567890__add_user_phone.sql
+-- migrations/1734567890_add_user_phone.sql
 ALTER TABLE users ADD COLUMN phone TEXT;
 ```
 
@@ -141,7 +141,7 @@ CREATE TABLE orders (
 Run `pgmt migrate new`. It generates:
 
 ```sql
--- migrations/V1734567890__create_orders.sql
+-- migrations/1734567890_create_orders.sql
 CREATE TABLE orders (
     id SERIAL PRIMARY KEY,
     user_id INT REFERENCES users(id),
@@ -256,8 +256,8 @@ This is especially valuable for complex views with joins, CTEs, or window functi
 
 The diffing engine is the foundation. Built on top:
 
-**[Shadow Database](shadow-database)** - Validates schema in isolation before generating migrations
+**[Shadow Database](/docs/concepts/shadow-database)** - Validates schema in isolation before generating migrations
 
-**[Dependency Tracking](dependency-tracking)** - Orders migrations correctly (tables before views, schemas before tables, etc.)
+**[Dependency Tracking](/docs/concepts/dependency-tracking)** - Orders migrations correctly (tables before views, schemas before tables, etc.)
 
-**[How pgmt Works](how-it-works)** - The full workflow from schema edit to applied migration
+**[How pgmt Works](/docs/concepts/how-it-works)** - The full workflow from schema edit to applied migration

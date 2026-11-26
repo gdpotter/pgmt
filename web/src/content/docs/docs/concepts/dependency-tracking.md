@@ -235,6 +235,6 @@ No manual ordering needed - pgmt handles it automatically.
 
 **Related Concepts:**
 
-- [How pgmt Works](how-it-works) - The complete workflow
+- [How pgmt Works](/docs/concepts/how-it-works) - The complete workflow
 - [Schema Organization](/docs/guides/schema-organization) - Advanced patterns and multi-file strategies
-- [Shadow Database](shadow-database) - How dependency rules are validated
+- [Shadow Database](/docs/concepts/shadow-database) - How dependency rules are validated

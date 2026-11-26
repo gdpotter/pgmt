@@ -333,22 +333,22 @@ import { links } from '../config/links';
         <div class={css({ flex: '1' })}>
           <CodeBlock
             code={`-- pgmt:section name="add_column"
---   timeout="5s"
+-- pgmt:  timeout="5s"
 ALTER TABLE users
   ADD COLUMN verified BOOLEAN;
 
 -- pgmt:section name="backfill"
---   mode="autocommit" timeout="30m"
+-- pgmt:  mode="autocommit" timeout="30m"
 UPDATE users SET verified = false
   WHERE verified IS NULL;
 
 -- pgmt:section name="add_index"
---   mode="non-transactional"
---   retry_attempts="10"
+-- pgmt:  mode="non-transactional"
+-- pgmt:  retry_attempts="10"
 CREATE INDEX CONCURRENTLY
   idx_users_verified ON users(verified);`}
             language="sql"
-            title="V001__add_verified_column.sql"
+            title="1734567890_add_verified_column.sql"
             showCopy={false}
           />
         </div>
@@ -406,7 +406,7 @@ CREATE INDEX CONCURRENTLY
         })}
       >
         <CodeBlock
-          code={`-- migrations/V042__update_score.sql
+          code={`-- migrations/1734567890_update_score.sql
 DROP VIEW executive_dashboard;
 DROP VIEW daily_stats;
 DROP VIEW user_rankings;
