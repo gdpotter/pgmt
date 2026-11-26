@@ -36,6 +36,16 @@ const wwwRecord = new aws.route53.Record("www", {
   records: [ghPagesCnameDomain],
 });
 
+// Delegate news.pgmt.dev to Buttondown, which manages the newsletter's
+// sending records (SPF/DKIM/DMARC) itself.
+const newsDelegation = new aws.route53.Record("news-ns", {
+  zoneId: hostedZone.zoneId,
+  name: `news.${domain}`,
+  type: "NS",
+  ttl: 300,
+  records: ["ns1.onbuttondown.com", "ns2.onbuttondown.com"],
+});
+
 // Exports
 export const zoneId = hostedZone.zoneId;
 export const nameServers = hostedZone.nameServers;
