@@ -15,7 +15,7 @@ pgmt needs to know which schemas are yours and which belong to Supabase. You tel
 
 ## Prerequisites
 
-- [pgmt installed](/docs/getting-started/quick-start)
+- [pgmt installed](/docs/getting-started/installation)
 - [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started) installed
 - Docker running (for both Supabase and pgmt's shadow database)
 

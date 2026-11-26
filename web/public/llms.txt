@@ -4,8 +4,10 @@
 
 ## Quick Start
 
-- Install: `cargo install pgmt`
-- Docs: https://pgmt.dev/docs/getting-started/quick-start
+- Install: `curl -fsSL https://pgmt.dev/install.sh | sh` (or `npm install -g @pgmt/pgmt`, or `cargo install pgmt`)
+- Installation: https://pgmt.dev/docs/getting-started/installation
+- Quick start: https://pgmt.dev/docs/getting-started/quick-start
+- Agent skill: `npx skills add gdpotter/pgmt`
 
 ## Key Concepts
 
@@ -13,6 +15,9 @@
 - Shadow database: Safe testing environment for migrations
 - Dependency tracking: Automatic handling for views/functions
 - Explicit migrations: Review generated SQL before deploying
+- Multi-section migrations: Per-section transaction modes, timeouts, and retries in one file
+- Modules: Partition a schema and deploy different subsets to different databases
+- Baselines and provisioning: Build a fresh environment from a baseline plus later migrations
 
 ## Documentation Sections
 
@@ -26,7 +31,10 @@
 
 - Quick start: /docs/getting-started/quick-start
 - Adopt existing database: /docs/guides/existing-database
+- Migration workflow: /docs/guides/migration-workflow
 - CI/CD setup: /docs/guides/ci-cd
+- Production operations (failures, checksums, repair): /docs/guides/production-operations
+- Modules: /docs/guides/modules
 - Troubleshooting: /docs/guides/troubleshooting
 
 ## Links

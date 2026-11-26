@@ -27,6 +27,7 @@ databases:
 databases:
   dev_url: postgres://localhost/myapp_dev # Development database (required here or via PGMT_DEV_URL/--dev-url)
   target_url: postgres://prod/myapp # Target for migrate apply/diff (or PGMT_TARGET_URL)
+  # shadow_url: postgres://localhost/myapp_shadow # Shorthand for shadow.url
 
   shadow:
     auto: true # Auto-create shadow database (recommended)
@@ -44,10 +45,11 @@ databases:
     # before validating or importing. Never point url at a database holding
     # data you care about.
 
-    # OR Docker with specific version:
+    # OR Docker with specific version (default image: postgres:18-alpine):
     # docker:
     #   version: '16'                           # PostgreSQL version
     #   auto_cleanup: true                      # Clean up container after use
+    #   container_name: myapp_pgmt_shadow       # Reuse one named container across runs
 
     # OR Docker with a custom image (e.g. Supabase):
     # docker:
@@ -96,6 +98,22 @@ There are no per-object-type toggles: your schema files are the source of
 truth, so whatever they contain (grants, triggers, comments, …) is what pgmt
 manages.
 
+### modules
+
+```yaml
+modules:
+  core:
+    paths: ['schema/core/**'] # Globs, relative to the project root (required)
+  billing:
+    paths: ['schema/billing/**']
+    depends_on: [core] # Modules this one may reference
+```
+
+Optional. Without a `modules:` block, pgmt behaves exactly as it does for a
+single schema. Files that match no module belong to the unmoduled base, which
+every target gets. `conflicts_with` is accepted but not yet used. See the
+[Modules guide](/docs/guides/modules) for deploying subsets with `--modules`.
+
 ### migration
 
 ```yaml
@@ -141,6 +159,7 @@ PGMT_DEV_URL                  # Development database URL
 PGMT_SHADOW_URL               # Shadow database URL (instead of auto Docker)
 PGMT_TARGET_URL               # Target (production/staging) database URL
 PGMT_KEEP_SHADOW_ON_FAILURE   # Keep shadow container alive on startup failure (for debugging)
+PGMT_MODULES                  # Modules to deploy with migrate apply/provision (instead of --modules)
 ```
 
 The target URL is the common one to supply via environment — CI typically sets
@@ -164,16 +183,23 @@ pgmt migrate apply --target-url postgres://staging-host/db
 
 ## Defaults
 
-| Option                                  | Default                          |
-| --------------------------------------- | -------------------------------- |
-| `databases.shadow.auto`                 | `true`                           |
-| `directories.schema_dir`                | `schema`                         |
-| `directories.migrations_dir`            | `migrations`                     |
-| `directories.baselines_dir`             | `schema_baselines`               |
-| `objects.exclude.schemas`               | `["pg_*", "information_schema"]` |
-| `migration.default_mode`                | `safe_only`                      |
-| `migration.create_baselines_by_default` | `false`                          |
-| `migration.column_order`                | `strict`                         |
-| `migration.filename_prefix`             | `""` (empty)                     |
-| `migration.tracking_table.schema`       | `public`                         |
-| `migration.tracking_table.name`         | `pgmt_migrations`                |
+| Option                                    | Default                          |
+| ----------------------------------------- | -------------------------------- |
+| `databases.shadow.auto`                   | `true`                           |
+| `databases.shadow.docker.image`           | `postgres:18-alpine`             |
+| `directories.schema_dir`                  | `schema`                         |
+| `directories.migrations_dir`              | `migrations`                     |
+| `directories.baselines_dir`               | `schema_baselines`               |
+| `directories.roles_file`                  | `roles.sql`                      |
+| `objects.exclude.schemas`                 | `["pg_*", "information_schema"]` |
+| `migration.default_mode`                  | `safe_only`                      |
+| `migration.validate_baseline_consistency` | `true`                           |
+| `migration.create_baselines_by_default`   | `false`                          |
+| `migration.column_order`                  | `strict`                         |
+| `migration.filename_prefix`               | `""` (empty)                     |
+| `migration.tracking_table.schema`         | `public`                         |
+| `migration.tracking_table.name`           | `pgmt_migrations`                |
+| `schema.augment_dependencies_from_files`  | `true`                           |
+| `schema.validate_file_dependencies`       | `true`                           |
+| `docker.auto_cleanup`                     | `true`                           |
+| `docker.check_system_identifier`          | `true`                           |

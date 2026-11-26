@@ -3,15 +3,23 @@ title: Architecture
 description: pgmt's internal module organization.
 ---
 
-pgmt is organized into focused modules:
+The main modules under `src/`:
 
-| Module           | Purpose                                       |
-| ---------------- | --------------------------------------------- |
-| `catalog/`       | Introspects PostgreSQL system tables          |
-| `diff/`          | Compares catalogs to detect changes           |
-| `schema_loader/` | Loads schema files with dependency resolution |
-| `migration/`     | Generates, tracks, and applies migrations     |
-| `commands/`      | CLI implementation                            |
+| Module                | Purpose                                                         |
+| --------------------- | --------------------------------------------------------------- |
+| `catalog/`            | Introspects PostgreSQL system tables                            |
+| `diff/`               | Compares catalogs and orders the resulting steps                |
+| `render/`             | Turns diff steps into SQL                                       |
+| `schema_loader.rs`    | Loads schema files with dependency resolution                   |
+| `schema_ops.rs`       | Builds the desired state from schema files on a shadow database |
+| `migrate/`            | Generates migration files                                       |
+| `migration/`          | Parses migration files, sections, and baselines                 |
+| `migration_tracking/` | Records applied migrations and sections, and the deploy lock    |
+| `modules/`            | Module partitioning, sectioning, and apply-time module handling |
+| `db/`                 | Connections, shadow branching, and executing SQL                |
+| `docker/`             | Shadow database containers                                      |
+| `config/`             | `pgmt.yaml` loading and connection resolution                   |
+| `commands/`           | CLI implementation                                              |
 
 ## Catalog System (`src/catalog/`)
 
@@ -34,7 +42,7 @@ Compares two catalogs (old vs new) to determine what changed.
 
 **Key files:** `tables.rs`, `views.rs` for object diffing; `cascade.rs` for dependency-aware drops; `diff_order.rs` for topological sorting.
 
-## Schema Loader (`src/schema_loader/`)
+## Schema Loader (`src/schema_loader.rs`)
 
 Loads `.sql` files from the schema directory.
 
@@ -42,16 +50,15 @@ Loads `.sql` files from the schema directory.
 - Builds dependency graph and detects cycles
 - Loads files in correct order
 
-## Migration System (`src/migration/`)
+## Migration System (`src/migrate/`, `src/migration/`, `src/migration_tracking/`)
 
-Manages migration file lifecycle.
+Manages the migration file lifecycle.
 
-- Generates numbered migration files from diff operations
-- Tracks applied migrations in `pgmt_migrations` table
-- Validates checksums to detect modifications
-- Supports multi-section migrations
-
-**Key files:** `mod.rs` for file I/O; `baseline.rs` for baselines; `section_parser.rs` for multi-section parsing.
+- Generates timestamped migration files from diff operations (`migrate/generation.rs`)
+- Parses sections and baselines (`migration/section_parser.rs`, `migration/baseline.rs`)
+- Tracks applied migrations in the `pgmt_migrations` table, with per-section status and checksums (`migration_tracking/section_tracking.rs`)
+- Serializes concurrent deploys behind a Postgres advisory lock (`migration_tracking/advisory_lock.rs`)
+- On module projects, tags sections with their module and records which modules each target holds (`src/modules/`)
 
 ## Core Patterns
 

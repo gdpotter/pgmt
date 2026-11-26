@@ -1,6 +1,6 @@
 ---
-title: Getting Help
-description: How to debug issues and get help with pgmt.
+title: Troubleshooting
+description: Common pgmt errors, how to debug them, and how to get help.
 ---
 
 ## Debugging
@@ -55,17 +55,46 @@ pg_isready -h localhost -p 5432
 createdb myapp_dev
 ```
 
-**Shadow database creation fails:**
+**Could not connect to a container runtime:**
 
-Your user needs `CREATEDB` privilege. Or configure a manual shadow database:
+By default pgmt builds your schema in a throwaway container, so it needs Docker
+or another Docker-compatible runtime. This is separate from your dev database.
 
-```yaml
-# pgmt.yaml
-databases:
-  shadow:
-    auto: false
-    url: postgres://localhost/myapp_shadow
-```
+- **Docker:** make sure the daemon is running.
+- **Podman:** enable its Docker-compatible socket with
+  `systemctl --user enable --now podman.socket`.
+- **Other runtimes:** point `DOCKER_HOST` at a Docker-compatible socket.
+- **No container runtime at all:** set `databases.shadow.url` to a database on
+  a dedicated, throwaway server. pgmt resets it on every run, so never use one
+  that holds anything you care about. See
+  [Shadow Database](/docs/concepts/shadow-database#container-runtime-requirements).
+
+**Shadow database creation fails with a `shadow.url`:**
+
+With `reset: branch`, pgmt creates a temporary copy of the named database, so
+the user in `shadow.url` needs the `CREATEDB` privilege. The default
+`reset: clean` only drops the schemas pgmt manages and doesn't need
+`CREATEDB`.
+
+## Deployment Issues
+
+**A migration failed partway through:** fix the SQL and run
+`pgmt migrate apply` again. Completed sections are skipped and the failed one
+is retried. `pgmt migrate status --target-url <url>` shows which sections
+completed. See [When a Migration Fails](/docs/guides/production-operations#when-a-migration-fails).
+
+**"was modified after it was applied":** a section that already ran on the
+target has changed in the migration file. Restore it from git and put further
+changes in a new migration. If the edit was deliberate and the database already
+matches it, see [Checksum Mismatches](/docs/guides/production-operations#checksum-mismatches).
+
+**"is below the baseline watermark and was never applied":** a migration was
+merged after a newer baseline was created, so it would never run on any target.
+Regenerate it above the baseline with `pgmt migrate update <version>`.
+
+**Tracking state doesn't match the database:** if a section really did run (or
+really didn't) but pgmt's records say otherwise, use `pgmt migrate resolve`.
+See [Repairing Tracking State](/docs/guides/production-operations#repairing-tracking-state).
 
 ## Column Order Validation Errors
 

@@ -140,6 +140,21 @@ ALTER TABLE users RENAME COLUMN email TO email_address;
 
 After editing, the migration is yours. If you later run `migrate update`, your edits will be lost - so keep track of what you changed.
 
+## Hand-Written Migrations
+
+Some changes aren't schema changes at all: a data backfill, a one-off
+`UPDATE`, or a `CREATE INDEX CONCURRENTLY` you want on its own. For those,
+generate an empty migration and write the SQL yourself:
+
+```bash
+pgmt migrate new "backfill emails" --empty
+```
+
+`--empty` skips the diff entirely, so it needs no shadow database, and any
+pending schema changes stay pending for your next ordinary `pgmt migrate new`.
+To change the transaction mode (for `CONCURRENTLY`, say), add a
+[section header](/docs/guides/multi-section-migrations) to the file.
+
 ## Reverting a Change
 
 You shipped a migration and now you need to undo it. Maybe a view change broke something, or a feature got pulled. The instinct is to delete the migration file - don't. That migration is already recorded in your target databases with a checksum. Deleting it causes checksum errors on the next deploy.
@@ -225,6 +240,7 @@ CREATE INDEX CONCURRENTLY idx_users_status ON users(status);
 | ---------------------- | ----------------------------------------- |
 | Apply schema to dev    | `pgmt apply`                              |
 | Generate migration     | `pgmt migrate new "description"`          |
+| Hand-written migration | `pgmt migrate new "description" --empty`  |
 | Update stale migration | `pgmt migrate update <version>`           |
 | Apply to target        | `pgmt migrate apply --target-url URL`     |
 | Provision new env      | `pgmt migrate provision --target-url URL` |
