@@ -3,8 +3,6 @@ title: Roadmap
 description: Current status and future development plans for pgmt.
 ---
 
-**Project Status:** Alpha - Approaching first release. Not yet recommended for production use.
-
 _Last updated: November 2026_
 
 ## Current State

@@ -188,7 +188,14 @@ const socialIconClass = css({
       >
         <!-- Copyright -->
         <p class={css({ fontSize: 'sm', color: 'text-muted' })}>
-          © {new Date().getFullYear()} pgmt. All rights reserved.
+          © {new Date().getFullYear()} Greg Potter ·{' '}
+          <a
+            href={`${links.github.repo}/blob/main/LICENSE`}
+            {...externalLinkAttrs}
+            class={footerLinkClass}
+          >
+            MIT License
+          </a>
         </p>
 
         <!-- Social Links & Theme Toggle -->

@@ -50,7 +50,33 @@ the database does exist solely for pgmt (a CI service container, say), set
 `reset: branch` to opt into the same branching semantics - see the
 [Configuration Reference](/docs/reference/configuration).
 
-**This means:** pgmt supports every PostgreSQL feature automatically. Custom aggregates, procedural languages, extensions, expression indexes - if PostgreSQL can create it, pgmt can understand it. There's no "supported features" list to maintain because pgmt delegates parsing to PostgreSQL itself.
+## Reading vs. Generating
+
+The shadow database splits pgmt's job in two, and they have different limits.
+
+**Reading your schema is PostgreSQL's job.** pgmt never parses your SQL, so it
+can't misread a CTE, a PL/pgSQL body, an expression index, or syntax an
+extension adds. If PostgreSQL accepts the file, pgmt sees exactly what
+PostgreSQL built.
+
+**Generating changes is pgmt's job.** To write a migration, pgmt has to know
+how to create, alter, and drop each kind of object, in the right order. That
+part is implemented object type by object type, which is why there's a
+[Supported Features](/docs/reference/supported-features) list. Most PostgreSQL
+objects are covered; the list says which aren't yet.
+
+## Comparing Like with Like
+
+PostgreSQL doesn't store your SQL as you wrote it. `CHECK (status IN ('a', 'b'))`
+on a `varchar` column comes back as `= ANY (ARRAY[...])` with casts added, and
+running that printed form through PostgreSQL again can store it slightly
+differently once more. The rule is the same; the stored form isn't.
+
+So pgmt doesn't compare against your files' first pass through PostgreSQL.
+It runs its own generated SQL on a fresh shadow too, and compares results that
+have both been through the same round trip. When a database or your migration
+history differs from your schema files, the other side gets the same treatment.
+Only real differences are reported, at the cost of an extra shadow build.
 
 ## Container Runtime Requirements
 
@@ -75,7 +101,10 @@ For advanced cases (specific PostgreSQL versions, existing databases, etc.), see
 
 ## Performance Impact
 
-Creating a shadow database adds ~100-500ms overhead. For most schemas, total operation time is under a second. The safety benefits of validating changes before applying them far outweigh this small cost.
+Most of the time goes to building your schema on fresh shadows, so it grows
+with the size of your schema. A small schema is quick. On a 1,000-table schema,
+a no-op `pgmt apply` takes around 7 seconds. Starting the container the first
+time (and pulling the image) adds to the first run.
 
 Shadow databases are schema-only - avoid `INSERT` statements in schema files as they slow down operations and aren't needed for schema management.
 
@@ -83,6 +112,6 @@ Shadow databases are schema-only - avoid `INSERT` statements in schema files as 
 
 **Related Concepts:**
 
-- [How pgmt Works](how-it-works) - The complete workflow
-- [Dependency Tracking](dependency-tracking) - How pgmt orders schema files
+- [How pgmt Works](/docs/concepts/how-it-works) - The complete workflow
+- [Dependency Tracking](/docs/concepts/dependency-tracking) - How pgmt orders schema files
 - [Configuration](/docs/reference/configuration) - Shadow database settings
